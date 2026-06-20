@@ -126,6 +126,12 @@ Apply `plan` to `x` in place. Direction (forward/inverse) is fixed by the plan. 
 type satisfying the [`AbstractFFTPlan`](@ref) contract — even one that does not subtype it —
 selected by TypeContracts' `interface_trait` Holy-Trait dispatch (hasmethod-based, juliac-safe).
 """
+# Fast path: a plan that actually subtypes AbstractFFTPlan needs no trait check — dispatch
+# straight to the runner (saves the ~10 ns runtime `interface_trait` call, which does not fold;
+# it dominates at very small n). The generic method below keeps the duck-typed path for plans
+# that satisfy the contract without subtyping it.
+pfft!(x::AbstractVector{<:Complex}, p::AbstractFFTPlan) = _pfft_run!(x, p)
+
 pfft!(x::AbstractVector{<:Complex}, p) =
     _pfft_dispatch!(interface_trait(AbstractFFTPlan, typeof(p)), x, p)
 
