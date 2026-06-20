@@ -25,7 +25,7 @@ gflops(n, t) = 5 * n * log2(n) / t / 1.0e9
 # Per-point timing budget. We want ≥ SAMPLES measurements at each size for a stable minimum;
 # BenchmarkTools stops at whichever of SAMPLES / SECONDS comes first, so SECONDS is set high
 # enough that even the largest size reaches the sample count.
-const SAMPLES = 2_500
+const SAMPLES = 1_000   # min-time stabilizes well before this; 1000 keeps regen fast (run on every push)
 const SECONDS = 30
 
 # Power-of-two sizes (PureFFT's design range). Non-power-of-two sizes: half-integer exponents

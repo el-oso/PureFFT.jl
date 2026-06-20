@@ -37,11 +37,12 @@ end
 const CODELET_MAX_PRIME = 5
 const CODELET_MAX_N = 128
 
-# Rader's algorithm wins for primes with a smooth p-1 (its length-(p-1) convolution beats
-# Bluestein's larger power-of-two M). Gate: p ≥ RADER_MIN_P (amortize the permutation overhead)
-# and largest prime factor of p-1 ≤ RADER_MAX_PM1_PRIME (so the inner FFT is fast). Else Bluestein.
+# Rader's algorithm wins for primes with a VERY smooth p-1 (p-1 = 2^a·3^b): its length-(p-1)
+# convolution then runs on a fast four-step/radix4avx inner FFT and beats Bluestein's larger
+# power-of-two M. Measured: a 5 or 7 factor in p-1 makes Rader LOSE (e.g. n=181, p-1=180=2²·3²·5:
+# Rader 4.6 < Bluestein 5.3), so gate strictly at largest-prime(p-1) ≤ 3, p ≥ RADER_MIN_P. Else Bluestein.
 const RADER_MIN_P = 128
-const RADER_MAX_PM1_PRIME = 5
+const RADER_MAX_PM1_PRIME = 3
 
 """
     autoplan(Complex{T}, n; inverse=false) -> AbstractFFTPlan

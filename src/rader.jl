@@ -8,7 +8,7 @@
 # with a_q = x[g^{-q}], b_q = ω^{g^q}. The length-(p-1) convolution is two FFTs of length p-1
 # (the kernel FFT B = FFT(b) is precomputed). When p-1 is smooth this beats Bluestein (whose
 # pow2 M ≈ 2-4p is larger): ~2× on primes with p-1 = 2^a·3^b. `autoplan` routes here only when
-# that holds (p ≥ 128, largest prime factor of p-1 ≤ 5); otherwise Bluestein.
+# that holds (p ≥ 128, largest prime factor of p-1 ≤ 3); a 5 or 7 in p-1 makes Rader lose → Bluestein.
 
 """
     RaderPlan{T} <: AbstractFFTPlan{T}

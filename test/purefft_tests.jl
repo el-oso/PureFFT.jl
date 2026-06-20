@@ -204,6 +204,7 @@ end
             @test plan_pfft(ComplexF64, n; variant = :fast) isa PureFFT.RaderPlan
         end
         @test plan_pfft(ComplexF64, 1009; variant = :fast) isa PureFFT.BluesteinPlan  # p-1 has factor 7
+        @test plan_pfft(ComplexF64, 181; variant = :fast) isa PureFFT.BluesteinPlan   # p-1=180 has factor 5 (Rader loses)
         @test plan_pfft(ComplexF64, 97; variant = :fast) isa PureFFT.BluesteinPlan     # p < 128
     end
 end
