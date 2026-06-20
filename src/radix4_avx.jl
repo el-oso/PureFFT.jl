@@ -82,6 +82,20 @@ end
     return _dft4reg(D0, D1, D2, D3, Val(S))
 end
 
+# size-32 W32^k combine twiddle register (k = o:o+3), used by the radix-2 step of DFT-32.
+@inline _tw32(W, o) = Vec{8, Float64}((real(W^o), imag(W^o), real(W^(o + 1)), imag(W^(o + 1)), real(W^(o + 2)), imag(W^(o + 2)), real(W^(o + 3)), imag(W^(o + 3))))
+
+# DFT-32 register core (rustfft's Butterfly32): 8 input registers (V_r = elem[4r:4r+3]) → 8 output
+# registers in natural order. Even/odd decimation → two DFT-16 → radix-2 combine with W32 twiddles.
+@inline function _dft32_regs(V0, V1, V2, V3, V4, V5, V6, V7, tw1, tw2, tw3, u0, u1, u2, u3, ::Val{S}) where {S}
+    de(a, b) = shufflevector(a, b, Val((0, 1, 4, 5, 8, 9, 12, 13)))   # evens of [a;b]
+    od(a, b) = shufflevector(a, b, Val((2, 3, 6, 7, 10, 11, 14, 15)))  # odds of [a;b]
+    Z0, Z1, Z2, Z3 = _dft16_regs(de(V0, V1), de(V2, V3), de(V4, V5), de(V6, V7), tw1, tw2, tw3, Val(S))
+    Y0, Y1, Y2, Y3 = _dft16_regs(od(V0, V1), od(V2, V3), od(V4, V5), od(V6, V7), tw1, tw2, tw3, Val(S))
+    T0 = _vcmul(Y0, u0); T1 = _vcmul(Y1, u1); T2 = _vcmul(Y2, u2); T3 = _vcmul(Y3, u3)
+    return (Z0 + T0, Z1 + T1, Z2 + T2, Z3 + T3, Z0 - T0, Z1 - T1, Z2 - T2, Z3 - T3)
+end
+
 function _base16_avx!(dst, src, width::Int, k::Int, ::Val{S}) where {S}
     W = S == -1 ? cispi(-2.0 / 16) : cispi(2.0 / 16)
     tw1 = _tw16(W, 1); tw2 = _tw16(W, 2); tw3 = _tw16(W, 3)
@@ -105,10 +119,7 @@ function _base32_avx!(dst, src, width::Int, k::Int, ::Val{S}) where {S}
     W16 = S == -1 ? cispi(-2.0 / 16) : cispi(2.0 / 16)
     tw1 = _tw16(W16, 1); tw2 = _tw16(W16, 2); tw3 = _tw16(W16, 3)
     W = S == -1 ? cispi(-2.0 / 32) : cispi(2.0 / 32)   # W32^k combine twiddles, k = 0:15
-    u(o) = Vec{8, Float64}((real(W^o), imag(W^o), real(W^(o + 1)), imag(W^(o + 1)), real(W^(o + 2)), imag(W^(o + 2)), real(W^(o + 3)), imag(W^(o + 3))))
-    u0 = u(0); u1 = u(4); u2 = u(8); u3 = u(12)
-    de(a, b) = shufflevector(a, b, Val((0, 1, 4, 5, 8, 9, 12, 13)))   # evens of [a;b]
-    od(a, b) = shufflevector(a, b, Val((2, 3, 6, 7, 10, 11, 14, 15)))  # odds of [a;b]
+    u0 = _tw32(W, 0); u1 = _tw32(W, 4); u2 = _tw32(W, 8); u3 = _tw32(W, 12)
     GC.@preserve dst src begin
         po = reinterpret(Ptr{Float64}, pointer(dst))
         pin = reinterpret(Ptr{Float64}, pointer(src))
@@ -118,14 +129,10 @@ function _base32_avx!(dst, src, width::Int, k::Int, ::Val{S}) where {S}
             V2 = vload(Vec{8, Float64}, b + 128); V3 = vload(Vec{8, Float64}, b + 192)
             V4 = vload(Vec{8, Float64}, b + 256); V5 = vload(Vec{8, Float64}, b + 320)
             V6 = vload(Vec{8, Float64}, b + 384); V7 = vload(Vec{8, Float64}, b + 448)
-            E0 = de(V0, V1); E1 = de(V2, V3); E2 = de(V4, V5); E3 = de(V6, V7)
-            O0 = od(V0, V1); O1 = od(V2, V3); O2 = od(V4, V5); O3 = od(V6, V7)
-            Z0, Z1, Z2, Z3 = _dft16_regs(E0, E1, E2, E3, tw1, tw2, tw3, Val(S))
-            Y0, Y1, Y2, Y3 = _dft16_regs(O0, O1, O2, O3, tw1, tw2, tw3, Val(S))
-            T0 = _vcmul(Y0, u0); T1 = _vcmul(Y1, u1); T2 = _vcmul(Y2, u2); T3 = _vcmul(Y3, u3)
+            G0, G1, G2, G3, G4, G5, G6, G7 = _dft32_regs(V0, V1, V2, V3, V4, V5, V6, V7, tw1, tw2, tw3, u0, u1, u2, u3, Val(S))
             o = po + xi * 512
-            vstore(Z0 + T0, o); vstore(Z1 + T1, o + 64); vstore(Z2 + T2, o + 128); vstore(Z3 + T3, o + 192)
-            vstore(Z0 - T0, o + 256); vstore(Z1 - T1, o + 320); vstore(Z2 - T2, o + 384); vstore(Z3 - T3, o + 448)
+            vstore(G0, o); vstore(G1, o + 64); vstore(G2, o + 128); vstore(G3, o + 192)
+            vstore(G4, o + 256); vstore(G5, o + 320); vstore(G6, o + 384); vstore(G7, o + 448)
         end
     end
     return
@@ -184,6 +191,56 @@ function _fft64_avx!(x::AbstractVector{Complex{Float64}}, ::Val{S}) where {S}
             st(m, a, b, c, d) = (o = p + m * 256; vstore(a, o); vstore(b, o + 64); vstore(c, o + 128); vstore(d, o + 192))
             st(0, h00, h01, h02, h03); st(1, h10, h11, h12, h13)
             st(2, h20, h21, h22, h23); st(3, h30, h31, h32, h33)
+        end
+    end
+    return x
+end
+
+# Standalone in-register size-128 FFT (Float64): n = 4×32 four-step, same shape as `_fft64_avx!`
+# with DFT-32 blocks. Uses all 32 AVX registers for the data, but explicit straight-line code
+# schedules cleanly (closures/tuples boxed the vectors and were ~9× slower). ~44 GF/s vs ~25 for
+# the transpose path (beats FFTW's ~26). Contiguous load → 8× register-transpose to gather the
+# four stride-4 subsequences (8 registers each) → 4× DFT-32 (+ W128 twiddles) → radix-4 combine.
+function _fft128_avx!(x::AbstractVector{Complex{Float64}}, ::Val{S}) where {S}
+    W16 = S == -1 ? cispi(-2.0 / 16) : cispi(2.0 / 16)
+    tw1 = _tw16(W16, 1); tw2 = _tw16(W16, 2); tw3 = _tw16(W16, 3)
+    W32 = S == -1 ? cispi(-2.0 / 32) : cispi(2.0 / 32)
+    u0 = _tw32(W32, 0); u1 = _tw32(W32, 4); u2 = _tw32(W32, 8); u3 = _tw32(W32, 12)
+    W = S == -1 ? cispi(-2.0 / 128) : cispi(2.0 / 128)
+    GC.@preserve x begin
+        p = reinterpret(Ptr{Float64}, pointer(x))
+        @inbounds begin
+            ld(i) = vload(Vec{8, Float64}, p + i * 64)
+            # gather stride-4 subsequences: 8× register-transpose, one per y-group of 4.
+            # c{t}{w} = block w, elements y = 4t .. 4t+3.
+            c00, c01, c02, c03 = _transpose4(ld(0), ld(1), ld(2), ld(3))
+            c10, c11, c12, c13 = _transpose4(ld(4), ld(5), ld(6), ld(7))
+            c20, c21, c22, c23 = _transpose4(ld(8), ld(9), ld(10), ld(11))
+            c30, c31, c32, c33 = _transpose4(ld(12), ld(13), ld(14), ld(15))
+            c40, c41, c42, c43 = _transpose4(ld(16), ld(17), ld(18), ld(19))
+            c50, c51, c52, c53 = _transpose4(ld(20), ld(21), ld(22), ld(23))
+            c60, c61, c62, c63 = _transpose4(ld(24), ld(25), ld(26), ld(27))
+            c70, c71, c72, c73 = _transpose4(ld(28), ld(29), ld(30), ld(31))
+            # DFT-32 of each block w = (c0w..c7w); twiddle output group g by W128^{w·c}
+            a0, a1, a2, a3, a4, a5, a6, a7 = _dft32_regs(c00, c10, c20, c30, c40, c50, c60, c70, tw1, tw2, tw3, u0, u1, u2, u3, Val(S))
+            b0, b1, b2, b3, b4, b5, b6, b7 = _dft32_regs(c01, c11, c21, c31, c41, c51, c61, c71, tw1, tw2, tw3, u0, u1, u2, u3, Val(S))
+            d0, d1, d2, d3, d4, d5, d6, d7 = _dft32_regs(c02, c12, c22, c32, c42, c52, c62, c72, tw1, tw2, tw3, u0, u1, u2, u3, Val(S))
+            e0, e1, e2, e3, e4, e5, e6, e7 = _dft32_regs(c03, c13, c23, c33, c43, c53, c63, c73, tw1, tw2, tw3, u0, u1, u2, u3, Val(S))
+            b0 = _vcmul(b0, _tw64(W, 1, 0)); b1 = _vcmul(b1, _tw64(W, 1, 1)); b2 = _vcmul(b2, _tw64(W, 1, 2)); b3 = _vcmul(b3, _tw64(W, 1, 3))
+            b4 = _vcmul(b4, _tw64(W, 1, 4)); b5 = _vcmul(b5, _tw64(W, 1, 5)); b6 = _vcmul(b6, _tw64(W, 1, 6)); b7 = _vcmul(b7, _tw64(W, 1, 7))
+            d0 = _vcmul(d0, _tw64(W, 2, 0)); d1 = _vcmul(d1, _tw64(W, 2, 1)); d2 = _vcmul(d2, _tw64(W, 2, 2)); d3 = _vcmul(d3, _tw64(W, 2, 3))
+            d4 = _vcmul(d4, _tw64(W, 2, 4)); d5 = _vcmul(d5, _tw64(W, 2, 5)); d6 = _vcmul(d6, _tw64(W, 2, 6)); d7 = _vcmul(d7, _tw64(W, 2, 7))
+            e0 = _vcmul(e0, _tw64(W, 3, 0)); e1 = _vcmul(e1, _tw64(W, 3, 1)); e2 = _vcmul(e2, _tw64(W, 3, 2)); e3 = _vcmul(e3, _tw64(W, 3, 3))
+            e4 = _vcmul(e4, _tw64(W, 3, 4)); e5 = _vcmul(e5, _tw64(W, 3, 5)); e6 = _vcmul(e6, _tw64(W, 3, 6)); e7 = _vcmul(e7, _tw64(W, 3, 7))
+            # radix-4 (DFT-4) combine across the four blocks per group g; store block m contiguous
+            # at x[32m + 4g ..] (32 complex = 512 bytes per block, group g at +64·g)
+            st4(g, A, B, C, D) = begin
+                h0, h1, h2, h3 = _dft4reg(A, B, C, D, Val(S))
+                o = p + g * 64
+                vstore(h0, o); vstore(h1, o + 512); vstore(h2, o + 1024); vstore(h3, o + 1536)
+            end
+            st4(0, a0, b0, d0, e0); st4(1, a1, b1, d1, e1); st4(2, a2, b2, d2, e2); st4(3, a3, b3, d3, e3)
+            st4(4, a4, b4, d4, e4); st4(5, a5, b5, d5, e5); st4(6, a6, b6, d6, e6); st4(7, a7, b7, d7, e7)
         end
     end
     return x
@@ -386,6 +443,8 @@ function apply_unnormalized!(p::Radix4AvxPlan{T}, x::AbstractVector) where {T}
     if T === Float64
         if n == 64
             return _fft64_avx!(x, p.inverse ? Val(1) : Val(-1))
+        elseif n == 128
+            return _fft128_avx!(x, p.inverse ? Val(1) : Val(-1))
         elseif n == 16 || n == 32
             _base_butterflies_avx!(x, x, p.base, 1, 0, p.inverse ? Val(1) : Val(-1))
             return x
