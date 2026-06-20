@@ -134,6 +134,32 @@ end
     end
 end
 
+@testitem "Stage 9: dynamic mixed-radix codelet" setup = [FFTUtil] begin
+    using FFTW, JET
+    # Generated straight-line codelet for ANY size: primes, prime powers, composites, pow2.
+    @testset "vs FFTW ($T, n=$n)" for T in (Float64, Float32),
+            n in (2, 3, 4, 5, 6, 7, 8, 9, 12, 15, 16, 25, 27, 45, 49, 64, 81, 100, 121)
+
+        x = randn(Complex{T}, n)
+        @test relerr(pfft(x; variant = :codelet), fft(x)) < tol(T)
+        @test relerr(ipfft(pfft(x; variant = :codelet); variant = :codelet), x) < tol(T)
+    end
+
+    @testset ":fast routes small smooth non-pow2 → CodeletPlan, else Bluestein" begin
+        for n in (6, 9, 12, 27, 48, 96)
+            @test plan_pfft(ComplexF64, n; variant = :fast) isa PureFFT.CodeletPlan
+        end
+        @test plan_pfft(ComplexF64, 7; variant = :fast) isa PureFFT.BluesteinPlan    # large prime
+        @test plan_pfft(ComplexF64, 192; variant = :fast) isa PureFFT.BluesteinPlan  # too big
+    end
+
+    @testset "codelet hot path is dispatch-free" begin
+        x = randn(ComplexF64, 12)
+        p = plan_pfft(x; variant = :codelet)
+        @test_opt target_modules = (PureFFT,) PureFFT.apply_unnormalized!(p, x)
+    end
+end
+
 @testitem "JET optimization check (hot path is dispatch-free)" begin
     using JET
     for v in (:radix4avx, :radix4, :recursive, :soa, :fourstep)

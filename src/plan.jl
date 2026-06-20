@@ -41,6 +41,7 @@ Build a plan for length-`n` complex transforms. `variant` selects the kernel:
   * `:radix4`     — faithful port of rustfft's Radix4 (power of two); see [`Radix4Plan`](@ref).
   * `:fourstep`   — Stage 7 cache-blocked four-step (power of two, n ≥ 16); see [`FourStepPlan`](@ref).
   * `:bluestein`  — Stage 8 chirp-Z for arbitrary `n` (O(n log n) on primes); see [`BluesteinPlan`](@ref).
+  * `:codelet`    — Stage 9 dynamically-generated mixed-radix straight-line kernel; see [`CodeletPlan`](@ref).
   * `:fast`       — autotuned: builds candidate plans, times them, keeps the fastest.
 """
 function plan_pfft(
@@ -60,6 +61,8 @@ function plan_pfft(
         return FourStepPlan(Complex{T}, n; inverse)
     elseif variant === :bluestein
         return BluesteinPlan(Complex{T}, n; inverse)
+    elseif variant === :codelet
+        return CodeletPlan(Complex{T}, n; inverse)
     elseif variant === :fast
         return autoplan(Complex{T}, n; inverse)
     elseif variant === :scalar
