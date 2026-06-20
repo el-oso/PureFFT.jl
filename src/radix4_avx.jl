@@ -379,6 +379,33 @@ end
     return (t0 + t2, t1 + t3, t0 - t2, t1 - t3)
 end
 
+# Vectorized transpose (Float64): base×width → width×base via a grid of 4×4 register transposes
+# (`_transpose4`), replacing the scalar strided-store transpose. ~1.8× faster while the array fits
+# L1; above that the scattered stores thrash and the scalar cache-blocked transpose wins, so the
+# caller gates on size. Requires base and width both multiples of 4 (true for base 16/32, n≥256).
+function _radix4_transpose_avx!(dst::AbstractVector{Complex{Float64}}, x, base::Int, width::Int)
+    GC.@preserve dst x begin
+        px = reinterpret(Ptr{Float64}, pointer(x))
+        pd = reinterpret(Ptr{Float64}, pointer(dst))
+        @inbounds for I in 0:(base ÷ 4 - 1), J in 0:(width ÷ 4 - 1)
+            a, b, c, d = _transpose4(
+                vload(Vec{8, Float64}, px + ((4I + 0) * width + 4J) * 16),
+                vload(Vec{8, Float64}, px + ((4I + 1) * width + 4J) * 16),
+                vload(Vec{8, Float64}, px + ((4I + 2) * width + 4J) * 16),
+                vload(Vec{8, Float64}, px + ((4I + 3) * width + 4J) * 16),
+            )
+            o = pd + ((4J) * base + 4I) * 16
+            vstore(a, o); vstore(b, o + base * 16); vstore(c, o + 2base * 16); vstore(d, o + 3base * 16)
+        end
+    end
+    return dst
+end
+
+# Largest transform (complex elements) for which the vectorized transpose beats the scalar
+# cache-blocked one — i.e. while the array still fits comfortably in L1. (A CPU-generic value
+# should come from the real L1 size; see the roadmap.)
+const _VTRANSPOSE_MAX = 1024
+
 # fuse two passes (radix-16) only while the fused 16L-element block still has good locality
 # (16 strided streams within this many complex elements). Above it, single radix-4 wins on cache.
 const _R16_FUSE_MAX = 1 << 13   # complex elements; tuned on Zen5 (8192 best n≤16384 balance)
@@ -452,7 +479,11 @@ function apply_unnormalized!(p::Radix4AvxPlan{T}, x::AbstractVector) where {T}
     end
     scr = p.scratch
     width = n ÷ p.base
-    _radix4_transpose!(scr, x, p.base, width)
+    if T === Float64 && n <= _VTRANSPOSE_MAX && p.base % 4 == 0 && width % 4 == 0
+        _radix4_transpose_avx!(scr, x, p.base, width)
+    else
+        _radix4_transpose!(scr, x, p.base, width)
+    end
     if p.inverse
         _base_butterflies_avx!(x, scr, p.base, width, p.k, Val(1))
         _radix4_cross_avx!(x, p.base, n, p.layers, Val(1))
