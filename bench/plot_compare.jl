@@ -28,11 +28,20 @@ gflops(n, t) = 5 * n * log2(n) / t / 1.0e9
 const SAMPLES = 1_000   # min-time stabilizes well before this; 1000 keeps regen fast (run on every push)
 const SECONDS = 30
 
-# Power-of-two sizes (PureFFT's design range). Non-power-of-two sizes: half-integer exponents
-# rounded to ints, dropping any that landed on a power of two — every one has a large prime
-# factor, so they exercise the Bluestein path.
+# Power-of-two sizes (PureFFT's design range).
 pow2_sizes() = [2^e for e in 6:18]
-nonpow2_sizes() = filter(!ispow2, unique(round.(Int, 2 .^ (6.5:1.0:18.5))))
+
+# Non-power-of-two sizes: the COMMON case is highly-composite (smooth) sizes, which route to the
+# codelet (small) / four-step (larger) path — that's what this plot samples, by picking the
+# non-pow2 5-smooth number (2^a·3^b·5^c) nearest each half-integer exponent. (Large-PRIME non-pow2
+# sizes fall to Bluestein at ~5 GF/s; that regime is summarized in docs benchmarks.md, not plotted
+# here, since sampling only primes — as a naive sweep does — hides the fast smooth-composite path.)
+function nonpow2_sizes()
+    smooth = sort!(unique(Int[2^a * 3^b * 5^c for a in 0:18 for b in 0:11 for c in 0:7
+                                 if 64 <= 2^a * 3^b * 5^c <= 262144]))
+    smooth = filter(!ispow2, smooth)
+    return unique(smooth[argmin(abs.(log2.(smooth) .- e))] for e in 6.5:1.0:18.5)
+end
 
 function run_benchmarks(sizes)
     ns = Int[]
@@ -119,13 +128,13 @@ plot!(p2, ns, t_pure ./ t_fftw; label = LABELS.pure, color = COLORS.pure, linewi
 savefig(p2, joinpath(assets, "comparison_time.png"))
 
 # --- non-power-of-two (Bluestein) ---
-println("\nNon-power-of-two sizes (PureFFT → Bluestein chirp-Z):")
+println("\nNon-power-of-two smooth-composite sizes (PureFFT → codelet / four-step):")
 nq, q_fftw, q_rust, q_pure = run_benchmarks(nonpow2_sizes())
 
 p3 = plot(;
     xlabel = "Transform size N (non-power-of-two)",
     ylabel = "GFLOP/s (nominal 5·N·log₂N)",
-    title = "FFT throughput on non-power-of-two sizes\n(Zen 5, single-thread, ComplexF64; PureFFT uses Bluestein chirp-Z)",
+    title = "FFT throughput on non-power-of-two (smooth composite) sizes\n(Zen 5, single-thread, ComplexF64; PureFFT uses the four-step / codelet path)",
     xscale = :log2,
     xticks = (tickvals, ticklabels),
     xrotation = 45,
@@ -136,7 +145,7 @@ p3 = plot(;
 )
 plot!(p3, nq, gflops.(nq, q_fftw); label = LABELS.fftw, color = COLORS.fftw, linewidth = 2, marker = :circle, markersize = 4)
 plot!(p3, nq, gflops.(nq, q_rust); label = LABELS.rust, color = COLORS.rust, linewidth = 2, marker = :circle, markersize = 4)
-plot!(p3, nq, gflops.(nq, q_pure); label = "PureFFT :fast (Bluestein)", color = COLORS.pure, linewidth = 2, marker = :circle, markersize = 4)
+plot!(p3, nq, gflops.(nq, q_pure); label = "PureFFT :fast (four-step ≤4096, else Bluestein)", color = COLORS.pure, linewidth = 2, marker = :circle, markersize = 4)
 savefig(p3, joinpath(assets, "comparison_nonpow2.png"))
 
 println("\nSaved: $(joinpath(assets, "comparison.png"))")

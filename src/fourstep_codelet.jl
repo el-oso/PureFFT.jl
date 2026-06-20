@@ -14,20 +14,9 @@
 const FOURSTEP_MAX_FACTOR = 64
 const FOURSTEP_MIN_FACTOR = 8
 
-# Pick a balanced split n = n1·n2 with FOURSTEP_MIN_FACTOR ≤ n1 ≤ n2 ≤ FOURSTEP_MAX_FACTOR and both
-# factors smooth (largest prime ≤ 7, so each codelet's prime leaf stays cheap). Returns nothing if
-# no such split exists. Searches divisors near √n outward.
-function _foursplit(n::Int)
-    isqrtn = isqrt(n)
-    for d in isqrtn:-1:FOURSTEP_MIN_FACTOR
-        n % d == 0 || continue
-        n1 = d; n2 = n ÷ d
-        n2 <= FOURSTEP_MAX_FACTOR || continue
-        (_max_prime_factor(n1) <= 7 && _max_prime_factor(n2) <= 7) || continue
-        return (n1, n2)
-    end
-    return nothing
-end
+# Valid split bounds: each factor smooth (largest prime ≤ 7, so its codelet's prime leaf stays
+# cheap) and in [FOURSTEP_MIN_FACTOR, FOURSTEP_MAX_FACTOR]. `autoplan` enumerates and times them
+# (see `_foursplit_candidates` / `_best_foursplit_plan`); the balanced split is not always fastest.
 
 """
     FourStepCodeletPlan{T,N1,N2} <: AbstractFFTPlan{T}

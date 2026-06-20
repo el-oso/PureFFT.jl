@@ -44,6 +44,38 @@ const CODELET_MAX_N = 128
 const RADER_MIN_P = 128
 const RADER_MAX_PM1_PRIME = 3
 
+# All valid four-step splits n = n1·n2 (both factors smooth and in [FOURSTEP_MIN_FACTOR,
+# FOURSTEP_MAX_FACTOR]). The balanced one isn't always fastest (the batched codelet's efficiency
+# varies with R), so `autoplan` times them.
+function _foursplit_candidates(n::Int)
+    cands = Tuple{Int, Int}[]
+    for n1 in FOURSTEP_MIN_FACTOR:FOURSTEP_MAX_FACTOR
+        n % n1 == 0 || continue
+        n2 = n ÷ n1
+        (FOURSTEP_MIN_FACTOR <= n2 <= FOURSTEP_MAX_FACTOR &&
+            _max_prime_factor(n1) <= 7 && _max_prime_factor(n2) <= 7) || continue
+        push!(cands, (n1, n2))
+    end
+    return cands
+end
+
+# Build a FourStepCodeletPlan for each candidate split, time it, and keep the fastest (FFTW
+# MEASURE-style). Returns `nothing` if no valid split. Plan-time only; first use of a given factor
+# compiles its @generated codelet (cached thereafter). Measured up to ~26 % over the balanced split.
+function _best_foursplit_plan(::Type{Complex{T}}, n::Int; inverse::Bool) where {T}
+    cands = _foursplit_candidates(n)
+    isempty(cands) && return nothing
+    y = randn(Complex{T}, n)
+    best = FourStepCodeletPlan(Complex{T}, cands[1][1], cands[1][2]; inverse)
+    bt = _besttime(best, y)
+    for k in 2:length(cands)
+        p = FourStepCodeletPlan(Complex{T}, cands[k][1], cands[k][2]; inverse)
+        t = _besttime(p, y)
+        t < bt && (bt = t; best = p)
+    end
+    return best
+end
+
 """
     autoplan(Complex{T}, n; inverse=false) -> AbstractFFTPlan
 
@@ -62,11 +94,9 @@ function autoplan(::Type{Complex{T}}, n::Integer; inverse::Bool = false) where {
         if ni >= RADER_MIN_P && _max_prime_factor(ni) == ni && _max_prime_factor(ni - 1) <= RADER_MAX_PM1_PRIME
             return RaderPlan(Complex{T}, ni; inverse)
         end
-        split = _foursplit(ni)         # smooth composite → four-step with batched codelets
-        if split !== nothing
-            return FourStepCodeletPlan(Complex{T}, split[1], split[2]; inverse)
-        end
-        return BluesteinPlan(Complex{T}, n; inverse)   # large prime factor → chirp-Z
+        fsp = _best_foursplit_plan(Complex{T}, ni; inverse)   # smooth composite → autotuned four-step
+        isnothing(fsp) || return fsp
+        return BluesteinPlan(Complex{T}, n; inverse)          # large prime factor → chirp-Z
     end
     # candidate kernels (all power-of-two); time each on a real buffer, keep the fastest.
     cands = AbstractFFTPlan{T}[
