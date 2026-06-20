@@ -42,6 +42,7 @@ Build a plan for length-`n` complex transforms. `variant` selects the kernel:
   * `:fourstep`   — Stage 7 cache-blocked four-step (power of two, n ≥ 16); see [`FourStepPlan`](@ref).
   * `:bluestein`  — Stage 8 chirp-Z for arbitrary `n` (O(n log n) on primes); see [`BluesteinPlan`](@ref).
   * `:codelet`    — Stage 9 dynamically-generated mixed-radix straight-line kernel; see [`CodeletPlan`](@ref).
+  * `:rader`      — Stage 11 Rader's algorithm for prime `n` (length-`n−1` convolution); see [`RaderPlan`](@ref).
   * `:fast`       — autotuned: builds candidate plans, times them, keeps the fastest.
 """
 function plan_pfft(
@@ -49,42 +50,31 @@ function plan_pfft(
     ) where {T}
     nostage = Vector{Complex{T}}[]
     noscratch = Complex{T}[]
-    if variant === :soa
-        return SoAPlan(Complex{T}, n; inverse)
-    elseif variant === :radix4
-        return Radix4Plan(Complex{T}, n; inverse)
-    elseif variant === :radix4simd
-        return Radix4SoAPlan(Complex{T}, n; inverse)
-    elseif variant === :radix4avx
-        return Radix4AvxPlan(Complex{T}, n; inverse)
-    elseif variant === :fourstep
-        return FourStepPlan(Complex{T}, n; inverse)
-    elseif variant === :bluestein
-        return BluesteinPlan(Complex{T}, n; inverse)
-    elseif variant === :codelet
-        return CodeletPlan(Complex{T}, n; inverse)
-    elseif variant === :fast
-        return autoplan(Complex{T}, n; inverse)
-    elseif variant === :scalar
-        ispow2(n) ||
-            throw(ArgumentError(":scalar supports power-of-two sizes only; got n=$n"))
-        tw = twiddle_table(Complex{T}, n; inverse)
-        return PureFFTPlan{T, Val{:scalar}}(
-            Int(n), inverse, Val(:scalar), tw, Int[], nostage, noscratch
-        )
-    elseif variant in POW2_VARIANTS
-        ispow2(n) ||
-            throw(ArgumentError(":$variant supports power-of-two sizes only; got n=$n"))
-        stages = staged_twiddles(Complex{T}, n; inverse)
-        scratch = variant === :recursive ? Vector{Complex{T}}(undef, Int(n)) : noscratch
-        return PureFFTPlan{T, Val{variant}}(
-            Int(n), inverse, Val(variant), Complex{T}[], Int[], stages, scratch
-        )
-    else
-        factors = factorize(n)
-        return PureFFTPlan{T, Val{variant}}(
-            Int(n), inverse, Val(variant), Complex{T}[], factors, nostage, noscratch
-        )
+    return @match variant begin
+        :soa => SoAPlan(Complex{T}, n; inverse)
+        :radix4 => Radix4Plan(Complex{T}, n; inverse)
+        :radix4simd => Radix4SoAPlan(Complex{T}, n; inverse)
+        :radix4avx => Radix4AvxPlan(Complex{T}, n; inverse)
+        :fourstep => FourStepPlan(Complex{T}, n; inverse)
+        :bluestein => BluesteinPlan(Complex{T}, n; inverse)
+        :codelet => CodeletPlan(Complex{T}, n; inverse)
+        :rader => RaderPlan(Complex{T}, n; inverse)
+        :fast => autoplan(Complex{T}, n; inverse)
+        :scalar => begin
+            ispow2(n) || throw(ArgumentError(":scalar supports power-of-two sizes only; got n=$n"))
+            tw = twiddle_table(Complex{T}, n; inverse)
+            PureFFTPlan{T, Val{:scalar}}(Int(n), inverse, Val(:scalar), tw, Int[], nostage, noscratch)
+        end
+        v && if v in POW2_VARIANTS end => begin   # :staged / :base / :recursive
+            ispow2(n) || throw(ArgumentError(":$v supports power-of-two sizes only; got n=$n"))
+            stages = staged_twiddles(Complex{T}, n; inverse)
+            scratch = v === :recursive ? Vector{Complex{T}}(undef, Int(n)) : noscratch
+            PureFFTPlan{T, Val{v}}(Int(n), inverse, Val(v), Complex{T}[], Int[], stages, scratch)
+        end
+        _ => begin                                 # :mixedradix and other direct-DFT variants
+            factors = factorize(n)
+            PureFFTPlan{T, Val{variant}}(Int(n), inverse, Val(variant), Complex{T}[], factors, nostage, noscratch)
+        end
     end
 end
 
