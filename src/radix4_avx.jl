@@ -9,6 +9,7 @@
 # on the memory-bound radix-2, but it WINS on the compute-dense radix-4 cross).
 
 using SIMD: Vec, vload, vstore, shufflevector
+using FixedSizeArrays: FixedSizeVector
 
 # W complex per vector → a 64-byte (AVX-512) register on this Zen 5 host. M = 2W interleaved lanes.
 @inline _avx_width(::Type{T}) where {T} = 32 ÷ sizeof(T)   # F64→4 (M=8), F32→8 (M=16)
@@ -447,7 +448,7 @@ struct Radix4AvxPlan{T} <: AbstractFFTPlan{T}
     base::Int
     k::Int
     layers::Vector{Vector{Complex{T}}}
-    scratch::Vector{Complex{T}}
+    scratch::FixedSizeVector{Complex{T}, Memory{Complex{T}}}
 end
 
 function Radix4AvxPlan(::Type{Complex{T}}, n::Integer; inverse::Bool = false) where {T}
@@ -456,7 +457,7 @@ function Radix4AvxPlan(::Type{Complex{T}}, n::Integer; inverse::Bool = false) wh
     base = _radix4_base(nl)
     k = (nl - trailing_zeros(base)) ÷ 2
     layers = _radix4_layers(Complex{T}, Int(n), base; inverse)
-    return Radix4AvxPlan{T}(Int(n), inverse, base, k, layers, Vector{Complex{T}}(undef, Int(n)))
+    return Radix4AvxPlan{T}(Int(n), inverse, base, k, layers, FixedSizeVector{Complex{T}}(undef, Int(n)))
 end
 
 plan_length(p::Radix4AvxPlan)::Int = p.n
