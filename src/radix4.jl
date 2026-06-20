@@ -43,7 +43,7 @@ end
 # Contiguous reads of each x row-segment (vs the scattered stride-`width` gather of the naive
 # reorder). The digit reversal is folded — for free — into the base butterfly's source offset.
 function _radix4_transpose!(dst, x, base::Int, width::Int)
-    blk = max(1, 1024 ÷ base)
+    blk = max(1, _L1_TILE ÷ base)
     @inbounds for wt in 0:blk:(width - 1)
         we = min(wt + blk, width)
         for y in 0:(base - 1)
@@ -197,7 +197,7 @@ end
 
 # Cache-blocked transpose AoS x → SoA (dr,di), fusing the deinterleave (split) into the pass.
 function _radix4_transpose_soa!(dr, di, x, base::Int, width::Int)
-    blk = max(1, 1024 ÷ base)
+    blk = max(1, _L1_TILE ÷ base)
     @inbounds for wt in 0:blk:(width - 1)
         we = min(wt + blk, width)
         for y in 0:(base - 1)

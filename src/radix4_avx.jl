@@ -402,13 +402,14 @@ function _radix4_transpose_avx!(dst::AbstractVector{Complex{Float64}}, x, base::
 end
 
 # Largest transform (complex elements) for which the vectorized transpose beats the scalar
-# cache-blocked one — i.e. while the array still fits comfortably in L1. (A CPU-generic value
-# should come from the real L1 size; see the roadmap.)
-const _VTRANSPOSE_MAX = 1024
+# cache-blocked one — i.e. while the array still fits comfortably in L1. Derived from the real
+# L1 size (see src/cpuinfo.jl); 1024 on Zen5.
+const _VTRANSPOSE_MAX = _L1_TILE
 
 # fuse two passes (radix-16) only while the fused 16L-element block still has good locality
 # (16 strided streams within this many complex elements). Above it, single radix-4 wins on cache.
-const _R16_FUSE_MAX = 1 << 13   # complex elements; tuned on Zen5 (8192 best n≤16384 balance)
+# Derived from L2 (see src/cpuinfo.jl); 8192 on Zen5 (best n≤16384 balance).
+const _R16_FUSE_MAX = _L2_FUSE
 
 function _radix4_cross_avx!(out::AbstractVector{Complex{T}}, base::Int, n::Int, layers, ::Val{S}) where {T, S}
     W = _avx_width(T)

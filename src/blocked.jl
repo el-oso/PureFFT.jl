@@ -64,7 +64,7 @@ end
 # Cache-blocked transpose: src column-major N1×N2 (idx n1+N1*k2) → dst N2×N1 (idx k2+N2*n1).
 # Kept as a pure blocked copy: the step-2 twiddle is a SEPARATE contiguous @simd pass, because
 # fusing compute into this scattered-write loop measured slower (the writes don't vectorize).
-function _btranspose!(dr, di, sr, si, N1, N2, blk = 32)
+function _btranspose!(dr, di, sr, si, N1, N2, blk = _BTRANSPOSE_BLK)
     @inbounds for jj in 0:blk:(N2 - 1), ii in 0:blk:(N1 - 1)
         for n1 in ii:(min(ii + blk, N1) - 1), k2 in jj:(min(jj + blk, N2) - 1)
             s = n1 + N1 * k2 + 1
