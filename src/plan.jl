@@ -40,6 +40,7 @@ Build a plan for length-`n` complex transforms. `variant` selects the kernel:
   * `:soa`        — Stage 5 split-layout (SoA) recursive FFT (power of two); see [`SoAPlan`](@ref).
   * `:radix4`     — faithful port of rustfft's Radix4 (power of two); see [`Radix4Plan`](@ref).
   * `:fourstep`   — Stage 7 cache-blocked four-step (power of two, n ≥ 16); see [`FourStepPlan`](@ref).
+  * `:bluestein`  — Stage 8 chirp-Z for arbitrary `n` (O(n log n) on primes); see [`BluesteinPlan`](@ref).
   * `:fast`       — autotuned: builds candidate plans, times them, keeps the fastest.
 """
 function plan_pfft(
@@ -57,6 +58,8 @@ function plan_pfft(
         return Radix4AvxPlan(Complex{T}, n; inverse)
     elseif variant === :fourstep
         return FourStepPlan(Complex{T}, n; inverse)
+    elseif variant === :bluestein
+        return BluesteinPlan(Complex{T}, n; inverse)
     elseif variant === :fast
         return autoplan(Complex{T}, n; inverse)
     elseif variant === :scalar
@@ -166,3 +169,5 @@ end
 @verify Radix4SoAPlan{Float32}
 @verify Radix4AvxPlan{Float64}
 @verify Radix4AvxPlan{Float32}
+@verify BluesteinPlan{Float64}
+@verify BluesteinPlan{Float32}
