@@ -30,17 +30,23 @@ the earlier gap (pure Julia was once ~0.55× of FFTW — see git history / REPOR
 
 ## Non-power-of-two
 
-No cliff: a large prime factor no longer falls to an O(n²) direct DFT. PureFFT's `:fast` routes by
-size/factorization: small smooth → dynamically-generated mixed-radix codelet (Stage 9); larger
-smooth composite → SIMD four-step with batched codelets (Stage 10); large prime → Bluestein chirp-Z
-(Stage 8, O(n log n)).
+No O(n²) cliff: a large prime factor no longer falls to a direct DFT. PureFFT's `:fast` routes by
+size/factorization: small smooth → dynamically-generated mixed-radix codelet (Stage 9); smooth
+composite up to ~4096 → SIMD four-step with batched codelets (Stage 10, split autotuned at plan
+time); everything else (large prime, **or smooth composite > 4096**) → Bluestein chirp-Z (Stage 8).
+
+The plot sweeps smooth-composite sizes (the common non-pow2 case). PureFFT (green) reaches ~9–22
+GF/s on the four-step path (≈0.6× FFTW — not yet parity, the AoS↔SoA + transpose overhead), then
+**drops to ~5 above n≈4096**: the four-step factors cap at 64 (64×64=4096), so larger smooth sizes
+currently fall back to Bluestein. Lifting that needs a recursive four-step (tracked as future work).
 
 ![GFLOP/s on non-power-of-two sizes](assets/comparison_nonpow2.png)
 
 | regime | example n | PureFFT | note |
 |---|---:|---:|---|
 | smooth, small — codelet | 27 / 48 | **12.8** / 13 | beats FFTW (10.7); was ~0.2 via old mixed-radix |
-| smooth composite — four-step | 900 / 1000 | **20 / 19** | 2–4× Bluestein, ~50% of FFTW (Stage 10) |
+| smooth composite ≤4096 — four-step | 720 / 2880 | **22 / 22** | ~0.6× FFTW, 2–4× Bluestein (Stage 10) |
+| smooth composite >4096 — Bluestein | 5760 / 23040 | ~5 | four-step ceiling; recursive four-step is future work |
 | large prime / prime power — Bluestein | 181 / 5793 | ~5 | O(n log n), no cliff |
 
 ## All variant progression
