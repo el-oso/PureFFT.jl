@@ -30,5 +30,6 @@ include("bluestein.jl")
 include("plan.jl")
 include("autotune.jl")
 include("rfft.jl")
+include("abstractfft.jl")
 
 end # module

@@ -3,6 +3,8 @@ using FFTW
 using Test
 using TrimCheck
 using JET
+using AbstractFFTs
+using LinearAlgebra: mul!
 
 # Relative L2 error between a candidate transform and the FFTW reference.
 relerr(a, b) = sqrt(sum(abs2, a .- b) / sum(abs2, b))
@@ -203,6 +205,41 @@ end
         PureFFT.apply_rfft!(p, x, out)          # warmup
         allocs = @allocated PureFFT.apply_rfft!(p, x, out)
         @test allocs == 0
+    end
+end
+
+@testset "AbstractFFTs plan interface" begin
+    # _pure_plan_fft forces the PureFFT path even with FFTW loaded (FFTW's StridedVector methods
+    # are otherwise more specific). Covers pow2 (radix4avx) and non-pow2 (Bluestein) sizes.
+    @testset "fft/ifft/bfft/mul!/inv ($T, n=$n)" for T in (Float64, Float32),
+            n in (8, 256, 1024, 96, 1000)
+
+        x = randn(Complex{T}, n)
+        ref = fft(x)
+        p = PureFFT._pure_plan_fft(x)
+        @test size(p) == (n,)
+        @test AbstractFFTs.fftdims(p) == 1:1
+        @test relerr(p * x, ref) < tol(T)                         # * (out-of-place fft)
+        @test x == x                                              # * did not mutate input
+        y = Vector{Complex{T}}(undef, n)
+        mul!(y, p, x)
+        @test relerr(y, ref) < tol(T)                             # mul! into preallocated
+        @test relerr(p \ (p * x), x) < tol(T)                     # \ round-trip
+        @test relerr(inv(p) * (p * x), x) < tol(T)                # inv() cached round-trip
+        ifp = AbstractFFTs.plan_inv(p)                            # ifft = ScaledPlan(bfft, 1/N)
+        @test relerr(ifp * (p * x), x) < tol(T)
+        pb = PureFFT._pure_plan_fft(x; inverse = true)            # bfft = unnormalized inverse
+        @test relerr(pb * x, n .* ifft(x)) < tol(T)
+    end
+
+    @testset "in-place plan mutates and matches" begin
+        x = randn(ComplexF64, 512)
+        ref = fft(x)
+        p! = PureFFT._pure_plan_fft(x; inplace = true)
+        z = copy(x)
+        w = p! * z
+        @test w === z                                            # operated in place
+        @test relerr(w, ref) < tol(Float64)
     end
 end
 
