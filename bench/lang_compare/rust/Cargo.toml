@@ -1,0 +1,15 @@
+[package]
+name = "fft_lang_compare"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "fft"
+path = "src/main.rs"
+
+# Max optimization so we compare Julia's best against Rust's best (both LLVM).
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

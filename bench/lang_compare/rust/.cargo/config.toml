@@ -1,0 +1,3 @@
+# Use all host CPU features (AVX-512 on this Zen 5), matching Julia's default native target.
+[build]
+rustflags = ["-C", "target-cpu=native"]

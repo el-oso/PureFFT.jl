@@ -1,0 +1,119 @@
+flop model: 5·N·log2(N)
+
+n = 64      
+  method                   time    GFLOP/s     vs EST       relerr
+  FFTW-ESTIMATE         70.0 ns      27.43      1.00x      0.0e+00
+  FFTW-MEASURE          70.0 ns      27.43      1.00x      0.0e+00
+  RustFFT               60.0 ns      32.00      1.17x      0.0e+00
+  PureFFT-recursive     100.0 ns      19.20      0.70x      2.0e-16
+  PureFFT-fourstep     310.0 ns       6.19      0.23x      2.0e-16
+  PureFFT-fast         100.0 ns      19.20      0.70x      2.0e-16
+
+n = 128     
+  method                   time    GFLOP/s     vs EST       relerr
+  FFTW-ESTIMATE        140.0 ns      32.00      1.00x      0.0e+00
+  FFTW-MEASURE         140.0 ns      32.00      1.00x      0.0e+00
+  RustFFT              120.0 ns      37.33      1.17x      0.0e+00
+  PureFFT-recursive     210.0 ns      21.33      0.67x      2.1e-16
+  PureFFT-fourstep     581.0 ns       7.71      0.24x      2.2e-16
+  PureFFT-fast         210.0 ns      21.33      0.67x      2.1e-16
+
+n = 256     
+  method                   time    GFLOP/s     vs EST       relerr
+  FFTW-ESTIMATE        291.0 ns      35.19      1.00x      0.0e+00
+  FFTW-MEASURE         450.0 ns      22.76      0.65x      0.0e+00
+  RustFFT              401.0 ns      25.54      0.73x      0.0e+00
+  PureFFT-recursive     451.0 ns      22.71      0.65x      2.6e-16
+  PureFFT-fourstep     802.0 ns      12.77      0.36x      2.6e-16
+  PureFFT-fast         460.0 ns      22.26      0.63x      2.6e-16
+
+n = 512     
+  method                   time    GFLOP/s     vs EST       relerr
+  FFTW-ESTIMATE        510.0 ns      45.18      1.00x      0.0e+00
+  FFTW-MEASURE         511.0 ns      45.09      1.00x      0.0e+00
+  RustFFT              511.0 ns      45.09      1.00x      0.0e+00
+  PureFFT-recursive     982.0 ns      23.46      0.52x      3.0e-16
+  PureFFT-fourstep      1.51 µs      15.23      0.34x      2.9e-16
+  PureFFT-fast         981.0 ns      23.49      0.52x      3.0e-16
+
+n = 1024    
+  method                   time    GFLOP/s     vs EST       relerr
+  FFTW-ESTIMATE         1.18 µs      43.32      1.00x      0.0e+00
+  FFTW-MEASURE          1.17 µs      43.69      1.01x      0.0e+00
+  RustFFT               1.16 µs      44.06      1.02x      0.0e+00
+  PureFFT-recursive      2.12 µs      24.11      0.56x      3.2e-16
+  PureFFT-fourstep      2.73 µs      18.79      0.43x      3.3e-16
+  PureFFT-fast          2.12 µs      24.11      0.56x      3.2e-16
+
+n = 2048    
+  method                   time    GFLOP/s     vs EST       relerr
+  FFTW-ESTIMATE         2.53 µs      44.43      1.00x      0.0e+00
+  FFTW-MEASURE          2.55 µs      44.26      1.00x      0.0e+00
+  RustFFT               2.54 µs      44.28      1.00x      0.0e+00
+  PureFFT-recursive      4.90 µs      22.99      0.52x      3.6e-16
+  PureFFT-fourstep      5.53 µs      20.37      0.46x      3.6e-16
+  PureFFT-fast          4.89 µs      23.04      0.52x      3.6e-16
+
+n = 4096    
+  method                   time    GFLOP/s     vs EST       relerr
+  FFTW-ESTIMATE         5.52 µs      44.52      1.00x      0.0e+00
+  FFTW-MEASURE          5.51 µs      44.60      1.00x      0.0e+00
+  RustFFT               5.63 µs      43.65      0.98x      0.0e+00
+  PureFFT-recursive     11.36 µs      21.63      0.49x      3.8e-16
+  PureFFT-fourstep     11.63 µs      21.13      0.47x      3.8e-16
+  PureFFT-fast         11.36 µs      21.63      0.49x      3.8e-16
+
+n = 8192    
+  method                   time    GFLOP/s     vs EST       relerr
+  FFTW-ESTIMATE        12.91 µs      41.23      1.00x      0.0e+00
+  FFTW-MEASURE         12.89 µs      41.30      1.00x      0.0e+00
+  RustFFT              12.91 µs      41.23      1.00x      0.0e+00
+  PureFFT-recursive     28.26 µs      18.84      0.46x      4.0e-16
+  PureFFT-fourstep     23.82 µs      22.35      0.54x      4.0e-16
+  PureFFT-fast         24.77 µs      21.50      0.52x      4.0e-16
+
+n = 16384   
+  method                   time    GFLOP/s     vs EST       relerr
+  FFTW-ESTIMATE        27.78 µs      41.28      1.00x      0.0e+00
+  FFTW-MEASURE         27.84 µs      41.19      1.00x      0.0e+00
+  RustFFT              27.98 µs      40.98      0.99x      0.0e+00
+  PureFFT-recursive     59.97 µs      19.12      0.46x      4.3e-16
+  PureFFT-fourstep     56.85 µs      20.17      0.49x      4.4e-16
+  PureFFT-fast         57.20 µs      20.05      0.49x      4.4e-16
+
+n = 32768   
+  method                   time    GFLOP/s     vs EST       relerr
+  FFTW-ESTIMATE        64.14 µs      38.32      1.00x      0.0e+00
+  FFTW-MEASURE         65.43 µs      37.56      0.98x      0.0e+00
+  RustFFT              66.01 µs      37.23      0.97x      0.0e+00
+  PureFFT-recursive    137.96 µs      17.81      0.46x      4.5e-16
+  PureFFT-fourstep    109.23 µs      22.50      0.59x      4.5e-16
+  PureFFT-fast        124.43 µs      19.75      0.52x      4.5e-16
+
+n = 65536   
+  method                   time    GFLOP/s     vs EST       relerr
+  FFTW-ESTIMATE       145.84 µs      35.95      1.00x      0.0e+00
+  FFTW-MEASURE        145.54 µs      36.02      1.00x      0.0e+00
+  RustFFT             145.68 µs      35.99      1.00x      0.0e+00
+  PureFFT-recursive    313.37 µs      16.73      0.47x      4.8e-16
+  PureFFT-fourstep    264.49 µs      19.82      0.55x      4.8e-16
+  PureFFT-fast        253.26 µs      20.70      0.58x      4.8e-16
+
+n = 131072  
+  method                   time    GFLOP/s     vs EST       relerr
+  FFTW-ESTIMATE       327.81 µs      33.99      1.00x      0.0e+00
+  FFTW-MEASURE        331.87 µs      33.57      0.99x      0.0e+00
+  RustFFT             334.26 µs      33.33      0.98x      0.0e+00
+  PureFFT-recursive    710.50 µs      15.68      0.46x      5.0e-16
+  PureFFT-fourstep    577.30 µs      19.30      0.57x      5.0e-16
+  PureFFT-fast        600.40 µs      18.56      0.55x      5.0e-16
+
+n = 262144  
+  method                   time    GFLOP/s     vs EST       relerr
+  FFTW-ESTIMATE       879.33 µs      26.83      1.00x      0.0e+00
+  FFTW-MEASURE        893.41 µs      26.41      0.98x      0.0e+00
+  RustFFT             879.06 µs      26.84      1.00x      0.0e+00
+  PureFFT-recursive   1814.13 µs      13.01      0.48x      5.2e-16
+  PureFFT-fourstep   1473.11 µs      16.02      0.60x      5.1e-16
+  PureFFT-fast       1577.33 µs      14.96      0.56x      5.1e-16
+

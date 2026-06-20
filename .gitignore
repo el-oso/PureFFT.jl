@@ -1,0 +1,19 @@
+# Julia
+Manifest.toml
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+
+# Documenter / DocumenterVitepress / Node
+docs/build/
+**/.documenter/
+node_modules/
+package-lock.json
+.vitepress/cache/
+.vitepress/dist/
+
+# Rust comparison-crate build artifacts
+**/target/
+Cargo.lock
+
+.DS_Store

@@ -1,0 +1,17 @@
+name = "PureFFT"
+uuid = "4bd8a7c1-2372-4ecc-824d-9832c6b13f99"
+version = "0.1.0"
+authors = ["el_oso"]
+
+[deps]
+AbstractFFTs = "621f4979-c628-5d54-868e-fcf4e3e8185c"
+MLStyle = "d8e11817-5142-5d16-987a-aa16d5891078"
+SIMD = "fdea26ae-647d-5447-a871-4b548cad5224"
+TypeContracts = "c7a3f1e2-84b5-4d69-9e0a-1f2b3c4d5e6f"
+
+[compat]
+AbstractFFTs = "1"
+MLStyle = "0.4.17"
+SIMD = "3.7.2"
+TypeContracts = "0.13.1"
+julia = "1.10"
