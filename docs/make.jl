@@ -18,7 +18,6 @@ makedocs(;
         "Guide" => "guide.md",
         "Performance" => "performance.md",
         "Benchmarks" => "benchmarks.md",
-        "Developer" => ["Subagent Models" => "dev/subagent-models.md"],
     ],
 )
 
