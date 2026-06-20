@@ -131,7 +131,14 @@ function _base32_avx!(dst, src, width::Int, k::Int, ::Val{S}) where {S}
     return
 end
 
-# AVX base butterflies where supported (Float64, base 16); scalar codelets otherwise.
+# NOTE (negative result, kept for the record): a size-64 within-register codelet (base 64 =
+# radix-4 of 16: 4-way stride-4 deinterleave → 4×DFT-16 → Butterfly4 combine) was implemented to
+# trade one cross pass for a bigger base. It REGRESSED ~40→33 GFLOP/s: the base pass roughly
+# doubled (16 live registers spill + 32 deinterleave shuffles per leaf) while the cross pass it
+# removed is the *cheapest* small-stride one. Reverted. The size-32 codelet is likewise slower
+# than base-16, so base-16 (even n) / base-32 (odd n) remain the sweet spot.
+
+# AVX base butterflies where supported (Float64, base 16/32); scalar codelets otherwise.
 @inline function _base_butterflies_avx!(dst::AbstractVector{Complex{T}}, src, base, width, k, ::Val{S}) where {T, S}
     if T === Float64 && base == 16
         _base16_avx!(dst, src, width, k, Val(S))
@@ -143,51 +150,151 @@ end
     return
 end
 
-function _radix4_cross_avx!(out::AbstractVector{Complex{T}}, base::Int, n::Int, layers, ::Val{S}) where {T, S}
+# one radix-4 cross pass (stride L), vectorized over j with a scalar remainder.
+@inline function _radix4_pass_avx!(po::Ptr{T}, tw, L::Int, n::Int, out, ::Val{S}) where {T, S}
     W = _avx_width(T)
-    M = 2W
-    VT = Vec{M, T}
-    es = 2 * sizeof(T)        # bytes per complex
-    L = base
-    p = 1
-    @inbounds while L < n
-        cur = 4L
-        tw = layers[p]
-        GC.@preserve out tw begin
-            po = reinterpret(Ptr{T}, pointer(out))
-            pt = reinterpret(Ptr{T}, pointer(tw))
-            for blk in 0:cur:(n - 1)
-                j = 0
-                while j + W <= L
-                    o = blk + j
-                    a = vload(VT, po + o * es)
-                    b = _vcmul(vload(VT, po + (o + L) * es), vload(VT, pt + j * es))
-                    c = _vcmul(vload(VT, po + (o + 2L) * es), vload(VT, pt + (L + j) * es))
-                    d = _vcmul(vload(VT, po + (o + 3L) * es), vload(VT, pt + (2L + j) * es))
-                    t0 = a + c; t1 = a - c; t2 = b + d
-                    t3 = _vtwist(b - d, Val(S))
-                    vstore(t0 + t2, po + o * es)
-                    vstore(t1 + t3, po + (o + L) * es)
-                    vstore(t0 - t2, po + (o + 2L) * es)
-                    vstore(t1 - t3, po + (o + 3L) * es)
-                    j += W
-                end
-                while j < L          # scalar remainder (small early passes, L < W)
-                    o = blk + j
-                    a = out[o + 1]
-                    b = _cmul(out[o + L + 1], tw[j + 1])
-                    c = _cmul(out[o + 2L + 1], tw[L + j + 1])
-                    d = _cmul(out[o + 3L + 1], tw[2L + j + 1])
-                    t0 = a + c; t1 = a - c; t2 = b + d
-                    t3 = _twist(b - d, Val(S))
-                    out[o + 1] = t0 + t2; out[o + L + 1] = t1 + t3
-                    out[o + 2L + 1] = t0 - t2; out[o + 3L + 1] = t1 - t3
-                    j += 1
-                end
+    VT = Vec{2W, T}
+    es = 2 * sizeof(T)
+    cur = 4L
+    GC.@preserve tw begin
+        pt = reinterpret(Ptr{T}, pointer(tw))
+        @inbounds for blk in 0:cur:(n - 1)
+            j = 0
+            while j + W <= L
+                o = blk + j
+                a = vload(VT, po + o * es)
+                b = _vcmul(vload(VT, po + (o + L) * es), vload(VT, pt + j * es))
+                c = _vcmul(vload(VT, po + (o + 2L) * es), vload(VT, pt + (L + j) * es))
+                d = _vcmul(vload(VT, po + (o + 3L) * es), vload(VT, pt + (2L + j) * es))
+                t0 = a + c; t1 = a - c; t2 = b + d
+                t3 = _vtwist(b - d, Val(S))
+                vstore(t0 + t2, po + o * es)
+                vstore(t1 + t3, po + (o + L) * es)
+                vstore(t0 - t2, po + (o + 2L) * es)
+                vstore(t1 - t3, po + (o + 3L) * es)
+                j += W
+            end
+            while j < L
+                o = blk + j
+                a = out[o + 1]
+                b = _cmul(out[o + L + 1], tw[j + 1])
+                c = _cmul(out[o + 2L + 1], tw[L + j + 1])
+                d = _cmul(out[o + 3L + 1], tw[2L + j + 1])
+                t0 = a + c; t1 = a - c; t2 = b + d
+                t3 = _twist(b - d, Val(S))
+                out[o + 1] = t0 + t2; out[o + L + 1] = t1 + t3
+                out[o + 2L + 1] = t0 - t2; out[o + 3L + 1] = t1 - t3
+                j += 1
             end
         end
-        L = cur
-        p += 1
+    end
+    return
+end
+
+# fused radix-16 cross pass: does the stride-L AND stride-4L radix-4 passes in ONE read-modify-
+# write sweep (halves the bandwidth-bound full-array passes). Gathers the 16 elements at
+# blk + j + m·L (m=0:15), runs the two radix-4 levels keeping intermediates in registers, scatters
+# back. twA = layer for stride L (idx j @ cur=4L); twB = layer for stride 4L (idx j+qpos·L @ 16L).
+# Requires L ≥ W (vectorizes cleanly over j). Verified vs sequential two-pass.
+@inline function _radix16_pass_avx!(po::Ptr{T}, twA, twB, L::Int, n::Int, ::Val{S}) where {T, S}
+    W = _avx_width(T)
+    VT = Vec{2W, T}
+    es = 2 * sizeof(T)
+    blkstep = 16L
+    GC.@preserve twA twB begin
+        pa = reinterpret(Ptr{T}, pointer(twA))
+        pb = reinterpret(Ptr{T}, pointer(twB))
+        # pass-1 twiddles depend only on j (idx j, L+j, 2L+j); load per j.
+        @inbounds for blk in 0:blkstep:(n - 1)
+            j = 0
+            while j + W <= L
+                base = blk + j
+                wa1 = vload(VT, pa + j * es); wa2 = vload(VT, pa + (L + j) * es); wa3 = vload(VT, pa + (2L + j) * es)
+                # pass1 on the 4 quartets (m mod 4 = pos within quartet), gq = m÷4
+                # quartet gq elements at base + (4gq + s)·L, s=0:3
+                r0a = vload(VT, po + (base + 0L) * es)
+                r1a = _vcmul(vload(VT, po + (base + 1L) * es), wa1)
+                r2a = _vcmul(vload(VT, po + (base + 2L) * es), wa2)
+                r3a = _vcmul(vload(VT, po + (base + 3L) * es), wa3)
+                q00, q01, q02, q03 = _bf4(r0a, r1a, r2a, r3a, Val(S))
+                r0b = vload(VT, po + (base + 4L) * es)
+                r1b = _vcmul(vload(VT, po + (base + 5L) * es), wa1)
+                r2b = _vcmul(vload(VT, po + (base + 6L) * es), wa2)
+                r3b = _vcmul(vload(VT, po + (base + 7L) * es), wa3)
+                q10, q11, q12, q13 = _bf4(r0b, r1b, r2b, r3b, Val(S))
+                r0c = vload(VT, po + (base + 8L) * es)
+                r1c = _vcmul(vload(VT, po + (base + 9L) * es), wa1)
+                r2c = _vcmul(vload(VT, po + (base + 10L) * es), wa2)
+                r3c = _vcmul(vload(VT, po + (base + 11L) * es), wa3)
+                q20, q21, q22, q23 = _bf4(r0c, r1c, r2c, r3c, Val(S))
+                r0d = vload(VT, po + (base + 12L) * es)
+                r1d = _vcmul(vload(VT, po + (base + 13L) * es), wa1)
+                r2d = _vcmul(vload(VT, po + (base + 14L) * es), wa2)
+                r3d = _vcmul(vload(VT, po + (base + 15L) * es), wa3)
+                q30, q31, q32, q33 = _bf4(r0d, r1d, r2d, r3d, Val(S))
+                # pass2 across gq (0:3) for each qpos s, twiddle idx j2 = j + s·L
+                _r16p2!(po, pb, base, 0, j, L, es, q00, q10, q20, q30, VT, Val(S))
+                _r16p2!(po, pb, base, 1, j, L, es, q01, q11, q21, q31, VT, Val(S))
+                _r16p2!(po, pb, base, 2, j, L, es, q02, q12, q22, q32, VT, Val(S))
+                _r16p2!(po, pb, base, 3, j, L, es, q03, q13, q23, q33, VT, Val(S))
+                j += W
+            end
+        end
+    end
+    return
+end
+
+# pass-2 of the fused radix-16: butterfly across the 4 quartet-results for qpos s, scatter to
+# global offsets base + (s + 4·gq)·L for gq=0:3. j2 = j + s·L → twiddle idx into twB.
+@inline function _r16p2!(
+        po::Ptr{T}, pb::Ptr{T}, base::Int, s::Int, j::Int, L::Int, es::Int,
+        a, b0, c0, d0, ::Type{VT}, ::Val{S}
+    ) where {T, VT, S}
+    j2 = j + s * L
+    @inbounds begin
+        b = _vcmul(b0, vload(VT, pb + j2 * es))
+        c = _vcmul(c0, vload(VT, pb + (4L + j2) * es))
+        d = _vcmul(d0, vload(VT, pb + (8L + j2) * es))
+        y0, y1, y2, y3 = _bf4(a, b, c, d, Val(S))
+        vstore(y0, po + (base + (s + 0) * L) * es)
+        vstore(y1, po + (base + (s + 4) * L) * es)
+        vstore(y2, po + (base + (s + 8) * L) * es)
+        vstore(y3, po + (base + (s + 12) * L) * es)
+    end
+    return
+end
+
+# radix-4 butterfly on 4 vectors → 4 vectors (forward/inverse via twist sign).
+@inline function _bf4(a::VT, b::VT, c::VT, d::VT, ::Val{S}) where {VT, S}
+    t0 = a + c; t1 = a - c; t2 = b + d
+    t3 = _vtwist(b - d, Val(S))
+    return (t0 + t2, t1 + t3, t0 - t2, t1 - t3)
+end
+
+# fuse two passes (radix-16) only while the fused 16L-element block still has good locality
+# (16 strided streams within this many complex elements). Above it, single radix-4 wins on cache.
+const _R16_FUSE_MAX = 1 << 13   # complex elements; tuned on Zen5 (8192 best n≤16384 balance)
+
+function _radix4_cross_avx!(out::AbstractVector{Complex{T}}, base::Int, n::Int, layers, ::Val{S}) where {T, S}
+    W = _avx_width(T)
+    npass = length(layers)
+    GC.@preserve out begin
+        po = reinterpret(Ptr{T}, pointer(out))
+        L = base
+        p = 1
+        # fuse pairs of passes (radix-16) when L ≥ W, two passes remain, and the fused block is
+        # cache-local; else single radix-4. Halves the bandwidth-bound full-array sweeps.
+        while p <= npass
+            if p + 1 <= npass && L >= W && 16L <= _R16_FUSE_MAX
+                _radix16_pass_avx!(po, layers[p], layers[p + 1], L, n, Val(S))
+                L *= 16
+                p += 2
+            else
+                _radix4_pass_avx!(po, layers[p], L, n, out, Val(S))
+                L *= 4
+                p += 1
+            end
+        end
     end
     return
 end
