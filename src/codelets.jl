@@ -75,6 +75,141 @@ generated at compile time. `S = -1` forward, `+1` inverse.
     return Expr(:block, stmts...)
 end
 
+# --- dynamic mixed-radix codelet (any size) -------------------------------------------------
+# `_codelet!`/`_gen_dft!` above are radix-2 (power-of-two only). `_gen_dft_mixed!` generalizes the
+# straight-line generation to ANY length via Cooley-Tukey on the smallest prime factor: split
+# R = p·m, recurse to p DFT-m's over the stride-p subsequences, then combine with baked W_R^{ak}
+# twiddle literals. A prime leaf (p == R) is a direct R-point DFT. This is the genfft idea at
+# Julia compile time — PureFFT can synthesize a tailored unrolled kernel for any size at plan time,
+# covering cases (odd primes, prime powers) where RustFFT/FFTW fall back to generic mixed-radix.
+
+# smallest prime factor of R (R ≥ 2)
+function _smallest_prime_factor(R::Int)
+    R % 2 == 0 && return 2
+    p = 3
+    while p * p <= R
+        R % p == 0 && return p
+        p += 2
+    end
+    return R
+end
+
+# emit `acc = sum of terms` as a left-folded chain of `+`; returns the accumulator symbol.
+function _emit_sum!(stmts::Vector{Any}, terms::Vector, ctr)
+    acc = terms[1]
+    for t in @view terms[2:end]
+        s = Symbol("v", ctr[]); ctr[] += 1
+        push!(stmts, :($s = $acc + $t))
+        acc = s
+    end
+    return acc
+end
+
+# Straight-line mixed-radix DFT of input symbols `ins` (length R) → R output symbols. `s` is the
+# sign (-1 forward, +1 inverse); twiddles are compile-time `Complex{T}` literals.
+function _gen_dft_mixed!(stmts::Vector{Any}, ins::Vector, R::Int, s, ::Type{T}, ctr) where {T}
+    R == 1 && return ins
+    p = _smallest_prime_factor(R)
+    # twiddle literal W_R^{e} = exp(s·2πi·e/R); reduce exponent mod R for accuracy.
+    twiddle(e) = Complex{T}(cispi(s * 2 * mod(e, R) / R))
+    # multiply symbol `g` by literal `w`, eliding trivial ±1 / ±i.
+    function mul_lit(g, w)
+        isone(w) && return g
+        t = Symbol("v", ctr[]); ctr[] += 1
+        push!(stmts, :($t = _cmul($g, $w)))
+        return t
+    end
+
+    if p == R                                   # prime leaf: direct DFT
+        outs = Vector{Any}(undef, R)
+        for k in 0:(R - 1)
+            terms = Any[mul_lit(ins[j + 1], twiddle(j * k)) for j in 0:(R - 1)]
+            outs[k + 1] = _emit_sum!(stmts, terms, ctr)
+        end
+        return outs
+    end
+
+    m = R ÷ p
+    subs = Vector{Vector{Any}}(undef, p)        # p DFT-m's over stride-p subsequences
+    for a in 0:(p - 1)
+        sub = Any[ins[a + p * j + 1] for j in 0:(m - 1)]
+        subs[a + 1] = _gen_dft_mixed!(stmts, sub, m, s, T, ctr)
+    end
+    outs = Vector{Any}(undef, R)                # combine: X[k] = Σ_a W_R^{ak} G_a[k mod m]
+    for k in 0:(R - 1)
+        r = k % m
+        terms = Any[mul_lit(subs[a + 1][r + 1], twiddle(a * k)) for a in 0:(p - 1)]
+        outs[k + 1] = _emit_sum!(stmts, terms, ctr)
+    end
+    return outs
+end
+
+"""
+    _dft_codelet!(out, oo, x, off, str, Val(R), Val(S))
+
+Straight-line size-`R` DFT (any `R`) of `x[off+1 :: str]` into `out[oo+1:oo+R]`, generated at
+compile time by mixed-radix Cooley-Tukey. `S = -1` forward, `+1` inverse. In-place safe (all
+inputs are read into locals before any output is written).
+"""
+@generated function _dft_codelet!(out, oo, x, off, str, ::Val{R}, ::Val{S}) where {R, S}
+    T = real(eltype(x))
+    stmts = Any[]
+    ins = Vector{Any}(undef, R)
+    for j in 0:(R - 1)
+        sym = Symbol("a", j)
+        ins[j + 1] = sym
+        push!(stmts, :(@inbounds $sym = x[off + $j * str + 1]))
+    end
+    ctr = Ref(0)
+    outs = _gen_dft_mixed!(stmts, ins, R, S, T, ctr)
+    for k in 0:(R - 1)
+        push!(stmts, :(@inbounds out[oo + $(k + 1)] = $(outs[k + 1])))
+    end
+    push!(stmts, :(return nothing))
+    return Expr(:block, stmts...)
+end
+
+# largest prime factor of `n` (n ≥ 1)
+function _max_prime_factor(n::Int)
+    n <= 1 && return 1
+    m = 1
+    f = 2
+    k = n
+    while f * f <= k
+        while k % f == 0
+            m = max(m, f)
+            k ÷= f
+        end
+        f += 1
+    end
+    return max(m, k)
+end
+
+"""
+    CodeletPlan{T,N} <: AbstractFFTPlan{T}
+
+Runs the dynamically-generated mixed-radix codelet [`_dft_codelet!`](@ref) for size `N`. The size
+is a type parameter so the `@generated` codelet specializes and the hot path stays dispatch-free.
+Best for small sizes whose largest prime factor is small (smooth / prime-power); `autoplan` routes
+non-power-of-two sizes here when they qualify, else to Bluestein.
+"""
+struct CodeletPlan{T, N} <: AbstractFFTPlan{T}
+    inverse::Bool
+end
+CodeletPlan(::Type{Complex{T}}, n::Integer; inverse::Bool = false) where {T} =
+    CodeletPlan{T, Int(n)}(inverse)
+
+plan_length(::CodeletPlan{T, N}) where {T, N} = N::Int
+plan_inverse(p::CodeletPlan)::Bool = p.inverse
+function apply_unnormalized!(p::CodeletPlan{T, N}, x::AbstractVector) where {T, N}
+    if p.inverse
+        _dft_codelet!(x, 0, x, 0, 1, Val(N), Val(1))
+    else
+        _dft_codelet!(x, 0, x, 0, 1, Val(N), Val(-1))
+    end
+    return x
+end
+
 # --- split-layout (SoA) variant -------------------------------------------------------------
 # Same builder, but each value is a (real, imag) symbol pair; twiddle real/imag parts are baked
 # literals and the complex multiply is two `muladd`s → pure-real straight-line code, no shuffles.

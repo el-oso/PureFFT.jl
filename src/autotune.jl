@@ -30,22 +30,25 @@ function _besttime(c::AbstractFFTPlan{T}, y::AbstractVector{Complex{T}}) where {
     return best
 end
 
-# Largest prime factor for which `mixedradix`'s direct r-point DFT still beats Bluestein's
-# three-FFT overhead. Above it, the O(r·n) direct DFT loses to O(n log n) chirp-Z.
-const BLUESTEIN_MAX_SMALL_PRIME = 7
+# Non-power-of-two routing. A dynamically-generated mixed-radix codelet wins for small "smooth"
+# sizes (largest prime factor ≤ CODELET_MAX_PRIME) up to CODELET_MAX_N, where its straight-line
+# code stays compact and beats Bluestein's three-FFT overhead. Above that, or for a large prime
+# factor (whose O(p²) codelet leaf is expensive), Bluestein's O(n log n) chirp-Z wins.
+const CODELET_MAX_PRIME = 5
+const CODELET_MAX_N = 128
 
 """
     autoplan(Complex{T}, n; inverse=false) -> AbstractFFTPlan
 
-Pick the fastest available kernel for length `n` by timing candidates. Power-of-two times
-`:recursive` against the four-step (for `n ≥ 256`). Non-power-of-two uses mixed-radix when it
-factors into small primes (≤ $BLUESTEIN_MAX_SMALL_PRIME), else Bluestein (chirp-Z) to avoid the
-O(n²) direct-DFT cliff on a large prime factor.
+Pick the fastest available kernel for length `n`. Power-of-two times `:recursive` against the
+four-step (for `n ≥ 256`). Non-power-of-two uses a generated mixed-radix [`CodeletPlan`] for small
+smooth sizes (largest prime ≤ $CODELET_MAX_PRIME, n ≤ $CODELET_MAX_N), else Bluestein (chirp-Z) —
+both far faster than the allocating recursive mixed-radix.
 """
 function autoplan(::Type{Complex{T}}, n::Integer; inverse::Bool = false) where {T}
     if !ispow2(n)
-        if maximum(factorize(n)) <= BLUESTEIN_MAX_SMALL_PRIME
-            return plan_pfft(Complex{T}, n; inverse, variant = :mixedradix)
+        if n <= CODELET_MAX_N && _max_prime_factor(Int(n)) <= CODELET_MAX_PRIME
+            return CodeletPlan(Complex{T}, n; inverse)
         end
         return BluesteinPlan(Complex{T}, n; inverse)
     end
