@@ -57,7 +57,8 @@ All variants match FFTW to machine precision (relative error ≤ 5e-16); the ReT
 | `:radix4` | 27–28 | Port of rustfft's Radix4 |
 | `:radix4avx` | **40–48** | Radix4 + AVX Butterfly16/32, radix-16 fusion, small-n register kernels |
 | `:bluestein` | non-pow2 | chirp-Z, O(n log n) on primes |
-| `:codelet` | non-pow2 | dynamically-generated mixed-radix kernel |
+| `:codelet` | non-pow2 | dynamically-generated mixed-radix kernel (small smooth) |
+| four-step (via `:fast`) | **12–20** | batched SoA codelets, smooth composite non-pow2 |
 | `:fast` | **best-of** | Autotuner picks fastest per size (pow2 + non-pow2) |
 
 Reference: FFTW/rustfft ≈ 35–46 GFLOP/s on the same hardware.

@@ -30,17 +30,18 @@ the earlier gap (pure Julia was once ~0.55× of FFTW — see git history / REPOR
 
 ## Non-power-of-two
 
-No cliff: a large prime factor no longer falls to an O(n²) direct DFT. PureFFT routes small smooth
-sizes to a dynamically-generated mixed-radix codelet (Stage 9) and everything else to Bluestein
-chirp-Z (Stage 8, O(n log n)).
+No cliff: a large prime factor no longer falls to an O(n²) direct DFT. PureFFT's `:fast` routes by
+size/factorization: small smooth → dynamically-generated mixed-radix codelet (Stage 9); larger
+smooth composite → SIMD four-step with batched codelets (Stage 10); large prime → Bluestein chirp-Z
+(Stage 8, O(n log n)).
 
 ![GFLOP/s on non-power-of-two sizes](assets/comparison_nonpow2.png)
 
 | regime | example n | PureFFT | note |
 |---|---:|---:|---|
-| smooth, small (codelet) | 27 | **12.8** | beats FFTW (10.7); was ~0.2 via old mixed-radix |
-| smooth, small (codelet) | 48 / 96 | 13 / 8 | 20–60× over the old path |
-| large prime / prime power (Bluestein) | 181 / 5793 | ~5 | O(n log n), no cliff |
+| smooth, small — codelet | 27 / 48 | **12.8** / 13 | beats FFTW (10.7); was ~0.2 via old mixed-radix |
+| smooth composite — four-step | 900 / 1000 | **20 / 19** | 2–4× Bluestein, ~50% of FFTW (Stage 10) |
+| large prime / prime power — Bluestein | 181 / 5793 | ~5 | O(n log n), no cliff |
 
 ## All variant progression
 
@@ -54,7 +55,8 @@ chirp-Z (Stage 8, O(n log n)).
 | `:radix4` | 27–28 | Port of rustfft Radix4 + cache-blocked transpose |
 | `:radix4avx` / `:fast` (pow2) | **40–48** | + AVX Butterfly16/32, radix-16 fusion, small-n register kernels, vectorized transpose |
 | `:bluestein` | non-pow2 | chirp-Z, O(n log n) on primes |
-| `:codelet` | non-pow2 | dynamically-generated mixed-radix kernel |
+| `:codelet` | non-pow2 | dynamically-generated mixed-radix kernel (small smooth) |
+| four-step (via `:fast`) | **12–20** | batched SoA codelets, smooth composite non-pow2 |
 | FFTW-MEASURE | 35–48 | Reference |
 | rustfft-AVX | 34–46 | Reference |
 

@@ -58,6 +58,13 @@ Hot path: allocation-free, `TRIM_SAFE` (juliac / TrimCheck.jl `@validate`), disp
   Cooley-Tukey on the smallest prime factor, baked twiddle literals) for *any* size.  `autoplan`
   routes small smooth non-pow2 sizes here; this fixed a real bug (smooth non-pow2 was ~0.2 GF/s via
   the allocating recursive mixed-radix → now 4–13 GF/s, e.g. n=27: 12.8, beating FFTW's 10.7).
+- **SIMD mixed-radix four-step executor (Stage 10) — the fast non-pow2 path.** Larger smooth
+  composite sizes route to `FourStepCodeletPlan`: `n = N1·N2`, pass1 (size-N1 DFTs batched over N2)
+  → W_n twiddle → transpose → pass2 (size-N2 batched over N1) → natural order. Each pass is a
+  **batched SoA codelet** — a size-R DFT over `width` independent transforms in split (re/im) layout,
+  vectorized over the batch (`Vec{W}`, shuffle-free → pure FMA). This is FFTW's vectorized
+  vector-rank / rustfft's MixedRadix-of-butterflies, but with codelets generated per factor. Result:
+  **12–20 GF/s on smooth non-pow2 (2–4× Bluestein, ~50 % of FFTW)**, e.g. n=1000: 19, n=900: 20.
 - **AbstractFFTs.jl plan interface** — `plan_fft`/`plan_bfft`/`mul!`/`\`/`inv`/`ifft` route through
   PureFFT, so it plugs into the Julia FFT ecosystem like FFTW.jl.
 - **CPU-generic tuning** — cache-blocking constants are derived from real L1/L2 sizes via CPUSummary
@@ -75,8 +82,9 @@ Hot path: allocation-free, `TRIM_SAFE` (juliac / TrimCheck.jl `@validate`), disp
 | 7 | `:fourstep` | cache-blocked four-step |
 | — | `:radix4avx` | explicit-AVX Radix4 + radix-16 fusion + small-n register kernels (the `:fast` pow2 winner) |
 | 8 | `:bluestein` | chirp-Z for arbitrary N (O(n log n) on primes) |
-| 9 | `:codelet` | dynamically-generated mixed-radix straight-line kernel |
-| — | `:fast` | autotuner: pow2 → times radix4avx/recursive/fourstep; non-pow2 → codelet (small smooth) or Bluestein |
+| 9 | `:codelet` | dynamically-generated mixed-radix straight-line kernel (small smooth N) |
+| 10 | — (via `:fast`) | four-step + batched SoA codelets (`FourStepCodeletPlan`, smooth composite N) |
+| — | `:fast` | autotuner: pow2 → times radix4avx/recursive/fourstep; non-pow2 → codelet (small smooth) / four-step (smooth composite) / Bluestein (large prime) |
 
 All variants match FFTW to machine precision (relerr ≤ 5e-16). Tests run via ReTestItems with a
 relative perf-regression guard against FFTW.
@@ -105,5 +113,8 @@ relative perf-regression guard against FFTW.
 
 - The **n=512/2048 base-32 codelet** (shuffle-bound) — would need a genuinely shuffle-lighter size-32
   decomposition, not split-radix.
-- **Generated SIMD codelets** — the Stage-9 codelet is scalar (spills for larger n, hence the n≤128
-  routing cap); a vectorized generator + per-size decomposition autotuning would extend its reach.
+- **Non-pow2 large primes** still use Bluestein (~5 GF/s); only composite smooth sizes get the
+  faster four-step. Rader's algorithm (prime → convolution) could lift the prime case further.
+- **Per-size decomposition autotuning** for the four-step — the `N1·N2` split is currently a
+  heuristic (balanced, factors ∈ [8,64]); timing candidate splits at plan time (FFTW's `MEASURE`
+  edge) would squeeze more, as could recursing the four-step for very large smooth sizes.

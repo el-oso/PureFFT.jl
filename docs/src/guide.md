@@ -62,7 +62,7 @@ transforms.
 | `:radix4avx` | `:radix4` + explicit SIMD.jl AVX Butterfly16/32, radix-16 pass fusion, and register-resident fused kernels for n ≤ 128. The power-of-two `:fast` winner. |
 | `:bluestein` | Chirp-Z transform: any N as a power-of-two convolution, O(n log n) (no prime cliff). |
 | `:codelet` | Dynamically `@generated` mixed-radix straight-line kernel for any N (best for small smooth sizes). |
-| `:fast` | Autotuned: picks the fastest variant per size at runtime (power-of-two and non-power-of-two). Default. |
+| `:fast` | Autotuned, recommended. Power-of-two: times radix4avx/recursive/four-step. Non-power-of-two: small smooth → `:codelet`; smooth composite → a four-step with batched SoA codelets (`FourStepCodeletPlan`, ~12–20 GFLOP/s); large prime → `:bluestein`. |
 
 ## Examples
 
