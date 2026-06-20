@@ -44,19 +44,25 @@ const CODELET_MAX_N = 128
 const RADER_MIN_P = 128
 const RADER_MAX_PM1_PRIME = 3
 
-# All valid four-step splits n = n1·n2 (both factors smooth and in [FOURSTEP_MIN_FACTOR,
-# FOURSTEP_MAX_FACTOR]). The balanced one isn't always fastest (the batched codelet's efficiency
-# varies with R), so `autoplan` times them.
+# Valid four-step splits n = n1·n2: both factors smooth and in [FOURSTEP_MIN_FACTOR,
+# FOURSTEP_MAX_FACTOR], with max/min ≤ 4. The balanced one isn't always fastest (codelet efficiency
+# varies with R), so `autoplan` times them — but only the _FOURSPLIT_MAX_CANDIDATES most balanced,
+# to bound plan-time codelet compilation (each candidate may compile two @generated codelets).
+const _FOURSPLIT_MAX_RATIO = 4
+const _FOURSPLIT_MAX_CANDIDATES = 5
 function _foursplit_candidates(n::Int)
     cands = Tuple{Int, Int}[]
     for n1 in FOURSTEP_MIN_FACTOR:FOURSTEP_MAX_FACTOR
         n % n1 == 0 || continue
         n2 = n ÷ n1
         (FOURSTEP_MIN_FACTOR <= n2 <= FOURSTEP_MAX_FACTOR &&
+            max(n1, n2) <= _FOURSPLIT_MAX_RATIO * min(n1, n2) &&
             _max_prime_factor(n1) <= 7 && _max_prime_factor(n2) <= 7) || continue
         push!(cands, (n1, n2))
     end
-    return cands
+    # keep the most balanced few (smallest max/min) — bounds compile cost without losing the winner
+    sort!(cands; by = c -> max(c...) / min(c...))
+    return length(cands) > _FOURSPLIT_MAX_CANDIDATES ? cands[1:_FOURSPLIT_MAX_CANDIDATES] : cands
 end
 
 # Build a FourStepCodeletPlan for each candidate split, time it, and keep the fastest (FFTW
