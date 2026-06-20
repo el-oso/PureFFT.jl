@@ -50,7 +50,11 @@ function autoplan(::Type{Complex{T}}, n::Integer; inverse::Bool = false) where {
         if n <= CODELET_MAX_N && _max_prime_factor(Int(n)) <= CODELET_MAX_PRIME
             return CodeletPlan(Complex{T}, n; inverse)
         end
-        return BluesteinPlan(Complex{T}, n; inverse)
+        split = _foursplit(Int(n))     # smooth composite → four-step with batched codelets
+        if split !== nothing
+            return FourStepCodeletPlan(Complex{T}, split[1], split[2]; inverse)
+        end
+        return BluesteinPlan(Complex{T}, n; inverse)   # large prime factor → chirp-Z
     end
     # candidate kernels (all power-of-two); time each on a real buffer, keep the fastest.
     cands = AbstractFFTPlan{T}[
