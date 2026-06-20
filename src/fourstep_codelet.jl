@@ -11,7 +11,7 @@
 
 # Largest codelet size used as a four-step factor (bounds generated-code size) and the SIMD batch
 # width floor (the batched codelet needs width ≥ W).
-const FOURSTEP_MAX_FACTOR = 64
+const FOURSTEP_MAX_FACTOR = 128   # covers smooth n up to 128² = 16384
 const FOURSTEP_MIN_FACTOR = 8
 
 # Valid split bounds: each factor smooth (largest prime ≤ 7, so its codelet's prime leaf stays
