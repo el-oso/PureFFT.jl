@@ -10,33 +10,37 @@ Input: `Vector{ComplexF64}`, power-of-two sizes. FFTW at `MEASURE` flag. RustFFT
 
 Flop model: `5 · N · log2(N)` (standard radix-2 count).
 
-## PureFFT `:fast` vs rustfft (GFLOP/s)
+## PureFFT `:fast` vs FFTW and RustFFT (GFLOP/s, power-of-two)
 
-| n | PureFFT `:fast` | rustfft-scalar | rustfft-AVX | vs scalar | vs AVX |
-|---:|---:|---:|---:|---:|---:|
-| 1024   | 38 | 21 | 44 | **1.8×** | 0.86× |
-| 4096   | 40 | 19 | 48 | **2.1×** | 0.83× |
-| 16384  | 37 | 20 | 44 | **1.9×** | 0.83× |
-| 65536  | 37 | 19 | 35 | **1.9×** | **1.04×** |
-| 262144 | 28 | 17 | 30 | **1.6×** | 0.92× |
+| n | FFTW | RustFFT | **PureFFT `:fast`** | verdict |
+|---:|---:|---:|---:|---|
+| 128    | 32 | 34 | **41** | PureFFT fastest |
+| 256    | 39 | 41 | **44** | PureFFT fastest |
+| 512    | 45 | 46 | 42 | RustFFT ahead |
+| 1024   | 48 | 44 | **48** | parity |
+| 4096   | 46 | 45 | 44 | parity |
+| 16384  | 38 | 41 | **44** | PureFFT fastest |
+| 65536  | 35 | 36 | **39** | PureFFT fastest |
+| 262144 | 27 | 27 | 26 | parity (memory-bound) |
 
-PureFFT `:fast` is **within ~1.2× of rustfft-AVX** across all sizes and **faster at n=65536**.
-It is **~2× faster than rustfft-scalar** — the apples-to-apples comparison for the same algorithm.
+PureFFT `:fast` **matches or beats both FFTW and RustFFT across most of the range**. It trails only
+at n=64 (RustFFT's hand-tuned small butterfly) and n=512/2048 (a shuffle-bound size-32 base codelet).
+The small-n fused register kernels (n≤128), radix-16 pass fusion, and vectorized transpose closed
+the earlier gap (pure Julia was once ~0.55× of FFTW — see git history / REPORT.md).
 
-## PureFFT `:fast` vs FFTW (GFLOP/s, earlier measurements)
+## Non-power-of-two
 
-These measurements are from the `:fast` variant before the AVX Butterfly16/32 codelets were added
-(the radix-2 four-step path):
+No cliff: a large prime factor no longer falls to an O(n²) direct DFT. PureFFT routes small smooth
+sizes to a dynamically-generated mixed-radix codelet (Stage 9) and everything else to Bluestein
+chirp-Z (Stage 8, O(n log n)).
 
-| n | FFTW-MEASURE | RustFFT | PureFFT `:fast` | ratio |
-|---:|---:|---:|---:|---:|
-| 1024   | 44 | 44 | 24 | 0.55× |
-| 4096   | 45 | 44 | 22 | 0.49× |
-| 16384  | 41 | 41 | 22 | 0.54× |
-| 65536  | 36 | 36 | 21 | 0.58× |
-| 262144 | 26 | 27 | 16 | 0.60× |
+![GFLOP/s on non-power-of-two sizes](assets/comparison_nonpow2.png)
 
-The current `:fast` (with AVX Butterfly codelets, table above) substantially improves these.
+| regime | example n | PureFFT | note |
+|---|---:|---:|---|
+| smooth, small (codelet) | 27 | **12.8** | beats FFTW (10.7); was ~0.2 via old mixed-radix |
+| smooth, small (codelet) | 48 / 96 | 13 / 8 | 20–60× over the old path |
+| large prime / prime power (Bluestein) | 181 / 5793 | ~5 | O(n log n), no cliff |
 
 ## All variant progression
 
@@ -48,9 +52,11 @@ The current `:fast` (with AVX Butterfly codelets, table above) substantially imp
 | `:soa` | 13–21 | Split re/im (negative — split/merge overhead) |
 | `:fourstep` | 16–22 | Cache-blocked four-step |
 | `:radix4` | 27–28 | Port of rustfft Radix4 + cache-blocked transpose |
-| `:radix4avx` / `:fast` | **35–40** | + explicit SIMD.jl Butterfly16/32 |
-| FFTW-MEASURE | 35–46 | Reference |
-| rustfft-AVX | 35–51 | Reference |
+| `:radix4avx` / `:fast` (pow2) | **40–48** | + AVX Butterfly16/32, radix-16 fusion, small-n register kernels, vectorized transpose |
+| `:bluestein` | non-pow2 | chirp-Z, O(n log n) on primes |
+| `:codelet` | non-pow2 | dynamically-generated mixed-radix kernel |
+| FFTW-MEASURE | 35–48 | Reference |
+| rustfft-AVX | 34–46 | Reference |
 
 ## Controlled Julia vs Rust (same algorithm)
 
@@ -71,8 +77,8 @@ and Rust (same layout, same twiddle indexing, same `muladd`/`mul_add` FMA, same 
 **Conclusion: same algorithm ⇒ same speed. The language is not the lever.**
 
 The earlier "PureFFT is 2× slower than rustfft" result was about algorithm choice, not language.
-Once we ported the same algorithm (rustfft's `Radix4`) to Julia and added AVX codelets, the gap
-vanished.
+Once we ported the same algorithm (rustfft's `Radix4`) to Julia, added AVX codelets, fused passes,
+and added register-resident small-n kernels, PureFFT reached parity and now leads at most sizes.
 
 ## Methodology
 

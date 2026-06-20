@@ -59,8 +59,10 @@ transforms.
 | `:soa` | Split-of-array: separate `re`/`im` arrays, shuffle-free combine. |
 | `:fourstep` | Cache-blocked four-step algorithm: best for medium/large N. |
 | `:radix4` | Port of rustfft's `Radix4`: bit-reversed transpose + log₄ Butterfly4 cross-passes. |
-| `:radix4avx` | `:radix4` + explicit SIMD.jl AVX Butterfly4 cross-pass + AVX base codelets. |
-| `:fast` | Autotuned: picks the fastest variant for each size at runtime. Default. |
+| `:radix4avx` | `:radix4` + explicit SIMD.jl AVX Butterfly16/32, radix-16 pass fusion, and register-resident fused kernels for n ≤ 128. The power-of-two `:fast` winner. |
+| `:bluestein` | Chirp-Z transform: any N as a power-of-two convolution, O(n log n) (no prime cliff). |
+| `:codelet` | Dynamically `@generated` mixed-radix straight-line kernel for any N (best for small smooth sizes). |
+| `:fast` | Autotuned: picks the fastest variant per size at runtime (power-of-two and non-power-of-two). Default. |
 
 ## Examples
 
