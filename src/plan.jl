@@ -40,6 +40,7 @@ Build a plan for length-`n` complex transforms. `variant` selects the kernel:
   * `:soa`        — Stage 5 split-layout (SoA) recursive FFT (power of two); see [`SoAPlan`](@ref).
   * `:radix4`     — faithful port of rustfft's Radix4 (power of two); see [`Radix4Plan`](@ref).
   * `:fourstep`   — Stage 7 cache-blocked four-step (power of two, n ≥ 16); see [`FourStepPlan`](@ref).
+  * `:bluestein`  — Stage 8 chirp-Z for arbitrary `n` (O(n log n) on primes); see [`BluesteinPlan`](@ref).
   * `:fast`       — autotuned: builds candidate plans, times them, keeps the fastest.
 """
 function plan_pfft(
@@ -57,6 +58,8 @@ function plan_pfft(
         return Radix4AvxPlan(Complex{T}, n; inverse)
     elseif variant === :fourstep
         return FourStepPlan(Complex{T}, n; inverse)
+    elseif variant === :bluestein
+        return BluesteinPlan(Complex{T}, n; inverse)
     elseif variant === :fast
         return autoplan(Complex{T}, n; inverse)
     elseif variant === :scalar
@@ -123,6 +126,12 @@ Apply `plan` to `x` in place. Direction (forward/inverse) is fixed by the plan. 
 type satisfying the [`AbstractFFTPlan`](@ref) contract — even one that does not subtype it —
 selected by TypeContracts' `interface_trait` Holy-Trait dispatch (hasmethod-based, juliac-safe).
 """
+# Fast path: a plan that actually subtypes AbstractFFTPlan needs no trait check — dispatch
+# straight to the runner (saves the ~10 ns runtime `interface_trait` call, which does not fold;
+# it dominates at very small n). The generic method below keeps the duck-typed path for plans
+# that satisfy the contract without subtyping it.
+pfft!(x::AbstractVector{<:Complex}, p::AbstractFFTPlan) = _pfft_run!(x, p)
+
 pfft!(x::AbstractVector{<:Complex}, p) =
     _pfft_dispatch!(interface_trait(AbstractFFTPlan, typeof(p)), x, p)
 
@@ -166,3 +175,5 @@ end
 @verify Radix4SoAPlan{Float32}
 @verify Radix4AvxPlan{Float64}
 @verify Radix4AvxPlan{Float32}
+@verify BluesteinPlan{Float64}
+@verify BluesteinPlan{Float32}

@@ -30,15 +30,24 @@ function _besttime(c::AbstractFFTPlan{T}, y::AbstractVector{Complex{T}}) where {
     return best
 end
 
+# Largest prime factor for which `mixedradix`'s direct r-point DFT still beats Bluestein's
+# three-FFT overhead. Above it, the O(r·n) direct DFT loses to O(n log n) chirp-Z.
+const BLUESTEIN_MAX_SMALL_PRIME = 7
+
 """
     autoplan(Complex{T}, n; inverse=false) -> AbstractFFTPlan
 
-Pick the fastest available kernel for length `n` by timing candidates. Non-power-of-two falls
-back to mixed-radix; power-of-two times `:recursive` against the four-step (for `n ≥ 256`).
+Pick the fastest available kernel for length `n` by timing candidates. Power-of-two times
+`:recursive` against the four-step (for `n ≥ 256`). Non-power-of-two uses mixed-radix when it
+factors into small primes (≤ $BLUESTEIN_MAX_SMALL_PRIME), else Bluestein (chirp-Z) to avoid the
+O(n²) direct-DFT cliff on a large prime factor.
 """
 function autoplan(::Type{Complex{T}}, n::Integer; inverse::Bool = false) where {T}
     if !ispow2(n)
-        return plan_pfft(Complex{T}, n; inverse, variant = :mixedradix)
+        if maximum(factorize(n)) <= BLUESTEIN_MAX_SMALL_PRIME
+            return plan_pfft(Complex{T}, n; inverse, variant = :mixedradix)
+        end
+        return BluesteinPlan(Complex{T}, n; inverse)
     end
     # candidate kernels (all power-of-two); time each on a real buffer, keep the fastest.
     cands = AbstractFFTPlan{T}[

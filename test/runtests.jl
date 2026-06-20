@@ -130,6 +130,18 @@ end
     end
 end
 
+@testset "PureFFT Stage 8: Bluestein (chirp-Z, arbitrary n)" begin
+    # Primes, prime powers, and large-prime-factor composites — the sizes mixed-radix would
+    # handle with an O(n²) direct DFT. Includes a power of two (M-path edge case).
+    @testset "vs FFTW ($T, n=$n)" for T in (Float64, Float32),
+            n in (2, 3, 5, 7, 11, 13, 17, 64, 91, 100, 181, 256, 362, 1000, 5793)
+
+        x = randn(Complex{T}, n)
+        @test relerr(pfft(x; variant = :bluestein), fft(x)) < tol(T)
+        @test relerr(ipfft(pfft(x; variant = :bluestein); variant = :bluestein), x) < tol(T)
+    end
+end
+
 # a plan that satisfies the AbstractFFTPlan contract WITHOUT subtyping it (duck-typed)
 struct DuckPlan
     inner::Any
@@ -157,7 +169,9 @@ end
 
 @testset "PureFFT autotuned :fast" begin
     @testset "vs FFTW ($T, n=$n)" for T in (Float64,),
-            n in (8, 64, 256, 1024, 4096, 65536, 96)   # incl. non-power-of-two 96
+            n in (8, 64, 256, 1024, 4096, 65536,   # power of two
+                96,                                 # smooth non-pow2 → mixed-radix
+                181, 5793, 11585)                   # large-prime-factor → Bluestein
 
         x = randn(Complex{T}, n)
         @test relerr(pfft(x; variant = :fast), fft(x)) < tol(T)
