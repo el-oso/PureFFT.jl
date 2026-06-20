@@ -37,6 +37,12 @@ end
 const CODELET_MAX_PRIME = 5
 const CODELET_MAX_N = 128
 
+# Rader's algorithm wins for primes with a smooth p-1 (its length-(p-1) convolution beats
+# Bluestein's larger power-of-two M). Gate: p ≥ RADER_MIN_P (amortize the permutation overhead)
+# and largest prime factor of p-1 ≤ RADER_MAX_PM1_PRIME (so the inner FFT is fast). Else Bluestein.
+const RADER_MIN_P = 128
+const RADER_MAX_PM1_PRIME = 5
+
 """
     autoplan(Complex{T}, n; inverse=false) -> AbstractFFTPlan
 
@@ -47,10 +53,15 @@ both far faster than the allocating recursive mixed-radix.
 """
 function autoplan(::Type{Complex{T}}, n::Integer; inverse::Bool = false) where {T}
     if !ispow2(n)
-        if n <= CODELET_MAX_N && _max_prime_factor(Int(n)) <= CODELET_MAX_PRIME
+        ni = Int(n)
+        if ni <= CODELET_MAX_N && _max_prime_factor(ni) <= CODELET_MAX_PRIME
             return CodeletPlan(Complex{T}, n; inverse)
         end
-        split = _foursplit(Int(n))     # smooth composite → four-step with batched codelets
+        # prime with smooth p-1 → Rader (length-(p-1) convolution beats Bluestein's larger pow2 M)
+        if ni >= RADER_MIN_P && _max_prime_factor(ni) == ni && _max_prime_factor(ni - 1) <= RADER_MAX_PM1_PRIME
+            return RaderPlan(Complex{T}, ni; inverse)
+        end
+        split = _foursplit(ni)         # smooth composite → four-step with batched codelets
         if split !== nothing
             return FourStepCodeletPlan(Complex{T}, split[1], split[2]; inverse)
         end

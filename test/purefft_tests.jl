@@ -186,6 +186,28 @@ end
     end
 end
 
+@testitem "Stage 11: Rader's algorithm (prime sizes)" setup = [FFTUtil] begin
+    using FFTW
+    # primes with smooth p-1 (route here via :fast) and direct :rader checks incl. a hard p-1
+    @testset "vs FFTW ($T, n=$n)" for T in (Float64, Float32),
+            n in (193, 257, 769, 1153, 389, 1009)
+
+        x = randn(Complex{T}, n)
+        @test relerr(pfft(x; variant = :rader), fft(x)) < tol(T)
+        pf = plan_pfft(x; variant = :rader); y = copy(x); pfft!(y, pf)
+        pii = plan_pfft(Complex{T}, n; variant = :rader, inverse = true); pfft!(y, pii)
+        @test relerr(y, x) < tol(T)
+    end
+
+    @testset ":fast routes smooth-p-1 primes → RaderPlan" begin
+        for n in (193, 257, 769, 1153)            # p-1 = 2^a·3^b, p ≥ 128
+            @test plan_pfft(ComplexF64, n; variant = :fast) isa PureFFT.RaderPlan
+        end
+        @test plan_pfft(ComplexF64, 1009; variant = :fast) isa PureFFT.BluesteinPlan  # p-1 has factor 7
+        @test plan_pfft(ComplexF64, 97; variant = :fast) isa PureFFT.BluesteinPlan     # p < 128
+    end
+end
+
 @testitem "JET optimization check (hot path is dispatch-free)" begin
     using JET
     for v in (:radix4avx, :radix4, :recursive, :soa, :fourstep)
