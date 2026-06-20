@@ -131,12 +131,63 @@ function _base32_avx!(dst, src, width::Int, k::Int, ::Val{S}) where {S}
     return
 end
 
-# NOTE (negative result, kept for the record): a size-64 within-register codelet (base 64 =
-# radix-4 of 16: 4-way stride-4 deinterleave → 4×DFT-16 → Butterfly4 combine) was implemented to
-# trade one cross pass for a bigger base. It REGRESSED ~40→33 GFLOP/s: the base pass roughly
-# doubled (16 live registers spill + 32 deinterleave shuffles per leaf) while the cross pass it
-# removed is the *cheapest* small-stride one. Reverted. The size-32 codelet is likewise slower
-# than base-16, so base-16 (even n) / base-32 (odd n) remain the sweet spot.
+# NOTE: a size-64 within-register decomposition LOSES as a *base codelet* for large n (tried,
+# regressed ~40→33 GF/s: it doubles the base pass — register spill + extra deinterleave shuffles —
+# to remove the cheapest small-stride cross pass). But the *same* decomposition WINS as a
+# *standalone whole-transform* kernel for n == 64 (`_fft64_avx!` below), because there it removes
+# the entire scratch transpose — a ~70 ns fixed cost that dominates at small n (≈70 % of runtime
+# at n=64). Different trade in each context; base-16/32 stay the sweet spot for the staged path.
+
+# size-64 twiddle register: lanes hold c = 4g+l (l=0:3), value W64^{w·c} (a compile-time literal).
+@inline _tw64(W, w, g) = Vec{8, Float64}((
+    real(W^(w * (4g))), imag(W^(w * (4g))),
+    real(W^(w * (4g + 1))), imag(W^(w * (4g + 1))),
+    real(W^(w * (4g + 2))), imag(W^(w * (4g + 2))),
+    real(W^(w * (4g + 3))), imag(W^(w * (4g + 3))),
+))
+
+# Standalone in-register size-64 FFT (Float64): n = 4×16 four-step done entirely in AVX registers.
+# Load 64 complex contiguously → 4× register-transpose to gather the four stride-4 subsequences →
+# 4× DFT-16 (+ W64 twiddles) → radix-4 (DFT-4) combine across the four → contiguous store. No
+# scratch, no strided memory: ~38 GF/s vs ~19 for the general transpose path (beats FFTW's ~32).
+function _fft64_avx!(x::AbstractVector{Complex{Float64}}, ::Val{S}) where {S}
+    W16 = S == -1 ? cispi(-2.0 / 16) : cispi(2.0 / 16)
+    tw1 = _tw16(W16, 1); tw2 = _tw16(W16, 2); tw3 = _tw16(W16, 3)
+    W64 = S == -1 ? cispi(-2.0 / 64) : cispi(2.0 / 64)
+    GC.@preserve x begin
+        p = reinterpret(Ptr{Float64}, pointer(x))
+        @inbounds begin
+            ld(i) = vload(Vec{8, Float64}, p + i * 64)
+            r0 = ld(0); r1 = ld(1); r2 = ld(2); r3 = ld(3)
+            r4 = ld(4); r5 = ld(5); r6 = ld(6); r7 = ld(7)
+            r8 = ld(8); r9 = ld(9); r10 = ld(10); r11 = ld(11)
+            r12 = ld(12); r13 = ld(13); r14 = ld(14); r15 = ld(15)
+            # gather stride-4 subsequences: block w spans registers (u_w, v_w, w_w, q_w)
+            u0, u1, u2, u3 = _transpose4(r0, r1, r2, r3)
+            v0, v1, v2, v3 = _transpose4(r4, r5, r6, r7)
+            x0, x1, x2, x3 = _transpose4(r8, r9, r10, r11)
+            q0, q1, q2, q3 = _transpose4(r12, r13, r14, r15)
+            # DFT-16 of each block, then twiddle output group g by W64^{w·c}
+            s00, s01, s02, s03 = _dft16_regs(u0, v0, x0, q0, tw1, tw2, tw3, Val(S))
+            s10, s11, s12, s13 = _dft16_regs(u1, v1, x1, q1, tw1, tw2, tw3, Val(S))
+            s20, s21, s22, s23 = _dft16_regs(u2, v2, x2, q2, tw1, tw2, tw3, Val(S))
+            s30, s31, s32, s33 = _dft16_regs(u3, v3, x3, q3, tw1, tw2, tw3, Val(S))
+            s10 = _vcmul(s10, _tw64(W64, 1, 0)); s11 = _vcmul(s11, _tw64(W64, 1, 1)); s12 = _vcmul(s12, _tw64(W64, 1, 2)); s13 = _vcmul(s13, _tw64(W64, 1, 3))
+            s20 = _vcmul(s20, _tw64(W64, 2, 0)); s21 = _vcmul(s21, _tw64(W64, 2, 1)); s22 = _vcmul(s22, _tw64(W64, 2, 2)); s23 = _vcmul(s23, _tw64(W64, 2, 3))
+            s30 = _vcmul(s30, _tw64(W64, 3, 0)); s31 = _vcmul(s31, _tw64(W64, 3, 1)); s32 = _vcmul(s32, _tw64(W64, 3, 2)); s33 = _vcmul(s33, _tw64(W64, 3, 3))
+            # radix-4 (DFT-4) combine across the four blocks, per group g
+            h00, h10, h20, h30 = _dft4reg(s00, s10, s20, s30, Val(S))
+            h01, h11, h21, h31 = _dft4reg(s01, s11, s21, s31, Val(S))
+            h02, h12, h22, h32 = _dft4reg(s02, s12, s22, s32, Val(S))
+            h03, h13, h23, h33 = _dft4reg(s03, s13, s23, s33, Val(S))
+            # block m (16 complex = 256 bytes) stores contiguously, group g at +64·g
+            st(m, a, b, c, d) = (o = p + m * 256; vstore(a, o); vstore(b, o + 64); vstore(c, o + 128); vstore(d, o + 192))
+            st(0, h00, h01, h02, h03); st(1, h10, h11, h12, h13)
+            st(2, h20, h21, h22, h23); st(3, h30, h31, h32, h33)
+        end
+    end
+    return x
+end
 
 # AVX base butterflies where supported (Float64, base 16/32); scalar codelets otherwise.
 @inline function _base_butterflies_avx!(dst::AbstractVector{Complex{T}}, src, base, width, k, ::Val{S}) where {T, S}
@@ -329,6 +380,17 @@ plan_inverse(p::Radix4AvxPlan)::Bool = p.inverse
 function apply_unnormalized!(p::Radix4AvxPlan{T}, x::AbstractVector) where {T}
     n = p.n
     n <= 1 && return x
+    # Small-n fast paths (Float64): skip the ~70 ns scratch transpose that otherwise dominates.
+    # n=64 uses the fused in-register kernel; n=16/32 have width==1 (the transpose is an identity
+    # copy), so the base codelet runs straight on x in place (it loads all lanes before storing).
+    if T === Float64
+        if n == 64
+            return _fft64_avx!(x, p.inverse ? Val(1) : Val(-1))
+        elseif n == 16 || n == 32
+            _base_butterflies_avx!(x, x, p.base, 1, 0, p.inverse ? Val(1) : Val(-1))
+            return x
+        end
+    end
     scr = p.scratch
     width = n ÷ p.base
     _radix4_transpose!(scr, x, p.base, width)
