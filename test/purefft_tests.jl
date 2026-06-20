@@ -149,13 +149,39 @@ end
         for n in (6, 9, 12, 27, 48, 96)
             @test plan_pfft(ComplexF64, n; variant = :fast) isa PureFFT.CodeletPlan
         end
-        @test plan_pfft(ComplexF64, 7; variant = :fast) isa PureFFT.BluesteinPlan    # large prime
-        @test plan_pfft(ComplexF64, 192; variant = :fast) isa PureFFT.BluesteinPlan  # too big
+        @test plan_pfft(ComplexF64, 7; variant = :fast) isa PureFFT.BluesteinPlan     # small prime
+        @test plan_pfft(ComplexF64, 1009; variant = :fast) isa PureFFT.BluesteinPlan  # large prime, no split
     end
 
     @testset "codelet hot path is dispatch-free" begin
         x = randn(ComplexF64, 12)
         p = plan_pfft(x; variant = :codelet)
+        @test_opt target_modules = (PureFFT,) PureFFT.apply_unnormalized!(p, x)
+    end
+end
+
+@testitem "Stage 10: four-step batched-codelet executor" setup = [FFTUtil] begin
+    using FFTW, JET
+    # Smooth composite non-pow2 sizes (>128) route here; batched SoA codelets for both passes.
+    @testset "vs FFTW ($T, n=$n)" for T in (Float64, Float32),
+            n in (144, 180, 720, 900, 1000, 1080, 2520)
+
+        x = randn(Complex{T}, n)
+        @test relerr(pfft(x; variant = :fast), fft(x)) < tol(T)
+        pf = plan_pfft(x; variant = :fast); y = copy(x); pfft!(y, pf)
+        pii = plan_pfft(Complex{T}, n; variant = :fast, inverse = true); pfft!(y, pii)  # normalized
+        @test relerr(y, x) < tol(T)
+    end
+
+    @testset "routes smooth composite >128 → FourStepCodeletPlan" begin
+        for n in (144, 900, 1000, 2520)
+            @test plan_pfft(ComplexF64, n; variant = :fast) isa PureFFT.FourStepCodeletPlan
+        end
+    end
+
+    @testset "four-step hot path is dispatch-free" begin
+        x = randn(ComplexF64, 144)
+        p = plan_pfft(x; variant = :fast)
         @test_opt target_modules = (PureFFT,) PureFFT.apply_unnormalized!(p, x)
     end
 end
@@ -261,13 +287,17 @@ end
 
 @testitem "TrimCheck trim-safety (hot path)" begin
     using TrimCheck
-    # Deep juliac TRIM_SAFE verification of the SIMD AVX kernel and the scalar Radix4 path.
+    # Deep juliac TRIM_SAFE verification. Confirms the @generated dynamic codelets and the four-step
+    # executor are trim-safe — the Vector{Any} they use is compile-time-only (AST construction in the
+    # generators); the trimmed binary contains the generated straight-line kernels, not the generator.
     @validate(
         init = begin
             using PureFFT
         end,
         PureFFT.apply_unnormalized!(PureFFT.Radix4AvxPlan{Float64}, Vector{ComplexF64}),
         PureFFT.apply_unnormalized!(PureFFT.Radix4Plan{Float64}, Vector{ComplexF64}),
+        PureFFT.apply_unnormalized!(PureFFT.CodeletPlan{Float64, 12}, Vector{ComplexF64}),
+        PureFFT.apply_unnormalized!(PureFFT.FourStepCodeletPlan{Float64, 12, 12}, Vector{ComplexF64}),
     )
 end
 

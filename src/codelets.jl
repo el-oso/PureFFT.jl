@@ -10,6 +10,8 @@
 # Direction is a type parameter `Val{S}` (S = -1 forward, +1 inverse) so the twiddle literals
 # are correct per direction while staying compile-time constant.
 
+using SIMD: Vec, vload, vstore   # for the batched SoA codelet below
+
 # FMA-fused complex multiply (Julia's Complex `*` won't contract to FMA on its own).
 @inline function _cmul(o::Complex, w::Complex)
     return Complex(
@@ -208,6 +210,111 @@ function apply_unnormalized!(p::CodeletPlan{T, N}, x::AbstractVector) where {T, 
         _dft_codelet!(x, 0, x, 0, 1, Val(N), Val(-1))
     end
     return x
+end
+
+# --- batched SoA mixed-radix codelet (the vectorized engine for the four-step executor) ------
+# Mixed-radix straight-line builder in SPLIT (re/im) form: each value is a (re,im) symbol pair and
+# every op is real arithmetic with scalar twiddle literals → pure FMA, ZERO shuffles. When the
+# symbols are SIMD vectors over a batch of independent transforms, this vectorizes perfectly (the
+# "vector rank" FFTW uses). Mirrors `_gen_dft_mixed!`.
+function _gen_dft_soa_mixed!(stmts, insr::Vector, insi::Vector, R::Int, s, ::Type{T}, ctr, pfx) where {T}
+    R == 1 && return (insr, insi)
+    p = _smallest_prime_factor(R)
+    nm() = (r = Symbol(pfx, "r", ctr[]); i = Symbol(pfx, "i", ctr[]); ctr[] += 1; (r, i))
+    add(ar, ai, br, bi) = ((r, i) = nm(); push!(stmts, :($r = $ar + $br)); push!(stmts, :($i = $ai + $bi)); (r, i))
+    function mul(ar, ai, w)
+        isone(w) && return (ar, ai)
+        wr = real(w); wi = imag(w); (r, i) = nm()
+        push!(stmts, :($r = muladd($ar, $wr, -$ai * $wi)))
+        push!(stmts, :($i = muladd($ar, $wi, $ai * $wr)))
+        return (r, i)
+    end
+    twiddle(e) = Complex{T}(cispi(s * 2 * mod(e, R) / R))
+    if p == R                                   # prime leaf: direct DFT
+        or = Vector{Any}(undef, R); oi = Vector{Any}(undef, R)
+        for k in 0:(R - 1)
+            ar, ai = insr[1], insi[1]
+            for j in 1:(R - 1)
+                tr, ti = mul(insr[j + 1], insi[j + 1], twiddle(j * k))
+                ar, ai = add(ar, ai, tr, ti)
+            end
+            or[k + 1] = ar; oi[k + 1] = ai
+        end
+        return (or, oi)
+    end
+    m = R ÷ p
+    Gr = Vector{Vector{Any}}(undef, p); Gi = Vector{Vector{Any}}(undef, p)
+    for a in 0:(p - 1)
+        Gr[a + 1], Gi[a + 1] = _gen_dft_soa_mixed!(
+            stmts, Any[insr[a + p * j + 1] for j in 0:(m - 1)], Any[insi[a + p * j + 1] for j in 0:(m - 1)], m, s, T, ctr, pfx,
+        )
+    end
+    or = Vector{Any}(undef, R); oi = Vector{Any}(undef, R)
+    for k in 0:(R - 1)
+        r = k % m; ar, ai = Gr[1][r + 1], Gi[1][r + 1]
+        for a in 1:(p - 1)
+            tr, ti = mul(Gr[a + 1][r + 1], Gi[a + 1][r + 1], twiddle(a * k))
+            ar, ai = add(ar, ai, tr, ti)
+        end
+        or[k + 1] = ar; oi[k + 1] = ai
+    end
+    return (or, oi)
+end
+
+"""
+    _dft_codelet_soa_batched!(outr, outi, xr, xi, width, Val(R), Val(S))
+
+Apply a size-`R` DFT to each of `width` independent transforms held in split (re/im) arrays, where
+transform `t`'s element `j` is at `[j*width + t]`. Vectorized over `t` with `Vec{W}` (W = 8 for
+Float64); a final idempotent overlapping vector covers a `width` not divisible by W. Requires
+`width ≥ W`. Shuffle-free (split layout). This is the per-pass engine of [`FourStepCodeletPlan`](@ref).
+"""
+@generated function _dft_codelet_soa_batched!(outr, outi, xr, xi, width::Int, ::Val{R}, ::Val{S}) where {R, S}
+    T = eltype(xr)
+    W = 64 ÷ sizeof(T)
+    es = sizeof(T)
+    # vector body: W transforms per Vec, gathered/scattered contiguously over the batch index `b`
+    vb = Any[]
+    vr = Vector{Any}(undef, R); vi = Vector{Any}(undef, R)
+    for j in 0:(R - 1)
+        a = Symbol("vinr", j); b = Symbol("vini", j)   # input names distinct from generator's "vr"/"vi"
+        vr[j + 1] = a; vi[j + 1] = b
+        push!(vb, :(@inbounds $a = vload(Vec{$W, $T}, pr + (($j * width + b) * $es))))
+        push!(vb, :(@inbounds $b = vload(Vec{$W, $T}, pii + (($j * width + b) * $es))))
+    end
+    vor, voi = _gen_dft_soa_mixed!(vb, vr, vi, R, S, T, Ref(0), "v")
+    for k in 0:(R - 1)
+        push!(vb, :(@inbounds vstore($(vor[k + 1]), por + (($k * width + b) * $es))))
+        push!(vb, :(@inbounds vstore($(voi[k + 1]), poi + (($k * width + b) * $es))))
+    end
+    # scalar remainder body: one transform `t` at a time (covers width % W, and width < W)
+    sb = Any[]
+    sr = Vector{Any}(undef, R); si = Vector{Any}(undef, R)
+    for j in 0:(R - 1)
+        a = Symbol("sinr", j); b = Symbol("sini", j)   # input names distinct from generator's "sr"/"si"
+        sr[j + 1] = a; si[j + 1] = b
+        push!(sb, :(@inbounds $a = xr[$j * width + t + 1]))
+        push!(sb, :(@inbounds $b = xi[$j * width + t + 1]))
+    end
+    sor, soi = _gen_dft_soa_mixed!(sb, sr, si, R, S, T, Ref(0), "s")
+    for k in 0:(R - 1)
+        push!(sb, :(@inbounds outr[$k * width + t + 1] = $(sor[k + 1])))
+        push!(sb, :(@inbounds outi[$k * width + t + 1] = $(soi[k + 1])))
+    end
+    quote
+        GC.@preserve xr xi outr outi begin
+            pr = pointer(xr); pii = pointer(xi); por = pointer(outr); poi = pointer(outi)
+            b = 0
+            while b + $W <= width
+                $(vb...)
+                b += $W
+            end
+        end
+        @inbounds for t in (width - (width % $W)):(width - 1)
+            $(sb...)
+        end
+        return nothing
+    end
 end
 
 # --- split-layout (SoA) variant -------------------------------------------------------------
