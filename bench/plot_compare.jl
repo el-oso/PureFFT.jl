@@ -138,9 +138,11 @@ p2 = plot(;
     dpi = 150,
     margin = 5Plots.mm,
 )
+# ribbon on a ratio r = t_x/t_fftw: first-order propagation of both relative σ's, rerr = r·√(σ_x²+σ_fftw²)
+rerr(r, sx, sf) = r .* sqrt.(sx .^ 2 .+ sf .^ 2)
 hline!(p2, [1.0]; label = "FFTW (baseline)", color = COLORS.fftw, linewidth = 2, linestyle = :dash)
-plot!(p2, ns, t_rust ./ t_fftw; label = LABELS.rust, color = COLORS.rust, linewidth = 2, marker = :circle, markersize = 4)
-plot!(p2, ns, t_pure ./ t_fftw; label = LABELS.pure, color = COLORS.pure, linewidth = 2, marker = :circle, markersize = 4)
+plot!(p2, ns, t_rust ./ t_fftw; ribbon = rerr(t_rust ./ t_fftw, s_rust, s_fftw), fillalpha = 0.18, label = LABELS.rust, color = COLORS.rust, linewidth = 2, marker = :circle, markersize = 4)
+plot!(p2, ns, t_pure ./ t_fftw; ribbon = rerr(t_pure ./ t_fftw, s_pure, s_fftw), fillalpha = 0.18, label = LABELS.pure, color = COLORS.pure, linewidth = 2, marker = :circle, markersize = 4)
 savefig(p2, joinpath(assets, "comparison_time.png"))
 
 # --- non-power-of-two (Bluestein) ---

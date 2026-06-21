@@ -8,7 +8,12 @@ Input: `Vector{ComplexF64}`, power-of-two sizes. FFTW at `MEASURE` flag. RustFFT
 
 ![GFLOP/s vs transform size: FFTW, RustFFT, PureFFT :fast](assets/comparison.png)
 
-Flop model: `5 · N · log2(N)` (standard radix-2 count).
+Flop model: `5 · N · log2(N)` (standard radix-2 count). Shaded bands are ±σ over the timing samples.
+
+The same data as runtime **relative to FFTW** (lower = faster; FFTW is the flat 1.0 baseline) reads parity
+more directly than overlapping log-log throughput lines:
+
+![Runtime relative to FFTW (power-of-two; lower is faster)](assets/comparison_time.png)
 
 ## PureFFT `:fast` vs FFTW and RustFFT (GFLOP/s, power-of-two)
 
@@ -44,6 +49,14 @@ recursive/four-step plan (timed) — so it's a strict improvement. radix-8-domin
 parity (≥0.96×, depth-2); radix-9/12-heavy (3-heavy) sizes sit at a ~0.85–0.92× floor (radix-9/12 are
 intrinsically ~3× more shuffle/FMA-heavy than radix-8 — see `performance.md` §15). Sizes needing radix
 2/16 or non-B36 bases fall back to the recursive path.
+
+**AVX-512 (W=8) extension — the RustFFT differentiator.** RustFFT is AVX2-only; PureFFT also runs the
+faithful tree at `Vec{8,Float64}` (512-bit, 4 complex/vector) for W=8-clean sizes (Butterfly64 ·
+radix-8/9/12, `src/avxradix/width8.jl`). `autoplan` times W=8 against W=4 and keeps it only when faster.
+On the same decomposition, W=8 beats W=4 **1.03–1.11×** and is at/above RustFFT parity (**0.96–1.07×**)
+across L1→L3 (768/9216/110592) — see `performance.md` §16:
+
+![AVX-512 (W=8) vs AVX2 (W=4) vs RustFFT on non-power-of-two (same decomposition)](assets/avx512_nonpow2.png)
 
 The recursive path is the parity breakthrough: the old 2-factor four-step was forced into huge
 register-spilling codelets for large n (e.g. 5760 → 80×72) and *had no valid split above 16384* (it
