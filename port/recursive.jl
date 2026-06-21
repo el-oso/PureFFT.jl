@@ -27,6 +27,21 @@ end
     end
 end
 
+# ---- leaf: Butterfly9 (3x3, dual-width packed; in-register, no scratch) ----
+struct B9 <: Kernel
+    n::Int; tw::NTuple{2, V4f}; bf3::V4f; bf3lo::V2f
+end
+function B9(fwd::Bool)
+    bf3 = avx_broadcast_twiddle(1, 3, fwd)
+    B9(9, bf9_twiddles(fwd), bf3, avx_lo(bf3))
+end
+@inline function proc_ip!(k::B9, buf, scr)
+    @inbounds for f in 0:(length(buf) ÷ 9 - 1); butterfly9!(buf, buf, 9f, k.tw, k.bf3, k.bf3lo); end
+end
+@inline function proc_oop!(k::B9, out, inp, scr)
+    @inbounds for f in 0:(length(inp) ÷ 9 - 1); butterfly9!(out, inp, 9f, k.tw, k.bf3, k.bf3lo); end
+end
+
 # ---- leaf: Butterfly64 (8x8, two-phase; needs scratch ≥ its length) ----
 struct B64 <: Kernel
     n::Int; tw::Vector{V4f}; rot::V4f

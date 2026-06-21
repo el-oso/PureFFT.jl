@@ -87,6 +87,21 @@ function butterfly64!(out, inp, scr, base::Int, tw::Vector{V4f}, rot::V4f)
     end
 end
 
+# ===== Butterfly9 (rust Butterfly9Avx64): 3x3, dual-width packed (col 0 partial V2f, cols 1-2 V4f) =====
+bf9_twiddles(fwd) = (avx_mixedradix_twiddle_chunk(1, 1, 9, fwd), avx_mixedradix_twiddle_chunk(1, 2, 9, fwd))
+function butterfly9!(out, inp, base::Int, tw::NTuple{2, V4f}, bf3::V4f, bf3lo::V2f)
+    a1 = avx_load_partial1(inp, base + 0); a2 = avx_load_partial1(inp, base + 3); a3 = avx_load_partial1(inp, base + 6)
+    b1 = avx_load_complex(inp, base + 1); b2 = avx_load_complex(inp, base + 4); b3 = avx_load_complex(inp, base + 7)
+    mid0 = avx_column_butterfly3(a1, a2, a3, bf3lo)          # V2f cb3 (column 0)
+    mid1 = avx_column_butterfly3(b1, b2, b3, bf3)            # V4f cb3 (columns 1,2)
+    m2 = avx_mul_complex(mid1[2], tw[1]); m3 = avx_mul_complex(mid1[3], tw[2])
+    t0, t1 = avx_transpose_3x3(mid0[1], mid0[2], mid0[3], mid1[1], m2, m3)
+    o0 = avx_column_butterfly3(t0[1], t0[2], t0[3], bf3lo)
+    o1 = avx_column_butterfly3(t1[1], t1[2], t1[3], bf3)
+    avx_store_partial1!(out, base + 0, o0[1]); avx_store_partial1!(out, base + 3, o0[2]); avx_store_partial1!(out, base + 6, o0[3])
+    avx_store_complex!(out, base + 1, o1[1]); avx_store_complex!(out, base + 4, o1[2]); avx_store_complex!(out, base + 7, o1[3])
+end
+
 # ===== shared helpers =====
 seeded(n) = [Complex(((k * 2 + 1) % 17) / 17 - 0.5, ((k * 3 + 2) % 19) / 19 - 0.5) for k in 0:(n - 1)]
 function golden_fft(n)

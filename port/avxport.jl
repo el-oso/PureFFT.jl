@@ -81,6 +81,13 @@ const _ROT90_INV2 = V2f((0.0, -0.0))
 
 # transpose_2x2_f64 (avx64_utils): [unpacklo, unpackhi]
 @inline avx_transpose_2x2(a::V4f, b::V4f) = (avx_unpacklo_complex(a, b), avx_unpackhi_complex(a, b))
+# transpose_3x3_f64 (rust avx64_utils): dual-width — col 0 packed as V2f, cols 1-2 as V4f
+@inline function avx_transpose_3x3(a1::V2f, a2::V2f, a3::V2f, b1::V4f, b2::V4f, b3::V4f)
+    out0 = (a1, avx_lo(b1), avx_hi(b1))
+    lt = avx_transpose_2x2(b2, b3)
+    out1 = (avx_merge(a2, a3), lt[1], lt[2])
+    (out0, out1)
+end
 
 # partial (1-complex) load/store (rust load_partial1_complex / store_partial1_complex = _mm_loadu/storeu_pd)
 @inline function avx_load_partial1(x::AbstractVector{Complex{Float64}}, i::Int)
@@ -96,7 +103,7 @@ end
     output0 = avx_add(r0, mid1)
     twr, twi = avx_duplicate_complex(tw)
     mid1 = avx_fmadd(mid1, twr, r0)
-    mid2_rot = avx_rotate90(mid2, _ROT90_INV)
+    mid2_rot = avx_rotate90(mid2, _rot90_inv(mid2))      # width-generic (V4f or V2f)
     output1 = avx_fmadd(mid2_rot, twi, mid1)
     output2 = avx_fnmadd(mid2_rot, twi, mid1)
     (output0, output1, output2)
