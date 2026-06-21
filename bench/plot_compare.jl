@@ -48,6 +48,9 @@ function run_benchmarks(sizes)
     t_fftw = Float64[]
     t_rust = Float64[]
     t_pure = Float64[]
+    s_fftw = Float64[]   # relative σ (std/median) per point → rendered as error bars
+    s_rust = Float64[]
+    s_pure = Float64[]
 
     for n in sizes
         x = randn(ComplexF64, n)
@@ -73,9 +76,12 @@ function run_benchmarks(sizes)
         push!(t_fftw, tm)
         push!(t_rust, tr)
         push!(t_pure, tp)
+        push!(s_fftw, std(bm).time / median(bm).time)
+        push!(s_rust, std(br).time / median(br).time)
+        push!(s_pure, std(bp).time / median(bp).time)
     end
 
-    return ns, t_fftw, t_rust, t_pure
+    return ns, t_fftw, t_rust, t_pure, s_fftw, s_rust, s_pure
 end
 
 const COLORS = (fftw = :steelblue, rust = :tomato, pure = :seagreen)
@@ -92,8 +98,10 @@ println("Single-thread, in-place, planning excluded\n")
 
 # --- power-of-two ---
 println("Power-of-two sizes:")
-ns, t_fftw, t_rust, t_pure = run_benchmarks(pow2_sizes())
+ns, t_fftw, t_rust, t_pure, s_fftw, s_rust, s_pure = run_benchmarks(pow2_sizes())
 tickvals, ticklabels = pow2_ticks()
+# GFLOP/s error bar = gflops · (σ_t/median_t)  (first-order propagation of the timing σ)
+gerr(ns, t, s) = gflops.(ns, t) .* s
 
 p1 = plot(;
     xlabel = "Transform size N",
@@ -107,9 +115,9 @@ p1 = plot(;
     dpi = 150,
     margin = 5Plots.mm,
 )
-plot!(p1, ns, gflops.(ns, t_fftw); label = LABELS.fftw, color = COLORS.fftw, linewidth = 2, marker = :circle, markersize = 4)
-plot!(p1, ns, gflops.(ns, t_rust); label = LABELS.rust, color = COLORS.rust, linewidth = 2, marker = :circle, markersize = 4)
-plot!(p1, ns, gflops.(ns, t_pure); label = LABELS.pure, color = COLORS.pure, linewidth = 2, marker = :circle, markersize = 4)
+plot!(p1, ns, gflops.(ns, t_fftw); yerror = gerr(ns, t_fftw, s_fftw), label = LABELS.fftw, color = COLORS.fftw, linewidth = 2, marker = :circle, markersize = 4)
+plot!(p1, ns, gflops.(ns, t_rust); yerror = gerr(ns, t_rust, s_rust), label = LABELS.rust, color = COLORS.rust, linewidth = 2, marker = :circle, markersize = 4)
+plot!(p1, ns, gflops.(ns, t_pure); yerror = gerr(ns, t_pure, s_pure), label = LABELS.pure, color = COLORS.pure, linewidth = 2, marker = :circle, markersize = 4)
 savefig(p1, joinpath(assets, "comparison.png"))
 
 # Runtime normalized to FFTW: FFTW is the flat 1.0 baseline; a curve at 1.2 means 20 % slower
@@ -133,7 +141,7 @@ savefig(p2, joinpath(assets, "comparison_time.png"))
 
 # --- non-power-of-two (Bluestein) ---
 println("\nNon-power-of-two smooth-composite sizes (PureFFT → codelet / four-step):")
-nq, q_fftw, q_rust, q_pure = run_benchmarks(nonpow2_sizes())
+nq, q_fftw, q_rust, q_pure, qs_fftw, qs_rust, qs_pure = run_benchmarks(nonpow2_sizes())
 
 p3 = plot(;
     xlabel = "Transform size N (non-power-of-two)",
@@ -147,9 +155,9 @@ p3 = plot(;
     dpi = 150,
     margin = 5Plots.mm,
 )
-plot!(p3, nq, gflops.(nq, q_fftw); label = LABELS.fftw, color = COLORS.fftw, linewidth = 2, marker = :circle, markersize = 4)
-plot!(p3, nq, gflops.(nq, q_rust); label = LABELS.rust, color = COLORS.rust, linewidth = 2, marker = :circle, markersize = 4)
-plot!(p3, nq, gflops.(nq, q_pure); label = "PureFFT :fast (recursive mixed-radix)", color = COLORS.pure, linewidth = 2, marker = :circle, markersize = 4)
+plot!(p3, nq, gflops.(nq, q_fftw); yerror = gerr(nq, q_fftw, qs_fftw), label = LABELS.fftw, color = COLORS.fftw, linewidth = 2, marker = :circle, markersize = 4)
+plot!(p3, nq, gflops.(nq, q_rust); yerror = gerr(nq, q_rust, qs_rust), label = LABELS.rust, color = COLORS.rust, linewidth = 2, marker = :circle, markersize = 4)
+plot!(p3, nq, gflops.(nq, q_pure); yerror = gerr(nq, q_pure, qs_pure), label = "PureFFT :fast (mixed-radix)", color = COLORS.pure, linewidth = 2, marker = :circle, markersize = 4)
 savefig(p3, joinpath(assets, "comparison_nonpow2.png"))
 
 println("\nSaved: $(joinpath(assets, "comparison.png"))")
