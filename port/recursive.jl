@@ -92,6 +92,29 @@ end
     end
 end
 
+# ---- radix-8 passes (rust's "blazing fast" 8xn) ----
+@inline function _colbf8!(buf, o, ::Val{M}, tw, rot) where {M}
+    @inbounds for c in 0:(M ÷ 2 - 1)
+        ib = o + 2c
+        r = avx_column_butterfly8(avx_load_complex(buf, ib), avx_load_complex(buf, ib + M), avx_load_complex(buf, ib + 2M), avx_load_complex(buf, ib + 3M),
+                                  avx_load_complex(buf, ib + 4M), avx_load_complex(buf, ib + 5M), avx_load_complex(buf, ib + 6M), avx_load_complex(buf, ib + 7M), rot)
+        avx_store_complex!(buf, ib, r[1])
+        avx_store_complex!(buf, ib + M, avx_mul_complex(tw[c * 7 + 1], r[2])); avx_store_complex!(buf, ib + 2M, avx_mul_complex(tw[c * 7 + 2], r[3]))
+        avx_store_complex!(buf, ib + 3M, avx_mul_complex(tw[c * 7 + 3], r[4])); avx_store_complex!(buf, ib + 4M, avx_mul_complex(tw[c * 7 + 4], r[5]))
+        avx_store_complex!(buf, ib + 5M, avx_mul_complex(tw[c * 7 + 5], r[6])); avx_store_complex!(buf, ib + 6M, avx_mul_complex(tw[c * 7 + 6], r[7]))
+        avx_store_complex!(buf, ib + 7M, avx_mul_complex(tw[c * 7 + 7], r[8]))
+    end
+end
+@inline function _trans8!(out, oo, buf, o, ::Val{M}) where {M}
+    @inbounds for c in 0:(M ÷ 2 - 1)
+        ib = o + 2c; ob = oo + 16c
+        t = avx_transpose8_packed(avx_load_complex(buf, ib), avx_load_complex(buf, ib + M), avx_load_complex(buf, ib + 2M), avx_load_complex(buf, ib + 3M),
+                                  avx_load_complex(buf, ib + 4M), avx_load_complex(buf, ib + 5M), avx_load_complex(buf, ib + 6M), avx_load_complex(buf, ib + 7M))
+        avx_store_complex!(out, ob, t[1]); avx_store_complex!(out, ob + 2, t[2]); avx_store_complex!(out, ob + 4, t[3]); avx_store_complex!(out, ob + 6, t[4])
+        avx_store_complex!(out, ob + 8, t[5]); avx_store_complex!(out, ob + 10, t[6]); avx_store_complex!(out, ob + 12, t[7]); avx_store_complex!(out, ob + 14, t[8])
+    end
+end
+
 # mixedradix twiddles: make_mixedradix_twiddle_chunk(c*2, y, n) for c in 0:M/2-1, y in 1:R-1 → [c*(R-1)+y]
 function mr_twiddles(R, M, n, fwd)
     [avx_mixedradix_twiddle_chunk(c * 2, y, n, fwd) for c in 0:(M ÷ 2 - 1) for y in 1:(R - 1)]
@@ -117,6 +140,28 @@ end
     @inbounds for f in 0:(cnt - 1); _colbf3!(inp, f * n, Val(M), k.tw, k.bf3); end
     proc_ip!(k.inner, inp, scr)
     @inbounds for f in 0:(cnt - 1); _trans3!(out, f * n, inp, f * n, Val(M)); end
+end
+
+# ---- MixedRadix8 (R=8) — rust's preferred fast radix ----
+struct MR8{M, I <: Kernel} <: Kernel
+    inner::I; tw::Vector{V4f}; rot::V4f
+end
+klen(::MR8{M}) where {M} = 8M
+function MR8(inner::Kernel, fwd::Bool)
+    M = klen(inner)
+    MR8{M, typeof(inner)}(inner, mr_twiddles(8, M, 8M, fwd), fwd ? _ROT90_FWD : _ROT90_INV)
+end
+@inline function proc_ip!(k::MR8{M}, buf, scr) where {M}
+    n = 8M; cnt = length(buf) ÷ n
+    @inbounds for f in 0:(cnt - 1); _colbf8!(buf, f * n, Val(M), k.tw, k.rot); end
+    proc_oop!(k.inner, scr, buf, scr)
+    @inbounds for f in 0:(cnt - 1); _trans8!(buf, f * n, scr, f * n, Val(M)); end
+end
+@inline function proc_oop!(k::MR8{M}, out, inp, scr) where {M}
+    n = 8M; cnt = length(inp) ÷ n
+    @inbounds for f in 0:(cnt - 1); _colbf8!(inp, f * n, Val(M), k.tw, k.rot); end
+    proc_ip!(k.inner, inp, scr)
+    @inbounds for f in 0:(cnt - 1); _trans8!(out, f * n, inp, f * n, Val(M)); end
 end
 
 # ---- MixedRadix4 (R=4) — M (len_per_row) is a TYPE PARAMETER so the passes const-fold ----
