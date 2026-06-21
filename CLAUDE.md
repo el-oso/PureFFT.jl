@@ -59,6 +59,10 @@ measurements are in `docs/src/performance.md`; this file is the must-follow summ
   NOT chase ≤5% per-radix opts against it — they're sub-noise (chunk-unroll and pre-dup twiddles both
   tested, both fail end-to-end). Pin CPU frequency first if you must. Isolated micro-benchmarks mislead —
   re-measure in the full kernel.
+- **AVX-512 (Vec{8}) does NOT help the non-pow2 mixed-radix** (Phase-8 finding, `docs/src/performance.md`
+  §16, evidence in `port/avx512_poc.jl`). It's shuffle/permute-bound and Zen5's 512-bit shuffle throughput
+  doesn't double → 1.0–1.07× vs Vec{4} (genuine zmm, not split). Only the FMA-heavy *pow2* path
+  (`radix4_avx.jl`) benefits from Vec{8}. Don't width-double the non-pow2 kernels.
 
 ## Standing rules
 

@@ -302,6 +302,26 @@ Hard-won lessons from pushing the faithful port's non-power-of-two coverage to �
   tuning is not productive without first pinning CPU frequency (`cpupower`, needs root) or ~10× longer
   averaging. Know the floor before chasing small wins.
 
+## 16. AVX-512 (Vec{8}) does NOT help the shuffle-bound non-pow2 path (Phase-8 finding)
+
+RustFFT is AVX2-only (256-bit, 2 complex/vector), so a natural idea is to run the non-pow2 mixed-radix at
+**Vec{8,Float64}** (512-bit, 4 complex/vector) to *exceed* it on Zen5. **It doesn't work** — measured, not
+assumed (`port/avx512_poc.jl`):
+
+- A width-doubled column butterfly (`cb8` at Vec{8}) is **bit-correct** and emits **genuine AVX-512**
+  (`@code_native`: 159 zmm refs, 0 ymm — not LLVM-split into 2× 256-bit).
+- Yet the column-butterfly pass measures **1.0–1.07× per-complex throughput vs Vec{4}** — *no speedup* —
+  both L1-resident (compute-bound) and large (memory-bound).
+- **Why:** the mixed-radix kernels are **shuffle/permute-bound** (rotate90 swaps + the twiddle
+  `mul_complex`'s dup_re/dup_im/swap — ~3 shuffles per twiddle multiply), and **Zen5's 512-bit shuffle
+  throughput does not double** over 256-bit. Wider vectors only speed up FMA/add-bound code.
+
+This is consistent with §15 (the non-pow2 path is shuffle-bound) and with the *pow2* `radix4_avx.jl`
+path *already* using Vec{8} successfully — pow2 benefits because it's FMA-heavy and the register-transpose
+design minimizes shuffles. **Conclusion:** do not port the non-pow2 mixed-radix to Vec{8} — it can't
+exceed rust this way. The only remaining angle is an AVX-512-*native* redesign that cuts shuffle count
+(e.g. `vpermt2pd` doing in one op what several 256-bit shuffles do), which is a research effort, not a port.
+
 ## Summary table
 
 | Trick | Effect | Notes |
