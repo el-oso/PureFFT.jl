@@ -240,7 +240,7 @@ attributes #0 = { alwaysinline }"""
 ```
 
 This produces a single `vfmaddsub231pd` and is **bit-exact** with Rust's `_mm256_fmaddsub_pd`. See
-`port/avxport.jl`. When porting an intrinsic-based kernel, match the **exact lane patterns** of each
+`src/avxradix/avxport.jl`. When porting an intrinsic-based kernel, match the **exact lane patterns** of each
 `_mm256_permute/unpack/movedup_pd` with `shufflevector`, and verify bit-exact against a Rust golden.
 
 ## 13. Faithful porting beats reinterpretation (the local-maximum lesson)

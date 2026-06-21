@@ -38,7 +38,7 @@ autotuner times this against the 2-factor four-step and keeps the fastest); larg
 (Stage 11) or Bluestein (Stage 8).
 
 **Faithful RustFFT-AVX path (Stage 13).** 2·3·5-smooth sizes also get a mechanical port of RustFFT's
-AVX2 mixed-radix (`RustFFTAvxPlan`, `src/rustport/`): rust's exact radix stack (8ⁿ·9ᵐ·12ᵏ·6ʲ over a
+AVX2 mixed-radix (`AvxMixedRadixPlan`, `src/avxradix/`): rust's exact radix stack (8ⁿ·9ᵐ·12ᵏ·6ʲ over a
 Butterfly36 base) with the same SIMD ops. `autoplan` builds it and uses it **only when it beats** the
 recursive/four-step plan (timed) — so it's a strict improvement. radix-8-dominated sizes reach rust
 parity (≥0.96×, depth-2); radix-9/12-heavy (3-heavy) sizes sit at a ~0.85–0.92× floor (radix-9/12 are

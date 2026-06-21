@@ -21,7 +21,7 @@ measurements are in `docs/src/performance.md`; this file is the must-follow summ
 
 3. **x86 SIMD intrinsics with no SIMD.jl wrapper → `Base.llvmcall`** to the exact LLVM intrinsic,
    module+entry form, converting `Vec ↔ v.data::NTuple{N,VecElement{T}}`. Example (verified bit-exact):
-   `fmaddsub`/`fmsubadd` via `@llvm.x86.fma.vf{madd,msub}sub.pd.256`. See `port/avxport.jl`.
+   `fmaddsub`/`fmsubadd` via `@llvm.x86.fma.vf{madd,msub}sub.pd.256`. See `src/avxradix/avxport.jl`.
 
 4. **SIMD via SIMD.jl**: `Vec`, `shufflevector` (lane permutes — match the intrinsic's exact lane
    pattern when porting), `reinterpret` (bitwise ops like xor on floats), `muladd` (FMA). `vload`/
