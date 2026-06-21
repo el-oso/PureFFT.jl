@@ -92,18 +92,23 @@ fn fft_level() {
             for z in &work { print!(" {:016x} {:016x}", z.re.to_bits(), z.im.to_bits()); }
             println!();
         }
-        let kit = std::cmp::max(50, (2.0e8 / ((n as f64) * (n as f64).log2())).round() as usize);
-        let mut best = f64::INFINITY;
-        for _ in 0..40 {
+        // Stable per-call timing: in-place reps (NO copy-subtract — data degenerates but FP throughput
+        // is identical), block = kit reps, collect M block-estimates → report MEDIAN + SIGMA.
+        let kit = std::cmp::max(100, (2.0e8 / ((n as f64) * (n as f64).log2())).round() as usize);
+        const BLOCKS: usize = 101;
+        let mut times = Vec::with_capacity(BLOCKS);
+        for _ in 0..5 { for _ in 0..kit { fft.process_with_scratch(&mut work, &mut scratch); } } // warm
+        for _ in 0..BLOCKS {
             let t = Instant::now();
-            for _ in 0..kit { work.copy_from_slice(&src); fft.process_with_scratch(&mut work, &mut scratch); }
-            let d = t.elapsed().as_nanos() as f64;
-            let t2 = Instant::now();
-            for _ in 0..kit { work.copy_from_slice(&src); std::hint::black_box(&mut work); }
-            let d2 = t2.elapsed().as_nanos() as f64;
-            best = best.min((d - d2) / kit as f64);
+            for _ in 0..kit { fft.process_with_scratch(std::hint::black_box(&mut work), &mut scratch); }
+            times.push(t.elapsed().as_nanos() as f64 / kit as f64);
         }
-        println!("T {} {:.2}", n, best);
+        times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let median = times[BLOCKS / 2];
+        let mean = times.iter().sum::<f64>() / BLOCKS as f64;
+        let sigma = (times.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / BLOCKS as f64).sqrt();
+        std::hint::black_box(&work);
+        println!("T {} {:.3} {:.3}", n, median, sigma); // T n median_ns sigma_ns
     }
 }
 
