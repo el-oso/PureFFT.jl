@@ -253,6 +253,24 @@ no deviation) reaches parity: Butterfly36 = 0.92×. When matching a reference im
 the goal, **duplicate it exactly and verify bit-exact at each layer** (Rust golden harness in
 `bench/rustfft_compare/`) rather than re-deriving — re-derivation drifts into a slower local optimum.
 
+## 14. Benchmarking tiny SIMD kernels (the parity-gate methodology)
+
+Confirming a kernel is ≥0.96× of a Rust reference is dominated by *measurement* artifacts at sub-20ns:
+
+- **Call via a `@noinline` concrete wrapper, not a closure.** `@b x (w->kernel!(w,consts))` (or passing
+  a closure to a higher-order timer) puts the closure's call indirection inside the timed region — it
+  reported a "0.82×" that was really ~0.93×. Use `@noinline run!(w)=kernel!(w,CONST1,CONST2)` (consts as
+  `const` globals) and call `run!(w)` directly.
+- **Use repeated in-place reps, not copy-subtract.** rustfft's harness times `copy+transform` and
+  subtracts `copy`; subtracting two similar noisy numbers gives ±15% swings at n≈36. Looping the
+  in-place transform with no copy (data → NaN, but FP *throughput* is identical) + a DCE sink is far
+  more stable.
+- **Pin a core (`taskset -c N`)**, warm up, take the **min over many blocks**. Reproducible to ~1%.
+  Allocation alignment still varies ~10-15% across runs — the noise floor; don't over-read one number.
+
+With this, faithful-ported kernels measure at/near parity (B7≈1.02×, MixedRadix4xn-144≈0.96×; B36≈0.93×
+is codegen-limited — LLVM instruction scheduling/spilling vs rustc — not an algorithm gap).
+
 ## Summary table
 
 | Trick | Effect | Notes |

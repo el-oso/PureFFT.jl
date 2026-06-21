@@ -31,6 +31,12 @@ measurements are in `docs/src/performance.md`; this file is the must-follow summ
    so `@generated` specializes. Verify with JET `@test_opt`. Keep trim-safe (`Vector{Any}` only in
    `@generated` generators, never at runtime — verify with TrimCheck `@validate`).
 
+6. **Benchmark tiny kernels correctly** (else the parity gate is unmeasurable): call via a `@noinline`
+   concrete wrapper (`@noinline run!(w)=kernel!(w,CONST...)`), NOT a closure/lambda passed to a timer
+   (closure indirection lands in the timed region). Use repeated **in-place** reps (no copy-subtract —
+   data → NaN but FP throughput is identical, far more stable) + `taskset -c N` core pinning + min over
+   many blocks + a DCE sink. Noise floor is ~few %; don't over-read one number near the gate.
+
 ## Faithful-port methodology (for the non-pow2 / RustFFT parity work)
 
 - **Duplicate RustFFT's algorithm EXACTLY** (op-for-op, same SIMD), do NOT reinterpret. Reinterpreting
