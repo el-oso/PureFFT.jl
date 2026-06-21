@@ -131,14 +131,23 @@ function autoplan(::Type{Complex{T}}, n::Integer; inverse::Bool = false) where {
         if ni >= RADER_MIN_P && _max_prime_factor(ni) == ni && _max_prime_factor(ni - 1) <= RADER_MAX_PM1_PRIME
             return RaderPlan(Complex{T}, ni; inverse)
         end
-        sp = _best_smooth_plan(Complex{T}, ni; inverse)       # smooth composite → fastest of four-step / recursive
-        rp = AvxMixedRadixPlan(Complex{T}, ni; inverse)          # AVX2 mixed-radix tree (nothing if unsupported)
-        if !isnothing(rp)                                     # use it only when actually faster (no regression)
-            isnothing(sp) && return rp
+        # candidates: existing four-step/recursive, the faithful AVX2 (W=4) tree, and the AVX-512 (W=8)
+        # tree where it's W=8-clean. Time all available and keep the fastest — so W=8 is used only on the
+        # (small, compute-bound) sizes where it actually beats W=4; no regression elsewhere.
+        cands = AbstractFFTPlan{T}[c for c in (
+            _best_smooth_plan(Complex{T}, ni; inverse),
+            AvxMixedRadixPlan(Complex{T}, ni; inverse),
+            AvxMixedRadixPlanW8(Complex{T}, ni; inverse),
+        ) if !isnothing(c)]
+        if !isempty(cands)
+            length(cands) == 1 && return cands[1]
             y = randn(Complex{T}, ni)
-            return _besttime(rp, y) < _besttime(sp, y) ? rp : sp
+            best = cands[1]; bt = _besttime(best, y)
+            for c in cands[2:end]
+                t = _besttime(c, y); t < bt && (bt = t; best = c)
+            end
+            return best
         end
-        isnothing(sp) || return sp
         return BluesteinPlan(Complex{T}, n; inverse)          # large prime factor → chirp-Z
     end
     # candidate kernels (all power-of-two); time each on a real buffer, keep the fastest.

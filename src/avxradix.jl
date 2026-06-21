@@ -4,4 +4,5 @@
 # Float64-only (Vec{4,Float64} = one 256-bit AVX register = 2 complex).
 module AvxRadix
 include(joinpath(@__DIR__, "avxradix", "planner.jl"))   # chains recursive.jl → kernels.jl → avxport.jl
+include(joinpath(@__DIR__, "avxradix", "width8.jl"))    # AVX-512 (Vec{8}) kernels + plan_tree_w8
 end
