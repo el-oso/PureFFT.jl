@@ -30,28 +30,25 @@ the earlier gap (pure Julia was once ~0.55× of FFTW — see git history / REPOR
 
 ## Non-power-of-two
 
-No O(n²) cliff: a large prime factor no longer falls to a direct DFT. PureFFT's `:fast` routes by
-size/factorization: small smooth → dynamically-generated mixed-radix codelet (Stage 9); smooth
-composite up to **16384** → SIMD four-step with batched codelets + an 8×8 register-tiled transpose
-(Stage 10, split autotuned at plan time); everything else (large prime, **or smooth composite >
-16384**) → Bluestein chirp-Z (Stage 8).
+No O(n²) cliff, and **no size ceiling**: PureFFT's `:fast` routes by size/factorization: small smooth
+→ dynamically-generated mixed-radix codelet (Stage 9); **any smooth composite → recursive multi-factor
+mixed-radix** (Stage 12) — decomposed into several *small* codelets (≤30) run batch-all, with the
+four-step twiddle fused into each codelet's output store and SIMD/block transposes between levels (the
+autotuner times this against the 2-factor four-step and keeps the fastest); large prime → Rader
+(Stage 11) or Bluestein (Stage 8).
 
-The plot sweeps smooth-composite sizes (the common non-pow2 case). PureFFT (green) reaches **~0.8–
-0.86× FFTW** on the four-step path for high-2-content sizes (e.g. 2880–11520) — the SIMD register
-transpose (the four-step's former dominant overhead) closed most of the earlier gap. Sizes with
-little factor-of-2 content (e.g. 900 = 2²·3²·5², no factor divisible by 8) fall back to the scalar
-transpose remainder and trail at ~0.5×. Above **n≈16384** the four-step factors are exhausted
-(128×128) and it returns to Bluestein. Remaining gap to full parity = the SoA split/merge round-trip
-(an AoS mixed-radix path, like the pow2 `radix4avx`, would remove it).
+The recursive path is the parity breakthrough: the old 2-factor four-step was forced into huge
+register-spilling codelets for large n (e.g. 5760 → 80×72) and *had no valid split above 16384* (it
+fell to Bluestein at ~3–5 GF/s). Small codelets are far more efficient (R≈8 ≈55 GF/s vs R≈40 ≈36), so
+decomposing into ~3 small factors recovers most of the gap **at every size**:
 
 ![GFLOP/s on non-power-of-two sizes](assets/comparison_nonpow2.png)
 
 | regime | example n | PureFFT | note |
 |---|---:|---:|---|
 | smooth, small — codelet | 27 / 48 | **12.8** / 13 | beats FFTW (10.7); was ~0.2 via old mixed-radix |
-| smooth composite, high-2 — four-step | 5760 / 11520 | **28.7 / 24.7** | ~0.8–0.86× FFTW, SIMD transpose (Stage 10) |
-| smooth composite, low-2 — four-step | 900 | ~18 | ~0.5× (scalar-remainder transpose) |
-| smooth composite >16384 — Bluestein | 23040 | ~5 | four-step ceiling; recursive four-step is future work |
+| smooth composite — recursive | 5760 / 11520 | **29 / 30** | ~0.76–0.87× FFTW (Stage 12) |
+| large smooth (was Bluestein cliff) | 23040 / 92160 | **23 / 18** | ~0.6× FFTW; was ~3–5 (Bluestein) before Stage 12 |
 | large prime / prime power — Bluestein | 181 / 5793 | ~5 | O(n log n), no cliff |
 
 ## All variant progression
@@ -67,7 +64,7 @@ transpose remainder and trail at ~0.5×. Above **n≈16384** the four-step facto
 | `:radix4avx` / `:fast` (pow2) | **40–48** | + AVX Butterfly16/32, radix-16 fusion, small-n register kernels, vectorized transpose |
 | `:bluestein` | non-pow2 | chirp-Z, O(n log n) on primes |
 | `:codelet` | non-pow2 | dynamically-generated mixed-radix kernel (small smooth) |
-| four-step (via `:fast`) | **18–29** | batched SoA codelets + 8×8 SIMD transpose, smooth composite non-pow2 (≤16384) |
+| recursive mixed-radix (via `:fast`) | **18–30** | multi-factor small codelets + fused twiddle + SIMD transpose; ANY smooth composite non-pow2, ~0.6–0.87× FFTW |
 | FFTW-MEASURE | 35–48 | Reference |
 | rustfft-AVX | 34–46 | Reference |
 

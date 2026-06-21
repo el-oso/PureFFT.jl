@@ -173,9 +173,15 @@ end
         @test relerr(y, x) < tol(T)
     end
 
-    @testset "routes smooth composite >128 → FourStepCodeletPlan" begin
+    @testset "routes smooth composite >128 → four-step or recursive mixed-radix" begin
+        # autotuner picks the faster of FourStepCodeletPlan (2-factor) / RecursiveMixedRadixPlan
         for n in (144, 900, 1000, 2520)
-            @test plan_pfft(ComplexF64, n; variant = :fast) isa PureFFT.FourStepCodeletPlan
+            p = plan_pfft(ComplexF64, n; variant = :fast)
+            @test p isa PureFFT.FourStepCodeletPlan || p isa PureFFT.RecursiveMixedRadixPlan
+        end
+        # large smooth composite (>16384, no valid four-step split) → recursive (no Bluestein cliff)
+        for n in (23040, 46080)
+            @test plan_pfft(ComplexF64, n; variant = :fast) isa PureFFT.RecursiveMixedRadixPlan
         end
     end
 
@@ -321,6 +327,7 @@ end
         PureFFT.apply_unnormalized!(PureFFT.Radix4Plan{Float64}, Vector{ComplexF64}),
         PureFFT.apply_unnormalized!(PureFFT.CodeletPlan{Float64, 12}, Vector{ComplexF64}),
         PureFFT.apply_unnormalized!(PureFFT.FourStepCodeletPlan{Float64, 12, 12}, Vector{ComplexF64}),
+        PureFFT.apply_unnormalized!(PureFFT.RecursiveMixedRadixPlan{Float64, (12, 12, 12)}, Vector{ComplexF64}),
     )
 end
 

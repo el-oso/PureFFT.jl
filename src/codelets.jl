@@ -317,6 +317,66 @@ Float64); a final idempotent overlapping vector covers a `width` not divisible b
     end
 end
 
+"""
+    _dft_codelet_soa_batched_tw!(outr, outi, xr, xi, twr, twi, width, Val(R), Val(S))
+
+Like [`_dft_codelet_soa_batched!`](@ref) but multiplies each output by a per-element twiddle
+(`twr`/`twi`, same `[k*width+t]` layout as the output) on store — fusing the four-step / mixed-radix
+twiddle pass into the codelet so there is no separate full-array twiddle pass. The per-pass engine of
+[`RecursiveMixedRadixPlan`](@ref).
+"""
+@generated function _dft_codelet_soa_batched_tw!(outr, outi, xr, xi, twr, twi, width::Int, ::Val{R}, ::Val{S}) where {R, S}
+    T = eltype(xr)
+    W = 64 ÷ sizeof(T)
+    es = sizeof(T)
+    vb = Any[]
+    vr = Vector{Any}(undef, R); vi = Vector{Any}(undef, R)
+    for j in 0:(R - 1)
+        a = Symbol("vinr", j); b = Symbol("vini", j)
+        vr[j + 1] = a; vi[j + 1] = b
+        push!(vb, :(@inbounds $a = vload(Vec{$W, $T}, pr + (($j * width + b) * $es))))
+        push!(vb, :(@inbounds $b = vload(Vec{$W, $T}, pii + (($j * width + b) * $es))))
+    end
+    vor, voi = _gen_dft_soa_mixed!(vb, vr, vi, R, S, T, Ref(0), "v")
+    for k in 0:(R - 1)
+        tr = Symbol("vtr", k); ti = Symbol("vti", k)
+        push!(vb, :(@inbounds $tr = vload(Vec{$W, $T}, ptr + (($k * width + b) * $es))))
+        push!(vb, :(@inbounds $ti = vload(Vec{$W, $T}, pti + (($k * width + b) * $es))))
+        push!(vb, :(@inbounds vstore($(vor[k + 1]) * $tr - $(voi[k + 1]) * $ti, por + (($k * width + b) * $es))))
+        push!(vb, :(@inbounds vstore($(vor[k + 1]) * $ti + $(voi[k + 1]) * $tr, poi + (($k * width + b) * $es))))
+    end
+    sb = Any[]
+    sr = Vector{Any}(undef, R); si = Vector{Any}(undef, R)
+    for j in 0:(R - 1)
+        a = Symbol("sinr", j); b = Symbol("sini", j)
+        sr[j + 1] = a; si[j + 1] = b
+        push!(sb, :(@inbounds $a = xr[$j * width + t + 1]))
+        push!(sb, :(@inbounds $b = xi[$j * width + t + 1]))
+    end
+    sor, soi = _gen_dft_soa_mixed!(sb, sr, si, R, S, T, Ref(0), "s")
+    for k in 0:(R - 1)
+        push!(sb, :(@inbounds wr = twr[$k * width + t + 1]))
+        push!(sb, :(@inbounds wi = twi[$k * width + t + 1]))
+        push!(sb, :(@inbounds outr[$k * width + t + 1] = $(sor[k + 1]) * wr - $(soi[k + 1]) * wi))
+        push!(sb, :(@inbounds outi[$k * width + t + 1] = $(sor[k + 1]) * wi + $(soi[k + 1]) * wr))
+    end
+    quote
+        GC.@preserve xr xi outr outi twr twi begin
+            pr = pointer(xr); pii = pointer(xi); por = pointer(outr); poi = pointer(outi)
+            ptr = pointer(twr); pti = pointer(twi)
+            b = 0
+            while b + $W <= width
+                $(vb...)
+                b += $W
+            end
+        end
+        @inbounds for t in (width - (width % $W)):(width - 1)
+            $(sb...)
+        end
+        return nothing
+    end
+end
+
 # --- SIMD register-tiled SoA transpose (the four-step's reorder) -----------------------------
 # The naive scalar strided transpose was the four-step's dominant overhead (~3μs at n=5760). This
 # does it in 8×8 register tiles (contiguous SIMD loads/stores + an in-register 8×8 transpose), with

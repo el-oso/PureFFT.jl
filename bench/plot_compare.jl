@@ -134,7 +134,7 @@ nq, q_fftw, q_rust, q_pure = run_benchmarks(nonpow2_sizes())
 p3 = plot(;
     xlabel = "Transform size N (non-power-of-two)",
     ylabel = "GFLOP/s (nominal 5·N·log₂N)",
-    title = "FFT throughput on non-power-of-two (smooth composite) sizes\n(Zen 5, single-thread, ComplexF64; PureFFT uses the four-step / codelet path)",
+    title = "FFT throughput on non-power-of-two (smooth composite) sizes\n(Zen 5, single-thread, ComplexF64; PureFFT uses the recursive mixed-radix path)",
     xscale = :log2,
     xticks = (tickvals, ticklabels),
     xrotation = 45,
@@ -145,7 +145,7 @@ p3 = plot(;
 )
 plot!(p3, nq, gflops.(nq, q_fftw); label = LABELS.fftw, color = COLORS.fftw, linewidth = 2, marker = :circle, markersize = 4)
 plot!(p3, nq, gflops.(nq, q_rust); label = LABELS.rust, color = COLORS.rust, linewidth = 2, marker = :circle, markersize = 4)
-plot!(p3, nq, gflops.(nq, q_pure); label = "PureFFT :fast (four-step ≤16384, else Bluestein)", color = COLORS.pure, linewidth = 2, marker = :circle, markersize = 4)
+plot!(p3, nq, gflops.(nq, q_pure); label = "PureFFT :fast (recursive mixed-radix)", color = COLORS.pure, linewidth = 2, marker = :circle, markersize = 4)
 savefig(p3, joinpath(assets, "comparison_nonpow2.png"))
 
 println("\nSaved: $(joinpath(assets, "comparison.png"))")

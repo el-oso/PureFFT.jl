@@ -82,6 +82,35 @@ function _best_foursplit_plan(::Type{Complex{T}}, n::Int; inverse::Bool) where {
     return best
 end
 
+# A few balanced small-factor factorizations to try for the recursive mixed-radix plan.
+function _recursive_candidates(n::Int)
+    cands = Vector{Int}[]
+    for maxf in (16, 22, 30)
+        f = _recursive_factors(n; maxf = maxf)
+        (isnothing(f) || length(f) < 2 || f in cands) && continue
+        push!(cands, f)
+    end
+    return cands
+end
+
+# Fastest smooth-composite plan: the autotuned 2-factor four-step vs a few recursive multi-factor
+# factorizations. The recursive path wins for large n (where the four-step needs huge, register-
+# spilling codelets, or has no valid split and would fall to Bluestein); the four-step wins for
+# smaller n. Times them and keeps the fastest. Returns nothing if neither applies.
+function _best_smooth_plan(::Type{Complex{T}}, n::Int; inverse::Bool) where {T}
+    y = randn(Complex{T}, n)
+    best = _best_foursplit_plan(Complex{T}, n; inverse)
+    bt = isnothing(best) ? Inf : _besttime(best, y)
+    for facs in _recursive_candidates(n)
+        p = RecursiveMixedRadixPlan(Complex{T}, facs; inverse)
+        t = _besttime(p, y)
+        if t < bt
+            bt = t; best = p
+        end
+    end
+    return best
+end
+
 """
     autoplan(Complex{T}, n; inverse=false) -> AbstractFFTPlan
 
@@ -100,8 +129,8 @@ function autoplan(::Type{Complex{T}}, n::Integer; inverse::Bool = false) where {
         if ni >= RADER_MIN_P && _max_prime_factor(ni) == ni && _max_prime_factor(ni - 1) <= RADER_MAX_PM1_PRIME
             return RaderPlan(Complex{T}, ni; inverse)
         end
-        fsp = _best_foursplit_plan(Complex{T}, ni; inverse)   # smooth composite → autotuned four-step
-        isnothing(fsp) || return fsp
+        sp = _best_smooth_plan(Complex{T}, ni; inverse)       # smooth composite → fastest of four-step / recursive
+        isnothing(sp) || return sp
         return BluesteinPlan(Complex{T}, n; inverse)          # large prime factor → chirp-Z
     end
     # candidate kernels (all power-of-two); time each on a real buffer, keep the fastest.
