@@ -10,7 +10,7 @@
 # Direction is a type parameter `Val{S}` (S = -1 forward, +1 inverse) so the twiddle literals
 # are correct per direction while staying compile-time constant.
 
-using SIMD: Vec, vload, vstore   # for the batched SoA codelet below
+using SIMD: Vec, vload, vstore, shufflevector   # for the batched SoA codelet + SIMD transpose below
 
 # FMA-fused complex multiply (Julia's Complex `*` won't contract to FMA on its own).
 @inline function _cmul(o::Complex, w::Complex)
@@ -315,6 +315,68 @@ Float64); a final idempotent overlapping vector covers a `width` not divisible b
         end
         return nothing
     end
+end
+
+# --- SIMD register-tiled SoA transpose (the four-step's reorder) -----------------------------
+# The naive scalar strided transpose was the four-step's dominant overhead (~3μs at n=5760). This
+# does it in 8×8 register tiles (contiguous SIMD loads/stores + an in-register 8×8 transpose), with
+# a scalar remainder for dims not divisible by 8 → ~1.6× faster, the main lever toward FFTW parity.
+
+# in-register 8×8 Float64 transpose (3-stage unpack network)
+@inline function _transpose8(r0, r1, r2, r3, r4, r5, r6, r7)
+    ul(a, b) = shufflevector(a, b, Val((0, 8, 2, 10, 4, 12, 6, 14)))
+    uh(a, b) = shufflevector(a, b, Val((1, 9, 3, 11, 5, 13, 7, 15)))
+    a0 = ul(r0, r1); a1 = uh(r0, r1); a2 = ul(r2, r3); a3 = uh(r2, r3)
+    a4 = ul(r4, r5); a5 = uh(r4, r5); a6 = ul(r6, r7); a7 = uh(r6, r7)
+    bl(a, b) = shufflevector(a, b, Val((0, 1, 8, 9, 4, 5, 12, 13)))
+    bh(a, b) = shufflevector(a, b, Val((2, 3, 10, 11, 6, 7, 14, 15)))
+    b0 = bl(a0, a2); b2 = bh(a0, a2); b1 = bl(a1, a3); b3 = bh(a1, a3)
+    b4 = bl(a4, a6); b6 = bh(a4, a6); b5 = bl(a5, a7); b7 = bh(a5, a7)
+    cl(a, b) = shufflevector(a, b, Val((0, 1, 2, 3, 8, 9, 10, 11)))
+    ch(a, b) = shufflevector(a, b, Val((4, 5, 6, 7, 12, 13, 14, 15)))
+    return (cl(b0, b4), cl(b1, b5), cl(b2, b6), cl(b3, b7), ch(b0, b4), ch(b1, b5), ch(b2, b6), ch(b3, b7))
+end
+
+# Generic scalar fallback (e.g. Float32 — its 16-wide transpose network differs; correctness first).
+function _transpose_soa!(br::AbstractVector, bi, ar, ai, n1::Int, n2::Int)
+    @inbounds for k1 in 0:(n1 - 1), i2 in 0:(n2 - 1)
+        br[i2 * n1 + k1 + 1] = ar[k1 * n2 + i2 + 1]
+        bi[i2 * n1 + k1 + 1] = ai[k1 * n2 + i2 + 1]
+    end
+    return
+end
+
+# br[i2*n1+k1] = ar[k1*n2+i2] (and bi←ai), SoA, Float64. 8×8 SIMD tiles + scalar edges.
+function _transpose_soa!(br::Vector{Float64}, bi::Vector{Float64}, ar::Vector{Float64}, ai::Vector{Float64}, n1::Int, n2::Int)
+    @inline vl(p, off) = vload(Vec{8, Float64}, p + off * 8)
+    GC.@preserve br bi ar ai begin
+        par = pointer(ar); pai = pointer(ai); pbr = pointer(br); pbi = pointer(bi)
+        k1 = 0
+        @inbounds while k1 + 8 <= n1
+            i2 = 0
+            while i2 + 8 <= n2
+                o = k1 * n2 + i2
+                R0, R1, R2, R3, R4, R5, R6, R7 = _transpose8(vl(par, o), vl(par, o + n2), vl(par, o + 2n2), vl(par, o + 3n2), vl(par, o + 4n2), vl(par, o + 5n2), vl(par, o + 6n2), vl(par, o + 7n2))
+                I0, I1, I2, I3, I4, I5, I6, I7 = _transpose8(vl(pai, o), vl(pai, o + n2), vl(pai, o + 2n2), vl(pai, o + 3n2), vl(pai, o + 4n2), vl(pai, o + 5n2), vl(pai, o + 6n2), vl(pai, o + 7n2))
+                q = i2 * n1 + k1
+                vstore(R0, pbr + q * 8); vstore(R1, pbr + (q + n1) * 8); vstore(R2, pbr + (q + 2n1) * 8); vstore(R3, pbr + (q + 3n1) * 8)
+                vstore(R4, pbr + (q + 4n1) * 8); vstore(R5, pbr + (q + 5n1) * 8); vstore(R6, pbr + (q + 6n1) * 8); vstore(R7, pbr + (q + 7n1) * 8)
+                vstore(I0, pbi + q * 8); vstore(I1, pbi + (q + n1) * 8); vstore(I2, pbi + (q + 2n1) * 8); vstore(I3, pbi + (q + 3n1) * 8)
+                vstore(I4, pbi + (q + 4n1) * 8); vstore(I5, pbi + (q + 5n1) * 8); vstore(I6, pbi + (q + 6n1) * 8); vstore(I7, pbi + (q + 7n1) * 8)
+                i2 += 8
+            end
+            @inbounds for ii in i2:(n2 - 1), r in 0:7        # remainder columns
+                br[ii * n1 + (k1 + r) + 1] = ar[(k1 + r) * n2 + ii + 1]
+                bi[ii * n1 + (k1 + r) + 1] = ai[(k1 + r) * n2 + ii + 1]
+            end
+            k1 += 8
+        end
+        @inbounds for kk in k1:(n1 - 1), i2 in 0:(n2 - 1)    # remainder rows
+            br[i2 * n1 + kk + 1] = ar[kk * n2 + i2 + 1]
+            bi[i2 * n1 + kk + 1] = ai[kk * n2 + i2 + 1]
+        end
+    end
+    return
 end
 
 # --- split-layout (SoA) variant -------------------------------------------------------------

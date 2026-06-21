@@ -56,22 +56,20 @@ plan_inverse(p::FourStepCodeletPlan)::Bool = p.inverse
 function apply_unnormalized!(p::FourStepCodeletPlan{T, N1, N2}, x::AbstractVector{Complex{T}}) where {T, N1, N2}
     n = N1 * N2
     sr = p.sr; si = p.si; ar = p.ar; ai = p.ai; br = p.br; bi = p.bi
-    @inbounds for i in 1:n          # split AoS → SoA
+    @inbounds @simd ivdep for i in 1:n          # split AoS → SoA
         sr[i] = real(x[i]); si[i] = imag(x[i])
     end
     V = p.inverse ? Val(1) : Val(-1)
     _dft_codelet_soa_batched!(ar, ai, sr, si, N2, Val(N1), V)            # pass 1: size-N1, width N2
-    @inbounds for idx in 1:n        # twiddle by W_n^{i2·k1}
-        a = ar[idx]; b = ai[idx]; wr = p.twr[idx]; wi = p.twi[idx]
+    twr = p.twr; twi = p.twi
+    @inbounds @simd ivdep for idx in 1:n        # twiddle by W_n^{i2·k1}
+        a = ar[idx]; b = ai[idx]; wr = twr[idx]; wi = twi[idx]
         ar[idx] = a * wr - b * wi
         ai[idx] = a * wi + b * wr
     end
-    @inbounds for k1 in 0:(N1 - 1), i2 in 0:(N2 - 1)   # transpose [k1*N2+i2] → [i2*N1+k1]
-        br[i2 * N1 + k1 + 1] = ar[k1 * N2 + i2 + 1]
-        bi[i2 * N1 + k1 + 1] = ai[k1 * N2 + i2 + 1]
-    end
+    _transpose_soa!(br, bi, ar, ai, N1, N2)   # SIMD register-tiled transpose [k1*N2+i2]→[i2*N1+k1]
     _dft_codelet_soa_batched!(sr, si, br, bi, N1, Val(N2), V)            # pass 2: size-N2, width N1
-    @inbounds for i in 1:n          # merge SoA → AoS (natural order)
+    @inbounds @simd ivdep for i in 1:n          # merge SoA → AoS (natural order)
         x[i] = Complex{T}(sr[i], si[i])
     end
     return x

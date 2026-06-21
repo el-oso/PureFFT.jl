@@ -145,7 +145,7 @@ p3 = plot(;
 )
 plot!(p3, nq, gflops.(nq, q_fftw); label = LABELS.fftw, color = COLORS.fftw, linewidth = 2, marker = :circle, markersize = 4)
 plot!(p3, nq, gflops.(nq, q_rust); label = LABELS.rust, color = COLORS.rust, linewidth = 2, marker = :circle, markersize = 4)
-plot!(p3, nq, gflops.(nq, q_pure); label = "PureFFT :fast (four-step ≤4096, else Bluestein)", color = COLORS.pure, linewidth = 2, marker = :circle, markersize = 4)
+plot!(p3, nq, gflops.(nq, q_pure); label = "PureFFT :fast (four-step ≤16384, else Bluestein)", color = COLORS.pure, linewidth = 2, marker = :circle, markersize = 4)
 savefig(p3, joinpath(assets, "comparison_nonpow2.png"))
 
 println("\nSaved: $(joinpath(assets, "comparison.png"))")
