@@ -29,7 +29,7 @@ end
 end
 
 # ---- column-butterfly + transpose passes (R=4,5; even M; per-FFT at offset `o`) ----
-@inline function _colbf4!(buf, o, M, tw, rot)
+@inline function _colbf4!(buf, o, ::Val{M}, tw, rot) where {M}
     @inbounds for c in 0:(M ÷ 2 - 1)
         ib = o + 2c
         r = avx_column_butterfly4(avx_load_complex(buf, ib), avx_load_complex(buf, ib + M), avx_load_complex(buf, ib + 2M), avx_load_complex(buf, ib + 3M), rot)
@@ -39,14 +39,14 @@ end
         avx_store_complex!(buf, ib + 3M, avx_mul_complex(tw[c * 3 + 3], r[4]))
     end
 end
-@inline function _trans4!(out, oo, buf, o, M)
+@inline function _trans4!(out, oo, buf, o, ::Val{M}) where {M}
     @inbounds for c in 0:(M ÷ 2 - 1)
         ib = o + 2c; ob = oo + 8c
         t = avx_transpose4_packed(avx_load_complex(buf, ib), avx_load_complex(buf, ib + M), avx_load_complex(buf, ib + 2M), avx_load_complex(buf, ib + 3M))
         avx_store_complex!(out, ob, t[1]); avx_store_complex!(out, ob + 2, t[2]); avx_store_complex!(out, ob + 4, t[3]); avx_store_complex!(out, ob + 6, t[4])
     end
 end
-@inline function _colbf5!(buf, o, M, tw, t0, t1)
+@inline function _colbf5!(buf, o, ::Val{M}, tw, t0, t1) where {M}
     @inbounds for c in 0:(M ÷ 2 - 1)
         ib = o + 2c
         r = avx_column_butterfly5(avx_load_complex(buf, ib), avx_load_complex(buf, ib + M), avx_load_complex(buf, ib + 2M), avx_load_complex(buf, ib + 3M), avx_load_complex(buf, ib + 4M), t0, t1)
@@ -57,7 +57,7 @@ end
         avx_store_complex!(buf, ib + 4M, avx_mul_complex(tw[c * 4 + 4], r[5]))
     end
 end
-@inline function _trans5!(out, oo, buf, o, M)
+@inline function _trans5!(out, oo, buf, o, ::Val{M}) where {M}
     @inbounds for c in 0:(M ÷ 2 - 1)
         ib = o + 2c; ob = oo + 10c
         t = avx_transpose5_packed(avx_load_complex(buf, ib), avx_load_complex(buf, ib + M), avx_load_complex(buf, ib + 2M), avx_load_complex(buf, ib + 3M), avx_load_complex(buf, ib + 4M))
@@ -82,15 +82,15 @@ function MR4(inner::Kernel, fwd::Bool)
 end
 @inline function proc_ip!(k::MR4{M}, buf, scrs, lvl) where {M}
     n = 4M; cnt = length(buf) ÷ n; s = scrs[lvl]               # distinct per-level scratch
-    @inbounds for f in 0:(cnt - 1); _colbf4!(buf, f * n, M, k.tw, k.rot); end
+    @inbounds for f in 0:(cnt - 1); _colbf4!(buf, f * n, Val(M), k.tw, k.rot); end
     proc_oop!(k.inner, s, buf, scrs, lvl + 1)                  # inner: buf→s
-    @inbounds for f in 0:(cnt - 1); _trans4!(buf, f * n, s, f * n, M); end
+    @inbounds for f in 0:(cnt - 1); _trans4!(buf, f * n, s, f * n, Val(M)); end
 end
 @inline function proc_oop!(k::MR4{M}, out, inp, scrs, lvl) where {M}
     n = 4M; cnt = length(inp) ÷ n
-    @inbounds for f in 0:(cnt - 1); _colbf4!(inp, f * n, M, k.tw, k.rot); end
+    @inbounds for f in 0:(cnt - 1); _colbf4!(inp, f * n, Val(M), k.tw, k.rot); end
     proc_ip!(k.inner, inp, scrs, lvl)
-    @inbounds for f in 0:(cnt - 1); _trans4!(out, f * n, inp, f * n, M); end
+    @inbounds for f in 0:(cnt - 1); _trans4!(out, f * n, inp, f * n, Val(M)); end
 end
 
 # ---- MixedRadix5 (R=5) ----
@@ -105,15 +105,15 @@ function MR5(inner::Kernel, fwd::Bool)
 end
 @inline function proc_ip!(k::MR5{M}, buf, scrs, lvl) where {M}
     n = 5M; cnt = length(buf) ÷ n; s = scrs[lvl]
-    @inbounds for f in 0:(cnt - 1); _colbf5!(buf, f * n, M, k.tw, k.t0, k.t1); end
+    @inbounds for f in 0:(cnt - 1); _colbf5!(buf, f * n, Val(M), k.tw, k.t0, k.t1); end
     proc_oop!(k.inner, s, buf, scrs, lvl + 1)
-    @inbounds for f in 0:(cnt - 1); _trans5!(buf, f * n, s, f * n, M); end
+    @inbounds for f in 0:(cnt - 1); _trans5!(buf, f * n, s, f * n, Val(M)); end
 end
 @inline function proc_oop!(k::MR5{M}, out, inp, scrs, lvl) where {M}
     n = 5M; cnt = length(inp) ÷ n
-    @inbounds for f in 0:(cnt - 1); _colbf5!(inp, f * n, M, k.tw, k.t0, k.t1); end
+    @inbounds for f in 0:(cnt - 1); _colbf5!(inp, f * n, Val(M), k.tw, k.t0, k.t1); end
     proc_ip!(k.inner, inp, scrs, lvl)
-    @inbounds for f in 0:(cnt - 1); _trans5!(out, f * n, inp, f * n, M); end
+    @inbounds for f in 0:(cnt - 1); _trans5!(out, f * n, inp, f * n, Val(M)); end
 end
 
 # ---- top-level: FFT(x) in place ----
