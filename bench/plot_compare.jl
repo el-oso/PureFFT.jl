@@ -115,9 +115,9 @@ p1 = plot(;
     dpi = 150,
     margin = 5Plots.mm,
 )
-plot!(p1, ns, gflops.(ns, t_fftw); yerror = gerr(ns, t_fftw, s_fftw), label = LABELS.fftw, color = COLORS.fftw, linewidth = 2, marker = :circle, markersize = 4)
-plot!(p1, ns, gflops.(ns, t_rust); yerror = gerr(ns, t_rust, s_rust), label = LABELS.rust, color = COLORS.rust, linewidth = 2, marker = :circle, markersize = 4)
-plot!(p1, ns, gflops.(ns, t_pure); yerror = gerr(ns, t_pure, s_pure), label = LABELS.pure, color = COLORS.pure, linewidth = 2, marker = :circle, markersize = 4)
+plot!(p1, ns, gflops.(ns, t_fftw); ribbon = gerr(ns, t_fftw, s_fftw), fillalpha = 0.18, label = LABELS.fftw, color = COLORS.fftw, linewidth = 2, marker = :circle, markersize = 4)
+plot!(p1, ns, gflops.(ns, t_rust); ribbon = gerr(ns, t_rust, s_rust), fillalpha = 0.18, label = LABELS.rust, color = COLORS.rust, linewidth = 2, marker = :circle, markersize = 4)
+plot!(p1, ns, gflops.(ns, t_pure); ribbon = gerr(ns, t_pure, s_pure), fillalpha = 0.18, label = LABELS.pure, color = COLORS.pure, linewidth = 2, marker = :circle, markersize = 4)
 savefig(p1, joinpath(assets, "comparison.png"))
 
 # Runtime normalized to FFTW: FFTW is the flat 1.0 baseline; a curve at 1.2 means 20 % slower
@@ -155,9 +155,9 @@ p3 = plot(;
     dpi = 150,
     margin = 5Plots.mm,
 )
-plot!(p3, nq, gflops.(nq, q_fftw); yerror = gerr(nq, q_fftw, qs_fftw), label = LABELS.fftw, color = COLORS.fftw, linewidth = 2, marker = :circle, markersize = 4)
-plot!(p3, nq, gflops.(nq, q_rust); yerror = gerr(nq, q_rust, qs_rust), label = LABELS.rust, color = COLORS.rust, linewidth = 2, marker = :circle, markersize = 4)
-plot!(p3, nq, gflops.(nq, q_pure); yerror = gerr(nq, q_pure, qs_pure), label = "PureFFT :fast (mixed-radix)", color = COLORS.pure, linewidth = 2, marker = :circle, markersize = 4)
+plot!(p3, nq, gflops.(nq, q_fftw); ribbon = gerr(nq, q_fftw, qs_fftw), fillalpha = 0.18, label = LABELS.fftw, color = COLORS.fftw, linewidth = 2, marker = :circle, markersize = 4)
+plot!(p3, nq, gflops.(nq, q_rust); ribbon = gerr(nq, q_rust, qs_rust), fillalpha = 0.18, label = LABELS.rust, color = COLORS.rust, linewidth = 2, marker = :circle, markersize = 4)
+plot!(p3, nq, gflops.(nq, q_pure); ribbon = gerr(nq, q_pure, qs_pure), fillalpha = 0.18, label = "PureFFT :fast (mixed-radix)", color = COLORS.pure, linewidth = 2, marker = :circle, markersize = 4)
 savefig(p3, joinpath(assets, "comparison_nonpow2.png"))
 
 println("\nSaved: $(joinpath(assets, "comparison.png"))")
