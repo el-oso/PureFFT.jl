@@ -89,6 +89,7 @@ end
 # divisible by CPV=4). Returns nothing for any other size. b radix-12 steps consume the 3s; a radix-8
 # steps consume the leftover 2s after the base (2^6) and the 12s (2^2 each).
 function plan_tree_w8(n::Int, fwd::Bool = true)
+    _HAS_AVX512 || return nothing                           # no real AVX-512 ⇒ don't build/time a W=8 tree
     v2 = 0; t = n; while t % 2 == 0; t ÷= 2; v2 += 1; end
     v3 = 0; while t % 3 == 0; t ÷= 3; v3 += 1; end
     t == 1 || return nothing                               # not 2·3-smooth

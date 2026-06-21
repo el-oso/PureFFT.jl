@@ -20,5 +20,5 @@ StrictMode = {url = "https://github.com/el-oso/StrictMode.jl", rev = "master"}
 
 [preferences.StrictMode]
 checks_enabled = true
-analysis = "full"
+analysis = "fast"   # whole-package sweep → fast (return-type + alloc); rigorous JET pass is per-kernel in test/
 fail_mode = "error"
