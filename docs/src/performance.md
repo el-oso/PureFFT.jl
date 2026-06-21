@@ -322,11 +322,21 @@ RustFFT is AVX2-only (256-bit, 2 complex/vector), so a natural idea is to run th
   `unpacklo/hi` don't compose across 128-bit lanes), so a *full* Vec{8} FFT still needs W=8 transpose
   variants re-derived + partial-column handling.
 
-**Conclusion:** width-doubling the non-pow2 path is mostly-generic but the net full-FFT payoff is
-low-single-digit % (diluted by the shuffle bottleneck, the transpose re-derivation, and zero gain on
-memory-bound sizes). Worth it only if you want the genericity/future-proofing; the bigger lever would be
-an AVX-512-*native* redesign cutting shuffle count (e.g. `vpermt2pd` doing in one op what several 256-bit
+**Conclusion (PoC, cb8 alone):** width-doubling a single column-butterfly pass is mostly-generic but the
+per-pass payoff is low-single-digit % (diluted by the shuffle bottleneck). The bigger lever would be an
+AVX-512-*native* redesign cutting shuffle count (e.g. `vpermt2pd` doing in one op what several 256-bit
 shuffles do) — a research effort, not a port.
+
+**Update — the full W=8 path does better than the cb8-alone PoC suggested.** Built as the faithful W=8
+tree (`src/avxradix/width8.jl`: `B64W8`/`MR8W8`/`MR9W8`/`MR12W8` + W=8 transposes), same-tree W=8 beats
+W=4 **1.03–1.11×** and is at/above RustFFT parity (**0.96–1.07×**) across L1→L3 (768/9216/110592) — i.e.
+**also on the memory-bound size** (110592 = 1.11×), contradicting the PoC's "memory-bound ⇒ no gain". Two
+reasons the full path beats the cb8 PoC: (1) the *radix-12/9* column butterflies gain more at W=8 (≈1.20–
+1.25× — 3-heavy, more FMA per shuffle) than cb8 (≈1.03×); (2) an early version regressed badly at large n
+(9216 ≈ 0.72× W4) — that was **not** memory bandwidth but **runtime tuple indexing** in the store loops
+(`for k in 1:N; t[k]`, the CLAUDE.md rule-#1 trap); unrolling with `@nexprs` (literal indices) fixed it.
+So the net payoff is a real, consistent few-percent over W=4 across the size range — and W=8 is the routed
+default for the sizes it covers (`autoplan` times it). radix-9 stays just under rust (shuffle-bound floor).
 
 ## Summary table
 

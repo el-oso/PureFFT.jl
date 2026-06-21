@@ -21,10 +21,15 @@ Status + planned work. This is the canonical, checked-in roadmap (human- and age
 ## Open / planned
 
 ### AVX-512 (W=8) — extend the win beyond small compute-bound sizes
-- **Large / memory-bound regression** — W=8 regresses on large non-pow2 (memory-bandwidth-bound; 512-bit
-  helps compute, not bandwidth). Investigate whether it's fixable: cache-block the W=8 passes (the V8f
-  working set is 2× → blows L1/L2 sooner), and tune the W=8 keystone to the level of the production V4f
-  one (`@inline` depth, scratch reuse). It may be a fundamental floor — measure before investing.
+- **Large-size regression — RESOLVED (it was a codegen bug, not memory bandwidth).** The W=8 store loops
+  used runtime tuple indexing (`for k in 1:N; t[k]`), a CLAUDE.md rule-#1 violation that boxed/slowed the
+  larger sizes. Unrolling them with `@nexprs` (literal indices, matching the V4f kernels) eliminated it:
+  same-tree W=8 now beats W=4 **1.03–1.11×** and is at/above RustFFT parity (**0.96–1.07×**) across L1→L3
+  (768/9216/110592). The "memory-bandwidth-bound" hypothesis was wrong. Plus radix-9 at W=8 (`MR9W8`)
+  enables radix-9-dominant sizes (576/5184/…). Remaining W=8 items below.
+- **radix-9 below rust (~0.86×)** — radix-9 W=8 is correct + the best PureFFT option for low-2-count sizes
+  (576 beats FFTW), but stays under rust — the intrinsic radix-9 shuffle-bound floor (transpose9 = 2×
+  transpose4 + bridging shuffles). Only the `vpermt2pd` redesign (below) would lift it.
 - **5-smooth coverage** — the main comparison plots use 5-smooth sizes, which W=8 doesn't cover yet
   (needs `transpose5`/`transpose9` derived at W=8, like `transpose4/8/12` already are in
   `src/avxradix/avxport.jl`). Doing this lets the *main* plots show W=8, not just the 2·3-smooth demo
