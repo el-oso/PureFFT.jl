@@ -205,20 +205,26 @@ end
     end
 
     @testset "AVX-512 (W=8) path (AvxMixedRadixPlanW8)" begin
-        @test isnothing(PureFFT.AvxMixedRadixPlanW8(ComplexF64, 1080))  # has a 5 → not 2·3-smooth/W=8-clean
+        @test isnothing(PureFFT.AvxMixedRadixPlanW8(ComplexF64, 1080))  # 2^3·3^3·5: too few 2s for the Butterfly64 base
         @test isnothing(PureFFT.AvxMixedRadixPlanW8(ComplexF64, 144))   # too small for the Butterfly64 base
         @test isnothing(PureFFT.AvxMixedRadixPlanW8(ComplexF32, 768))   # Float64-only
-        for n in (768, 9216)                                            # = 2^(6+3a+2b)·3^b, W=8-clean
-            p = PureFFT.AvxMixedRadixPlanW8(ComplexF64, n)
-            @test p isa PureFFT.AvxMixedRadixPlan
-            x = randn(ComplexF64, n)
-            y = copy(x); pfft!(y, p)
-            @test relerr(y, fft(x)) < 1e-10
-            pii = PureFFT.AvxMixedRadixPlanW8(ComplexF64, n; inverse = true)
-            pfft!(y, pii)
-            @test relerr(y, x) < 1e-10
+        # W=8 plans are gated on real AVX-512 (`plan_tree_w8` returns nothing without it), so the
+        # hardware-specific correctness only runs where AVX-512 is present (skipped on a non-AVX-512 runner).
+        if isnothing(PureFFT.AvxMixedRadixPlanW8(ComplexF64, 768))
+            @info "AVX-512 not detected — W=8 plans gated off; skipping W=8 correctness"
+        else
+            for n in (768, 9216, 2880)                                  # radix-12 / radix-9 / radix-5 W=8-clean trees
+                p = PureFFT.AvxMixedRadixPlanW8(ComplexF64, n)
+                @test p isa PureFFT.AvxMixedRadixPlan
+                x = randn(ComplexF64, n)
+                y = copy(x); pfft!(y, p)
+                @test relerr(y, fft(x)) < 1e-10
+                pii = PureFFT.AvxMixedRadixPlanW8(ComplexF64, n; inverse = true)
+                pfft!(y, pii)
+                @test relerr(y, x) < 1e-10
+            end
+            @test_opt target_modules = (PureFFT,) PureFFT.apply_unnormalized!(PureFFT.AvxMixedRadixPlanW8(ComplexF64, 768), randn(ComplexF64, 768))
         end
-        @test_opt target_modules = (PureFFT,) PureFFT.apply_unnormalized!(PureFFT.AvxMixedRadixPlanW8(ComplexF64, 768), randn(ComplexF64, 768))
     end
 
     @testset "four-step hot path is dispatch-free" begin
