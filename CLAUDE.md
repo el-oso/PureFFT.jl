@@ -59,10 +59,11 @@ measurements are in `docs/src/performance.md`; this file is the must-follow summ
   NOT chase ≤5% per-radix opts against it — they're sub-noise (chunk-unroll and pre-dup twiddles both
   tested, both fail end-to-end). Pin CPU frequency first if you must. Isolated micro-benchmarks mislead —
   re-measure in the full kernel.
-- **AVX-512 (Vec{8}) does NOT help the non-pow2 mixed-radix** (Phase-8 finding, `docs/src/performance.md`
-  §16, evidence in `port/avx512_poc.jl`). It's shuffle/permute-bound and Zen5's 512-bit shuffle throughput
-  doesn't double → 1.0–1.07× vs Vec{4} (genuine zmm, not split). Only the FMA-heavy *pow2* path
-  (`radix4_avx.jl`) benefits from Vec{8}. Don't width-double the non-pow2 kernels.
+- **AVX-512 (Vec{8}) for non-pow2 = small, mostly-generic gain — not ~2×** (Phase-8, `docs/src/performance.md`
+  §16, evidence `port/avx512_poc.jl`). Measured ~1.03–1.04× compute-bound / ~1.0× memory-bound vs Vec{4}
+  (genuine zmm, not split): the kernels are shuffle/permute-bound and Zen5's 512-bit shuffle throughput
+  doesn't double. `cb4`/`cb8` + arithmetic ARE width-generic (cheap), but a full Vec{8} FFT also needs
+  width-specific W=8 transposes re-derived. Low payoff; pursue only for genericity/future-proofing.
 
 ## Standing rules
 
