@@ -1,18 +1,14 @@
-# Faithful mechanical port of RustFFT 6.4.1 src/avx/avx_vector.rs `AvxVector for __m256d`.
-#
-# __m256d  ≅  Vec{4,Float64}, lanes laid out [re0, im0, re1, im1] (2 interleaved complex).
-# Every function mirrors the exact Rust intrinsic, op-for-op (see the inline `// rust:` notes).
+# AVX2 complex-vector primitives. Vec{4,Float64} = one 256-bit register, lanes [re0, im0, re1, im1]
+# (2 interleaved complex). Each function maps to the exact x86 AVX intrinsic, op-for-op (named inline).
 # Width-generic later: these are written for the 4-lane (AVX2) vector; an 8-lane (AVX-512)
 # instantiation slots in behind the same names in a later phase.
-#
-# Standalone for now (developed/verified outside src/; moved into PureFFT after the parity gate).
 
 using SIMD: Vec, vload, vstore, shufflevector
 
 const V4f = Vec{4, Float64}
 const _NT4 = NTuple{4, VecElement{Float64}}
 
-# ---- fmaddsub / fmsubadd: exact x86 FMA-addsub intrinsics via llvmcall (rust: _mm256_fmaddsub_pd) ----
+# ---- fmaddsub / fmsubadd: exact x86 FMA-addsub intrinsics via llvmcall (_mm256_fmaddsub_pd) ----
 const _IR_MADDSUB = """
 declare <4 x double> @llvm.x86.fma.vfmaddsub.pd.256(<4 x double>, <4 x double>, <4 x double>)
 define <4 x double> @entry(<4 x double> %a, <4 x double> %b, <4 x double> %c) #0 {
@@ -27,18 +23,18 @@ const _IR_SUBADD = replace(_IR_MADDSUB, "vfmaddsub" => "vfmsubadd")
 @inline avx_fmsubadd(a::V4f, b::V4f, c::V4f) =
     Vec(Base.llvmcall((_IR_SUBADD, "entry"), _NT4, Tuple{_NT4, _NT4, _NT4}, a.data, b.data, c.data))
 
-# ---- basic arithmetic (rust: _mm256_{add,sub,mul,xor}_pd, _mm256_{fmadd,fnmadd}_pd) ----
+# ---- basic arithmetic (_mm256_{add,sub,mul,xor}_pd, _mm256_{fmadd,fnmadd}_pd) ----
 @inline avx_add(a, b) = a + b                                      # generic over vector width
 @inline avx_sub(a, b) = a - b
 @inline avx_mul(a, b) = a * b
 @inline avx_neg(a) = -a
-@inline avx_fmadd(a, b, c) = muladd(a, b, c)                       # rust fmadd:  a*b + c
-@inline avx_fnmadd(a, b, c) = muladd(-a, b, c)                     # rust fnmadd: -(a*b) + c
+@inline avx_fmadd(a, b, c) = muladd(a, b, c)                       # fmadd:  a*b + c
+@inline avx_fnmadd(a, b, c) = muladd(-a, b, c)                     # fnmadd: -(a*b) + c
 @inline function avx_xor(a::V4f, b::V4f)
     reinterpret(V4f, reinterpret(Vec{4, UInt64}, a) ⊻ reinterpret(Vec{4, UInt64}, b))
 end
 
-# ---- complex-layout shuffles (rust: _mm256_permute_pd / _mm256_permute2f128_pd / _mm256_movedup_pd) ----
+# ---- complex-layout shuffles (_mm256_permute_pd / _mm256_permute2f128_pd / _mm256_movedup_pd) ----
 @inline avx_swap_complex(s::V4f) = shufflevector(s, Val((1, 0, 3, 2)))                   # permute_pd 0x05
 @inline avx_dup_re(s::V4f) = shufflevector(s, Val((0, 0, 2, 2)))                         # movedup_pd
 @inline avx_dup_im(s::V4f) = shufflevector(s, Val((1, 1, 3, 3)))                         # permute_pd 0x0F
@@ -47,7 +43,7 @@ end
 @inline avx_unpacklo_complex(a::V4f, b::V4f) = shufflevector(a, b, Val((0, 1, 4, 5)))    # permute2f128 0x20
 @inline avx_unpackhi_complex(a::V4f, b::V4f) = shufflevector(a, b, Val((2, 3, 6, 7)))    # permute2f128 0x31
 
-# ---- complex multiply (rust mul_complex) ----
+# ---- complex multiply (mul_complex) ----
 @inline function avx_mul_complex(left::V4f, right::V4f)
     lre = avx_dup_re(left)
     lim = avx_dup_im(left)
@@ -55,14 +51,14 @@ end
     avx_fmaddsub(lre, right, avx_mul(lim, rsh))
 end
 
-# ---- rotation by 90° (rust make_rotation90 + rotate90) ----
+# ---- rotation by 90° (make_rotation90 + rotate90) ----
 # Forward  → broadcast Complex(-0.0, 0.0) → mask lanes [-0,0,-0,0]
 # Inverse  → broadcast Complex(0.0, -0.0) → mask lanes [0,-0,0,-0]
 const _ROT90_FWD = V4f((-0.0, 0.0, -0.0, 0.0))
 const _ROT90_INV = V4f((0.0, -0.0, 0.0, -0.0))
 @inline avx_rotate90(s, mask) = avx_swap_complex(avx_xor(s, mask))
 
-# ---- dual-width: __m128d ≅ Vec{2,Float64} = 1 complex (rust AvxVector for __m128d) ----
+# ---- dual-width: __m128d ≅ Vec{2,Float64} = 1 complex (AvxVector for __m128d) ----
 const V2f = Vec{2, Float64}
 @inline avx_swap_complex(s::V2f) = shufflevector(s, Val((1, 0)))                # _mm_permute_pd 0x1
 @inline function avx_xor(a::V2f, b::V2f)
@@ -71,17 +67,17 @@ end
 @inline avx_broadcast_complex2(re::Float64, im::Float64) = V2f((re, im))
 const _ROT90_FWD2 = V2f((-0.0, 0.0))
 const _ROT90_INV2 = V2f((0.0, -0.0))
-# column_butterfly2 (rust default impl): [a+b, a-b] — generic over width
+# column_butterfly2 (default impl): [a+b, a-b] — generic over width
 @inline avx_butterfly2(a, b) = (a + b, a - b)
 
-# lo/hi/merge (rust AvxVector256 lo/hi + AvxVector128 merge)
+# lo/hi/merge (AvxVector256 lo/hi + AvxVector128 merge)
 @inline avx_lo(v::V4f) = shufflevector(v, Val((0, 1)))     # low 128 bits  = complex 0
 @inline avx_hi(v::V4f) = shufflevector(v, Val((2, 3)))     # high 128 bits = complex 1
 @inline avx_merge(lo::V2f, hi::V2f) = shufflevector(lo, hi, Val((0, 1, 2, 3)))
 
 # transpose_2x2_f64 (avx64_utils): [unpacklo, unpackhi]
 @inline avx_transpose_2x2(a::V4f, b::V4f) = (avx_unpacklo_complex(a, b), avx_unpackhi_complex(a, b))
-# transpose_3x3_f64 (rust avx64_utils): dual-width — col 0 packed as V2f, cols 1-2 as V4f
+# transpose_3x3_f64 (avx64_utils): dual-width — col 0 packed as V2f, cols 1-2 as V4f
 @inline function avx_transpose_3x3(a1::V2f, a2::V2f, a3::V2f, b1::V4f, b2::V4f, b3::V4f)
     out0 = (a1, avx_lo(b1), avx_hi(b1))
     lt = avx_transpose_2x2(b2, b3)
@@ -89,7 +85,7 @@ const _ROT90_INV2 = V2f((0.0, -0.0))
     (out0, out1)
 end
 
-# partial (1-complex) load/store (rust load_partial1_complex / store_partial1_complex = _mm_loadu/storeu_pd)
+# partial (1-complex) load/store (load_partial1_complex / store_partial1_complex = _mm_loadu/storeu_pd)
 @inline function avx_load_partial1(x::AbstractVector{Complex{Float64}}, i::Int)
     GC.@preserve x vload(V2f, reinterpret(Ptr{Float64}, pointer(x)) + i * 16)
 end
@@ -97,7 +93,7 @@ end
     GC.@preserve x vstore(v, reinterpret(Ptr{Float64}, pointer(x)) + i * 16)
 end
 
-# ---- column butterflies (rust column_butterfly3 / column_butterfly6), width-generic ----
+# ---- column butterflies (column_butterfly3 / column_butterfly6), width-generic ----
 @inline function avx_column_butterfly3(r0, r1, r2, tw)
     mid1, mid2 = avx_butterfly2(r1, r2)
     output0 = avx_add(r0, mid1)
@@ -117,7 +113,7 @@ end
     (o0, o3, o4, o1, o2, o5)
 end
 
-# ---- mixed-radix twiddle chunk (rust make_mixedradix_twiddle_chunk: 2 complex per Vec{4}) ----
+# ---- mixed-radix twiddle chunk (make_mixedradix_twiddle_chunk: 2 complex per Vec{4}) ----
 @inline function avx_mixedradix_twiddle_chunk(x::Int, y::Int, len::Int, forward::Bool)
     t0r, t0i = compute_twiddle(y * x, len, forward)
     t1r, t1i = compute_twiddle(y * (x + 1), len, forward)
@@ -147,11 +143,11 @@ const _NT2 = NTuple{2, VecElement{Float64}}
     avx_fmaddsub(avx_dup_re(left), right, avx_mul(avx_dup_im(left), avx_swap_complex(right)))
 end
 
-# width-generic inverse-rotation mask (rust make_rotation90(Inverse) dispatches on vector type)
+# width-generic inverse-rotation mask (make_rotation90(Inverse) dispatches on vector type)
 @inline _rot90_inv(::V4f) = _ROT90_INV
 @inline _rot90_inv(::V2f) = _ROT90_INV2
 
-# ---- column_butterfly5 (rust), width-generic ----
+# ---- column_butterfly5, width-generic ----
 @inline function avx_column_butterfly5(r1, r2, r3, r4, r5, tw0, tw1)
     sum1, diff4 = avx_butterfly2(r2, r5)
     sum2, diff3 = avx_butterfly2(r3, r4)
@@ -174,7 +170,7 @@ end
     (output0, output1, output2, output3, output4)
 end
 
-# column_butterfly4 (rust): rotation = make_rotation90(FFT direction) — _ROT90_FWD for forward.
+# column_butterfly4: rotation = make_rotation90(FFT direction) — _ROT90_FWD for forward.
 @inline function avx_column_butterfly4(r1, r2, r3, r4, rotation)
     mid0, mid2 = avx_butterfly2(r1, r3)
     mid1, mid3 = avx_butterfly2(r2, r4)
@@ -183,13 +179,13 @@ end
     o2, o3 = avx_butterfly2(mid2, mid3_rot)
     (o0, o2, o1, o3)
 end
-# transpose4_packed (rust __m256d): unpack_complex pairs → [lo01, lo23, hi01, hi23]
+# transpose4_packed (__m256d): unpack_complex pairs → [lo01, lo23, hi01, hi23]
 @inline function avx_transpose4_packed(r1::V4f, r2::V4f, r3::V4f, r4::V4f)
     (avx_unpacklo_complex(r1, r2), avx_unpacklo_complex(r3, r4),
      avx_unpackhi_complex(r1, r2), avx_unpackhi_complex(r3, r4))
 end
 
-# ---- column_butterfly8 (rust 4x2 mixed radix) + transpose8 + bf8 twiddle helpers ----
+# ---- column_butterfly8 (4x2 mixed radix) + transpose8 + bf8 twiddle helpers ----
 const _HALF_ROOT2 = V4f((sqrt(0.5), sqrt(0.5), sqrt(0.5), sqrt(0.5)))
 @inline avx_bf8_tw1(x, rot) = avx_mul(_HALF_ROOT2, avx_add(avx_rotate90(x, rot), x))   # apply_butterfly8_twiddle1
 @inline avx_bf8_tw3(x, rot) = avx_mul(_HALF_ROOT2, avx_sub(avx_rotate90(x, rot), x))   # apply_butterfly8_twiddle3
@@ -205,27 +201,27 @@ const _HALF_ROOT2 = V4f((sqrt(0.5), sqrt(0.5), sqrt(0.5), sqrt(0.5)))
     o6, o7 = avx_butterfly2(m0[4], m1_4)
     (o0, o2, o4, o6, o1, o3, o5, o7)
 end
-# transpose8_packed (rust __m256d): two transpose4 + reorder
+# transpose8_packed (__m256d): two transpose4 + reorder
 @inline function avx_transpose8_packed(r1, r2, r3, r4, r5, r6, r7, r8)
     a = avx_transpose4_packed(r1, r2, r3, r4)
     b = avx_transpose4_packed(r5, r6, r7, r8)
     (a[1], a[2], b[1], b[2], a[3], a[4], b[3], b[4])
 end
-# transpose6_packed (rust __m256d): unpack_complex pairs → (u0,u2,u4,u1,u3,u5)
+# transpose6_packed (__m256d): unpack_complex pairs → (u0,u2,u4,u1,u3,u5)
 @inline avx_transpose6_packed(r0, r1, r2, r3, r4, r5) =
     (avx_unpacklo_complex(r0, r1), avx_unpacklo_complex(r2, r3), avx_unpacklo_complex(r4, r5),
      avx_unpackhi_complex(r0, r1), avx_unpackhi_complex(r2, r3), avx_unpackhi_complex(r4, r5))
-# transpose9_packed (rust __m256d): permute2f128 pattern (0x30 = (r8_lo, r0_hi))
+# transpose9_packed (__m256d): permute2f128 pattern (0x30 = (r8_lo, r0_hi))
 @inline avx_transpose9_packed(r0, r1, r2, r3, r4, r5, r6, r7, r8) =
     (avx_unpacklo_complex(r0, r1), avx_unpacklo_complex(r2, r3), avx_unpacklo_complex(r4, r5), avx_unpacklo_complex(r6, r7),
      shufflevector(r8, r0, Val((0, 1, 6, 7))),
      avx_unpackhi_complex(r1, r2), avx_unpackhi_complex(r3, r4), avx_unpackhi_complex(r5, r6), avx_unpackhi_complex(r7, r8))
-# transpose12_packed (rust __m256d): three transpose4 + reorder
+# transpose12_packed (__m256d): three transpose4 + reorder
 @inline function avx_transpose12_packed(r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11)
     a = avx_transpose4_packed(r0, r1, r2, r3); b = avx_transpose4_packed(r4, r5, r6, r7); c = avx_transpose4_packed(r8, r9, r10, r11)
     (a[1], a[2], b[1], b[2], c[1], c[2], a[3], a[4], b[3], b[4], c[3], c[4])
 end
-# column_butterfly12 (rust 4x3 good-thomas — NO twiddles between); bf3 = bf3 twiddle, rot = rotation
+# column_butterfly12 (4x3 good-thomas — NO twiddles between); bf3 = bf3 twiddle, rot = rotation
 @inline function avx_column_butterfly12(r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, bf3, rot)
     mid0 = avx_column_butterfly4(r0, r3, r6, r9, rot)
     mid1 = avx_column_butterfly4(r4, r7, r10, r1, rot)
@@ -236,7 +232,7 @@ end
     o3 = avx_column_butterfly3(mid0[4], mid1[4], mid2[4], bf3)
     (o0[1], o1[2], o2[3], o3[1], o0[2], o1[3], o2[1], o3[2], o0[3], o1[1], o2[2], o3[3])
 end
-# column_butterfly9 (rust 3x3 mixed radix); tw1=W9^1, tw2=W9^2, tw3=W9^4 (broadcast complex); bf3=bf3 twiddle
+# column_butterfly9 (3x3 mixed radix); tw1=W9^1, tw2=W9^2, tw3=W9^4 (broadcast complex); bf3=bf3 twiddle
 @inline function avx_column_butterfly9(r0, r1, r2, r3, r4, r5, r6, r7, r8, tw1, tw2, tw3, bf3)
     mid0 = avx_column_butterfly3(r0, r3, r6, bf3)
     mid1 = avx_column_butterfly3(r1, r4, r7, bf3)
@@ -249,9 +245,9 @@ end
     (o0[1], o1[1], o2[1], o0[2], o1[2], o2[2], o0[3], o1[3], o2[3])
 end
 
-# transpose5_packed (rust __m256d): note _mm256_blend_pd(a,b,0x03) = lanes 0,1 from b, 2,3 from a
+# transpose5_packed (__m256d): note _mm256_blend_pd(a,b,0x03) = lanes 0,1 from b, 2,3 from a
 @inline _blend03(a::V4f, b::V4f) = shufflevector(a, b, Val((4, 5, 2, 3)))
-# transpose3_packed (rust __m256d): unpacklo(r0,r1), blend_pd(r0,r2,0x03), unpackhi(r1,r2)
+# transpose3_packed (__m256d): unpacklo(r0,r1), blend_pd(r0,r2,0x03), unpackhi(r1,r2)
 @inline avx_transpose3_packed(r0::V4f, r1::V4f, r2::V4f) =
     (avx_unpacklo_complex(r0, r1), _blend03(r0, r2), avx_unpackhi_complex(r1, r2))
 @inline function avx_transpose5_packed(r1::V4f, r2::V4f, r3::V4f, r4::V4f, r5::V4f)
@@ -259,15 +255,15 @@ end
      avx_unpackhi_complex(r2, r3), avx_unpackhi_complex(r4, r5))
 end
 
-# ---- broadcast / twiddles (rust broadcast_complex_elements, twiddles::compute_twiddle) ----
+# ---- broadcast / twiddles (broadcast_complex_elements, twiddles::compute_twiddle) ----
 @inline avx_broadcast_complex(re::Float64, im::Float64) = V4f((re, im, re, im))
-# rust compute_twiddle: angle = -2π·index/len (Forward); Inverse negates the angle (conjugate).
+# compute_twiddle: angle = -2π·index/len (Forward); Inverse negates the angle (conjugate).
 @inline function compute_twiddle(index::Int, len::Int, forward::Bool)
     angle = (forward ? -2.0 : 2.0) * pi * index / len
     (cos(angle), sin(angle))
 end
 
-# ---- load / store 2 complex (rust load_complex / store_complex = loadu_pd / storeu_pd) ----
+# ---- load / store 2 complex (load_complex / store_complex = loadu_pd / storeu_pd) ----
 @inline function avx_load_complex(x::AbstractVector{Complex{Float64}}, i::Int)  # i: 0-based complex index
     GC.@preserve x vload(V4f, reinterpret(Ptr{Float64}, pointer(x)) + i * 16)
 end

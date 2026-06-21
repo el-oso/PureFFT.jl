@@ -1,7 +1,7 @@
-# Step 6A keystone: recursive inner-FFT composition (mirrors rustfft MixedRadix + inner Fft).
+# Step 6A keystone: recursive inner-FFT composition (mirrors MixedRadix + inner Fft).
 # Each kernel implements proc_ip!(k,buf,scr) (in-place) and proc_oop!(k,out,inp,scr) (out-of-place),
 # processing count = length(buf)/len(k) consecutive FFTs. MixedRadix.proc_ip! uses inner.proc_oop! and
-# vice-versa (the rustfft in-place/out-of-place alternation), so buf↔scr ping-pong; leaf butterflies
+# vice-versa (the in-place/out-of-place alternation), so buf↔scr ping-pong; leaf butterflies
 # need no scratch. Even len_per_row only here (no partial column) — odd handled in a later step.
 include(joinpath(@__DIR__, "kernels.jl"))
 using SIMD: Vec
@@ -107,7 +107,7 @@ end
     end
 end
 
-# ---- radix-8 passes (rust's "blazing fast" 8xn) ----
+# ---- radix-8 passes ("blazing fast" 8xn) ----
 @inline function _colbf8!(buf, o, ::Val{M}, tw, rot) where {M}
     @inbounds for c in 0:(M ÷ 2 - 1)
         ib = o + 2c
@@ -172,7 +172,7 @@ end
     end
 end
 
-# ---- radix-12 passes (rust's preferred fast radix) ----
+# ---- radix-12 passes (preferred fast radix) ----
 @inline function _colbf12!(buf, o, ::Val{M}, tw, bf3, rot) where {M}
     @inbounds for c in 0:(M ÷ 2 - 1)
         ib = o + 2c
@@ -271,7 +271,7 @@ end
     @inbounds for f in 0:(cnt - 1); _trans9!(out, f * n, inp, f * n, Val(M)); end
 end
 
-# ---- MixedRadix12 (R=12) — rust's preferred fast radix (good-thomas cb12) ----
+# ---- MixedRadix12 (R=12) — preferred fast radix (good-thomas cb12) ----
 struct MR12{M, I <: Kernel} <: Kernel
     inner::I; tw::Vector{V4f}; bf3::V4f; rot::V4f
 end
@@ -293,7 +293,7 @@ end
     @inbounds for f in 0:(cnt - 1); _trans12!(out, f * n, inp, f * n, Val(M)); end
 end
 
-# ---- MixedRadix8 (R=8) — rust's preferred fast radix ----
+# ---- MixedRadix8 (R=8) — preferred fast radix ----
 struct MR8{M, I <: Kernel} <: Kernel
     inner::I; tw::Vector{V4f}; rot::V4f
 end
@@ -324,7 +324,7 @@ function MR4(inner::Kernel, fwd::Bool)
     M = klen(inner)
     MR4{M, typeof(inner)}(inner, mr_twiddles(4, M, 4M, fwd), fwd ? _ROT90_FWD : _ROT90_INV)
 end
-@inline function proc_ip!(k::MR4{M}, buf, scr) where {M}                # ONE scratch (rustfft): reuse buf as workspace
+@inline function proc_ip!(k::MR4{M}, buf, scr) where {M}                # ONE scratch reused as workspace
     n = 4M; cnt = length(buf) ÷ n
     @inbounds for f in 0:(cnt - 1); _colbf4!(buf, f * n, Val(M), k.tw, k.rot); end
     proc_oop!(k.inner, scr, buf, scr)                                   # inner: buf→scr, scr also its scratch
@@ -359,7 +359,7 @@ end
     @inbounds for f in 0:(cnt - 1); _trans5!(out, f * n, inp, f * n, Val(M)); end
 end
 
-# ---- top-level: FFT(x) in place. ONE scratch buffer of size n (rustfft inplace_scratch_len). ----
+# ---- top-level: FFT(x) in place. ONE scratch buffer of size n (inplace_scratch_len). ----
 struct RPlan{K <: Kernel}; k::K; scr::Vector{ComplexF64}; end
 RPlan(k::Kernel) = RPlan(k, Vector{ComplexF64}(undef, klen(k)))
 function applyplan!(p::RPlan, x)

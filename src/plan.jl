@@ -38,7 +38,7 @@ Build a plan for length-`n` complex transforms. `variant` selects the kernel:
   * `:base`       — Stage 3 Base-Julia `@simd` staged radix-2 (power of two).
   * `:recursive`  — Stage 4 cache-oblivious recursive radix-2 with generated codelets (power of two).
   * `:soa`        — Stage 5 split-layout (SoA) recursive FFT (power of two); see [`SoAPlan`](@ref).
-  * `:radix4`     — faithful port of rustfft's Radix4 (power of two); see [`Radix4Plan`](@ref).
+  * `:radix4`     — the classic Radix4 (power of two); see [`Radix4Plan`](@ref).
   * `:fourstep`   — Stage 7 cache-blocked four-step (power of two, n ≥ 16); see [`FourStepPlan`](@ref).
   * `:bluestein`  — Stage 8 chirp-Z for arbitrary `n` (O(n log n) on primes); see [`BluesteinPlan`](@ref).
   * `:codelet`    — Stage 9 dynamically-generated mixed-radix straight-line kernel; see [`CodeletPlan`](@ref).

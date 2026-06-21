@@ -132,7 +132,7 @@ function autoplan(::Type{Complex{T}}, n::Integer; inverse::Bool = false) where {
             return RaderPlan(Complex{T}, ni; inverse)
         end
         sp = _best_smooth_plan(Complex{T}, ni; inverse)       # smooth composite → fastest of four-step / recursive
-        rp = RustFFTAvxPlan(Complex{T}, ni; inverse)          # faithful rust-port tree (nothing if unsupported)
+        rp = AvxMixedRadixPlan(Complex{T}, ni; inverse)          # AVX2 mixed-radix tree (nothing if unsupported)
         if !isnothing(rp)                                     # use it only when actually faster (no regression)
             isnothing(sp) && return rp
             y = randn(Complex{T}, ni)

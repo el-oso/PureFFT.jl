@@ -3,7 +3,7 @@
 # `_codelet!` emits, at COMPILE time, a fully-unrolled size-R DFT: every input is a local,
 # every twiddle a baked literal `Complex{T}` constant, every step an SSA assignment. LLVM then
 # keeps the whole transform in registers (no recursion, no loop, no twiddle-table loads, W=1
-# folded away) and FMA-fuses via `_cmul`. This is exactly what FFTW's `genfft` and rustfft's
+# folded away) and FMA-fuses via `_cmul`. This is exactly what FFTW's `genfft`
 # hand-written `Butterfly` structs provide; here it falls out of Julia metaprogramming — the
 # concrete demonstration that "does Julia need to improve? no, it has @generated".
 #
@@ -83,7 +83,7 @@ end
 # R = p·m, recurse to p DFT-m's over the stride-p subsequences, then combine with baked W_R^{ak}
 # twiddle literals. A prime leaf (p == R) is a direct R-point DFT. This is the genfft idea at
 # Julia compile time — PureFFT can synthesize a tailored unrolled kernel for any size at plan time,
-# covering cases (odd primes, prime powers) where RustFFT/FFTW fall back to generic mixed-radix.
+# covering cases (odd primes, prime powers) where typical FFT libraries fall back to generic mixed-radix.
 
 # smallest prime factor of R (R ≥ 2)
 function _smallest_prime_factor(R::Int)

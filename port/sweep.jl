@@ -1,5 +1,6 @@
-include("/home/el_oso/Documents/claude/PureFFT.jl/port/planner.jl")
+include(joinpath(@__DIR__, "..", "src", "avxradix", "planner.jl"))   # the AVX mixed-radix kernels + planner
 import FFTW; using Printf, Statistics
+seeded(n) = [Complex(((k * 2 + 1) % 17) / 17 - 0.5, ((k * 3 + 2) % 19) / 19 - 0.5) for k in 0:(n - 1)]
 const LIB=joinpath(pwd(),"bench","rustfft_compare","rust","target","release","librustfft_bench.so")
 rplan(n)=ccall((:rfft_plan,LIB),Ptr{Cvoid},(Csize_t,),n); rproc(h,d,n)=ccall((:rfft_process,LIB),Cvoid,(Ptr{Cvoid},Ptr{ComplexF64},Csize_t),h,d,n); rfree(h)=ccall((:rfft_free,LIB),Cvoid,(Ptr{Cvoid},),h)
 function measure(n, jp)

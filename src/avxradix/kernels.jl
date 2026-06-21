@@ -62,7 +62,7 @@ function butterfly36!(out, inp, base::Int, tw::NTuple{15, V4f}, tw3::V4f)  # out
     avx_store_complex!(out, base + 4, o2[1]); avx_store_complex!(out, base + 10, o2[2]); avx_store_complex!(out, base + 16, o2[3]); avx_store_complex!(out, base + 22, o2[4]); avx_store_complex!(out, base + 28, o2[5]); avx_store_complex!(out, base + 34, o2[6])
 end
 
-# ===== Butterfly64 (rust Butterfly64Avx64): 8x8, two-phase (col+twiddle+transpose, then row) =====
+# ===== Butterfly64: 8x8, two-phase (col+twiddle+transpose, then row) =====
 # twiddles: gen_butterfly_twiddles_separated_columns!(8,8) = 28 = [mixedradix_twiddle_chunk(cs*2, r, 64)
 # for cs in 0:3, r in 1:7], index [7cs + r].
 bf64_twiddles(fwd) = [avx_mixedradix_twiddle_chunk(cs * 2, r, 64, fwd) for cs in 0:3 for r in 1:7]
@@ -87,7 +87,7 @@ function butterfly64!(out, inp, scr, base::Int, tw::Vector{V4f}, rot::V4f)
     end
 end
 
-# ===== Butterfly9 (rust Butterfly9Avx64): 3x3, dual-width packed (col 0 partial V2f, cols 1-2 V4f) =====
+# ===== Butterfly9: 3x3, dual-width packed (col 0 partial V2f, cols 1-2 V4f) =====
 bf9_twiddles(fwd) = (avx_mixedradix_twiddle_chunk(1, 1, 9, fwd), avx_mixedradix_twiddle_chunk(1, 2, 9, fwd))
 function butterfly9!(out, inp, base::Int, tw::NTuple{2, V4f}, bf3::V4f, bf3lo::V2f)
     a1 = avx_load_partial1(inp, base + 0); a2 = avx_load_partial1(inp, base + 3); a3 = avx_load_partial1(inp, base + 6)
@@ -101,16 +101,3 @@ function butterfly9!(out, inp, base::Int, tw::NTuple{2, V4f}, bf3::V4f, bf3lo::V
     avx_store_partial1!(out, base + 0, o0[1]); avx_store_partial1!(out, base + 3, o0[2]); avx_store_partial1!(out, base + 6, o0[3])
     avx_store_complex!(out, base + 1, o1[1]); avx_store_complex!(out, base + 4, o1[2]); avx_store_complex!(out, base + 7, o1[3])
 end
-
-# ===== shared helpers =====
-seeded(n) = [Complex(((k * 2 + 1) % 17) / 17 - 0.5, ((k * 3 + 2) % 19) / 19 - 0.5) for k in 0:(n - 1)]
-function golden_fft(n)
-    for ln in eachline(joinpath(@__DIR__, "..", "bench", "rustfft_compare", "golden.txt"))
-        if startswith(ln, "F $n out")
-            bs = parse.(UInt64, split(ln)[4:end]; base = 16)
-            return [Complex(reinterpret(Float64, bs[2i - 1]), reinterpret(Float64, bs[2i])) for i in 1:n]
-        end
-    end
-    error("no golden for n=$n")
-end
-bitsof(v) = [(reinterpret(UInt64, real(z)), reinterpret(UInt64, imag(z))) for z in v]

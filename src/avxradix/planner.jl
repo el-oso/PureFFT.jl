@@ -1,5 +1,5 @@
-# Faithful port of rustfft avx_planner's radix-stack logic (plan_power12_power6 + plan_mixed_radix push
-# order). First cut: base = Butterfly36 (consumes 2^2·3^2); radixes from {3,4,5,6,8,9,12} (rust's
+# AVX mixed-radix planner: the radix-stack logic (plan_power12_power6 + the plan_mixed_radix push
+# order). First cut: base = Butterfly36 (consumes 2^2·3^2); radixes from {3,4,5,6,8,9,12} (the
 # 8/9/12/6 preference + 4/5/3 leftovers). Returns nothing for sizes needing unsupported bases/radixes
 # (16/2/7/11 or non-B36 base) → caller falls back to the existing path.
 include(joinpath(@__DIR__, "recursive.jl"))
@@ -12,7 +12,7 @@ function factor235(n::Int)
     (p2, p3, p5, m)
 end
 
-# rust plan_power12_power6: divide radix factors into 8^n·9^m·12^k·6^j, minimize j then maximize k
+# plan_power12_power6: divide radix factors into 8^n·9^m·12^k·6^j, minimize j then maximize k
 function plan_power12_power6(p2::Int, p3::Int)
     max12 = min(p2 ÷ 2, p3)
     req6 = Union{Int, Nothing}[nothing, nothing, nothing, nothing]   # req6[s+1] = largest power_twelve given 6^s
@@ -34,7 +34,7 @@ function plan_power12_power6(p2::Int, p3::Int)
     (pt, ps)
 end
 
-# rust plan_mixed_radix push order (innermost first). p2/p3/p5 = factors AFTER the base. nothing if unsupported.
+# plan_mixed_radix push order (innermost first). p2/p3/p5 = factors AFTER the base. nothing if unsupported.
 function plan_radixes(p2::Int, p3::Int, p5::Int)
     radixes = Int[]
     pt, ps = plan_power12_power6(p2, p3)

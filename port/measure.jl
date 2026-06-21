@@ -1,8 +1,9 @@
 # Rigorous parity measurement: rust (via ccall to librustfft_bench.so) vs the Julia keystone, measured
 # in the SAME process, INTERLEAVED per block (same thermal/frequency), warmed up, median+σ, core-pinned.
 # Run: taskset -c 2 julia -O3 --project=bench port/measure.jl
-include(joinpath(@__DIR__, "recursive.jl"))
+include(joinpath(@__DIR__, "..", "src", "avxradix", "planner.jl"))   # the AVX mixed-radix kernels + planner
 using Printf, Statistics
+seeded(n) = [Complex(((k * 2 + 1) % 17) / 17 - 0.5, ((k * 3 + 2) % 19) / 19 - 0.5) for k in 0:(n - 1)]
 
 const LIB = joinpath(@__DIR__, "..", "bench", "rustfft_compare", "rust", "target", "release", "librustfft_bench.so")
 rplan(n) = ccall((:rfft_plan, LIB), Ptr{Cvoid}, (Csize_t,), n)
