@@ -14,6 +14,8 @@ using MLStyle: @match
 import AbstractFFTs
 
 include("contracts.jl")
+include("rustport.jl")
+include("rustfft_avx_plan.jl")
 include("cpuinfo.jl")
 include("twiddles.jl")
 include("butterflies.jl")
