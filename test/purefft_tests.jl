@@ -173,16 +173,35 @@ end
         @test relerr(y, x) < tol(T)
     end
 
-    @testset "routes smooth composite >128 → four-step or recursive mixed-radix" begin
-        # autotuner picks the faster of FourStepCodeletPlan (2-factor) / RecursiveMixedRadixPlan
+    @testset "routes smooth composite >128 → four-step / recursive / faithful rust-port plan" begin
+        # autotuner picks the fastest of FourStepCodeletPlan (2-factor) / RecursiveMixedRadixPlan /
+        # AvxMixedRadixPlan (the faithful rust-port tree, used when its 2·3·5-smooth tree wins the timing).
         for n in (144, 900, 1000, 2520)
             p = plan_pfft(ComplexF64, n; variant = :fast)
-            @test p isa PureFFT.FourStepCodeletPlan || p isa PureFFT.RecursiveMixedRadixPlan
+            @test p isa PureFFT.FourStepCodeletPlan || p isa PureFFT.RecursiveMixedRadixPlan || p isa PureFFT.AvxMixedRadixPlan
         end
-        # large smooth composite (>16384, no valid four-step split) → recursive (no Bluestein cliff)
+        # large smooth composite (>16384, no valid four-step split) → recursive or rust-port (no Bluestein cliff)
         for n in (23040, 46080)
-            @test plan_pfft(ComplexF64, n; variant = :fast) isa PureFFT.RecursiveMixedRadixPlan
+            p = plan_pfft(ComplexF64, n; variant = :fast)
+            @test p isa PureFFT.RecursiveMixedRadixPlan || p isa PureFFT.AvxMixedRadixPlan
         end
+    end
+
+    @testset "faithful rust-port plan (AvxMixedRadixPlan)" begin
+        @test isnothing(PureFFT.AvxMixedRadixPlan(ComplexF64, 97))     # prime → outside coverage
+        @test isnothing(PureFFT.AvxMixedRadixPlan(ComplexF32, 1080))   # Float64-only port
+        for n in (720, 1080, 1440, 11520)
+            p = PureFFT.AvxMixedRadixPlan(ComplexF64, n)
+            @test p isa PureFFT.AvxMixedRadixPlan
+            x = randn(ComplexF64, n)
+            y = copy(x); pfft!(y, p)                                # forward (unnormalized) = fft
+            @test relerr(y, fft(x)) < 1e-10
+            pii = PureFFT.AvxMixedRadixPlan(ComplexF64, n; inverse = true)
+            pfft!(y, pii)                                           # normalized inverse → back to x
+            @test relerr(y, x) < 1e-10
+        end
+        x = randn(ComplexF64, 1080)                                 # hot path dispatch-free
+        @test_opt target_modules = (PureFFT,) PureFFT.apply_unnormalized!(PureFFT.AvxMixedRadixPlan(ComplexF64, 1080), x)
     end
 
     @testset "four-step hot path is dispatch-free" begin

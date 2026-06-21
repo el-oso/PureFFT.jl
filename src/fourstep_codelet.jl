@@ -6,7 +6,7 @@
 #   3. transpose n1×n2 → n2×n1
 #   4. size-n2 DFTs down the columns, batched over the n1 columns
 # Output lands in natural order. Both passes are the shuffle-free batched SoA codelet (the vector
-# rank), so this is FFTW/rustfft's mixed-radix-with-vectorized-butterflies approach — 2–4× over
+# rank), so this is FFTW's mixed-radix-with-vectorized-butterflies approach — 2–4× over
 # Bluestein on smooth sizes. Factors are encoded in the plan type so the codelets specialize.
 
 # Largest codelet size used as a four-step factor (bounds generated-code size) and the SIMD batch

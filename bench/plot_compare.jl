@@ -16,17 +16,17 @@
 #   julia --project=bench -e 'using Pkg; Pkg.add("Plots")'
 
 import FFTW, RustFFT, PureFFT
-using BenchmarkTools, Plots, Printf
+using BenchmarkTools, Plots, Printf, Statistics
 
 FFTW.set_num_threads(1)
 
 gflops(n, t) = 5 * n * log2(n) / t / 1.0e9
 
-# Per-point timing budget. We want ≥ SAMPLES measurements at each size for a stable minimum;
-# BenchmarkTools stops at whichever of SAMPLES / SECONDS comes first, so SECONDS is set high
+# Per-point timing budget. We want ≥ SAMPLES measurements at each size for a stable MEDIAN (+ a tight
+# sigma); BenchmarkTools stops at whichever of SAMPLES / SECONDS comes first, so SECONDS is set high
 # enough that even the largest size reaches the sample count.
-const SAMPLES = 1_000   # min-time stabilizes well before this; 1000 keeps regen fast (run on every push)
-const SECONDS = 30
+const SAMPLES = 300    # auto-evals averages each sample → tight median+σ with fewer samples
+const SECONDS = 4     # per-point cap; keeps full regen to a few minutes
 
 # Power-of-two sizes (PureFFT's design range).
 pow2_sizes() = [2^e for e in 6:18]
@@ -56,13 +56,17 @@ function run_benchmarks(sizes)
         pr = RustFFT.plan_fft!(copy(x); rustfft_checks = RustFFT.IgnoreArrayChecks())
         pp = PureFFT.plan_pfft(x; variant = :fast)
 
-        tm = @belapsed $pm * y setup = (y = copy($x)) evals = 1 samples = SAMPLES seconds = SECONDS
-        tr = @belapsed $pr * y setup = (y = copy($x)) evals = 1 samples = SAMPLES seconds = SECONDS
-        tp = @belapsed PureFFT.pfft!(y, $pp) setup = (y = copy($x)) evals = 1 samples = SAMPLES seconds = SECONDS
+        # MEDIAN time (not min): fairer + less noise-sensitive than min (which rewards lucky outliers).
+        # Report relative sigma too so we can confirm the distributions are tight + comparable.
+        bm = @benchmark $pm * y setup = (y = copy($x)) samples = SAMPLES seconds = SECONDS
+        br = @benchmark $pr * y setup = (y = copy($x)) samples = SAMPLES seconds = SECONDS
+        bp = @benchmark PureFFT.pfft!(y, $pp) setup = (y = copy($x)) samples = SAMPLES seconds = SECONDS
+        tm = median(bm).time / 1.0e9; tr = median(br).time / 1.0e9; tp = median(bp).time / 1.0e9
+        rσ(b) = 100 * std(b).time / median(b).time
 
         @printf(
-            "n = %-8d  FFTW %6.1f  RustFFT %6.1f  PureFFT %6.1f GFLOP/s\n",
-            n, gflops(n, tm), gflops(n, tr), gflops(n, tp),
+            "n = %-8d  FFTW %6.1f (σ%4.1f%%)  RustFFT %6.1f (σ%4.1f%%)  PureFFT %6.1f (σ%4.1f%%) GFLOP/s\n",
+            n, gflops(n, tm), rσ(bm), gflops(n, tr), rσ(br), gflops(n, tp), rσ(bp),
         )
 
         push!(ns, n)

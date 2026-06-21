@@ -1,9 +1,9 @@
-# Explicit-AVX Radix4 (variant :radix4avx) — the rustfft-AVX-matching path.
+# Explicit-AVX Radix4 (variant :radix4avx) — the hand-vectorized AVX path.
 #
 # Same Radix4 structure (cache-blocked transpose → digit-reversed base butterflies → Butterfly4
 # cross-passes), but the cross-pass is hand-vectorized with SIMD.jl: data stays AoS and the
 # complex multiply uses the interleaved trick (duplicate twiddle re/im, swap data re/im, FMA +
-# sign) — exactly rustfft's AVX butterfly. Measured ~1.21× over the `@simd ivdep` autovec cross.
+# sign) — a standard AVX butterfly. Measured ~1.21× over the `@simd ivdep` autovec cross.
 #
 # SIMD.jl is a thin VecElement/llvmcall wrapper; re-added (it was dropped when it LOST to autovec
 # on the memory-bound radix-2, but it WINS on the compute-dense radix-4 cross).
@@ -44,7 +44,7 @@ end
     return zz * sgn
 end
 
-# ---- within-butterfly AVX base codelet (size-16 = 4×4, rustfft's Butterfly16) --------------
+# ---- within-butterfly AVX base codelet (size-16 = 4×4, the Butterfly16) --------------
 # 16 complex → 4 AVX-512 registers (4 complex each). DFT-4 down columns (across registers,
 # shuffle-free) → twiddle → 4×4 register transpose (the only shuffles) → DFT-4 down columns
 # again (shuffle-free) → contiguous store. Measured ~2.1× over the scalar codelet.
@@ -85,7 +85,7 @@ end
 # size-32 W32^k combine twiddle register (k = o:o+3), used by the radix-2 step of DFT-32.
 @inline _tw32(W, o) = Vec{8, Float64}((real(W^o), imag(W^o), real(W^(o + 1)), imag(W^(o + 1)), real(W^(o + 2)), imag(W^(o + 2)), real(W^(o + 3)), imag(W^(o + 3))))
 
-# DFT-32 register core (rustfft's Butterfly32): 8 input registers (V_r = elem[4r:4r+3]) → 8 output
+# DFT-32 register core (the Butterfly32): 8 input registers (V_r = elem[4r:4r+3]) → 8 output
 # registers in natural order. Even/odd decimation → two DFT-16 → radix-2 combine with W32 twiddles.
 @inline function _dft32_regs(V0, V1, V2, V3, V4, V5, V6, V7, tw1, tw2, tw3, u0, u1, u2, u3, ::Val{S}) where {S}
     de(a, b) = shufflevector(a, b, Val((0, 1, 4, 5, 8, 9, 12, 13)))   # evens of [a;b]
@@ -114,7 +114,7 @@ function _base16_avx!(dst, src, width::Int, k::Int, ::Val{S}) where {S}
     return
 end
 
-# size-32 AVX codelet (rustfft's Butterfly32) = two DFT-16 (even/odd decimation) + radix-2 combine.
+# size-32 AVX codelet (the Butterfly32) = two DFT-16 (even/odd decimation) + radix-2 combine.
 function _base32_avx!(dst, src, width::Int, k::Int, ::Val{S}) where {S}
     W16 = S == -1 ? cispi(-2.0 / 16) : cispi(2.0 / 16)
     tw1 = _tw16(W16, 1); tw2 = _tw16(W16, 2); tw3 = _tw16(W16, 3)
@@ -438,7 +438,7 @@ end
 """
     Radix4AvxPlan{T} <: AbstractFFTPlan{T}
 
-Radix4 with the hand-vectorized (SIMD.jl) Butterfly4 cross-pass — the rustfft-AVX-matching
+Radix4 with the hand-vectorized (SIMD.jl) Butterfly4 cross-pass — the explicit-AVX
 variant (`:radix4avx`). Power-of-two `n`; allocation-free.
 """
 struct Radix4AvxPlan{T} <: AbstractFFTPlan{T}

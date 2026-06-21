@@ -37,6 +37,14 @@ four-step twiddle fused into each codelet's output store and SIMD/block transpos
 autotuner times this against the 2-factor four-step and keeps the fastest); large prime → Rader
 (Stage 11) or Bluestein (Stage 8).
 
+**Faithful RustFFT-AVX path (Stage 13).** 2·3·5-smooth sizes also get a mechanical port of RustFFT's
+AVX2 mixed-radix (`AvxMixedRadixPlan`, `src/avxradix/`): rust's exact radix stack (8ⁿ·9ᵐ·12ᵏ·6ʲ over a
+Butterfly36 base) with the same SIMD ops. `autoplan` builds it and uses it **only when it beats** the
+recursive/four-step plan (timed) — so it's a strict improvement. radix-8-dominated sizes reach rust
+parity (≥0.96×, depth-2); radix-9/12-heavy (3-heavy) sizes sit at a ~0.85–0.92× floor (radix-9/12 are
+intrinsically ~3× more shuffle/FMA-heavy than radix-8 — see `performance.md` §15). Sizes needing radix
+2/16 or non-B36 bases fall back to the recursive path.
+
 The recursive path is the parity breakthrough: the old 2-factor four-step was forced into huge
 register-spilling codelets for large n (e.g. 5760 → 80×72) and *had no valid split above 16384* (it
 fell to Bluestein at ~3–5 GF/s). Small codelets are far more efficient (R≈8 ≈55 GF/s vs R≈40 ≈36), so
@@ -47,8 +55,9 @@ decomposing into ~3 small factors recovers most of the gap **at every size**:
 | regime | example n | PureFFT | note |
 |---|---:|---:|---|
 | smooth, small — codelet | 27 / 48 | **12.8** / 13 | beats FFTW (10.7); was ~0.2 via old mixed-radix |
-| smooth composite — recursive | 5760 / 11520 | **29 / 30** | ~0.76–0.87× FFTW (Stage 12) |
-| large smooth (was Bluestein cliff) | 23040 / 92160 | **23 / 18** | ~0.6× FFTW; was ~3–5 (Bluestein) before Stage 12 |
+| smooth composite — faithful RustFFT-AVX | 720 / 1440 / 11520 | **34 / 36 / 36** | matches/beats FFTW & RustFFT (Stage 13) |
+| smooth composite — recursive | 5760 / 23040 | **29 / 22** | sizes needing radix-2/16 fall back here |
+| large smooth (was Bluestein cliff) | 46080 / 92160 | **28 / 26** | ≈FFTW; was ~3–5 (Bluestein) before Stage 12 |
 | large prime / prime power — Bluestein | 181 / 5793 | ~5 | O(n log n), no cliff |
 
 ## All variant progression

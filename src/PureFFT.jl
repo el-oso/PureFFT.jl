@@ -1,6 +1,6 @@
 module PureFFT
 
-# Pure-Julia FFT. Built in stages to (1) isolate where rustfft/FFTW's speed comes from
+# Pure-Julia FFT. Built in stages to (1) isolate where FFTW's speed comes from
 # (algorithm vs LLVM vs language — see REPORT.md) and (2) close the gap toward parity.
 #
 # Stage 1: scalar radix-2 baseline. Stage 2: mixed-radix (any N). Stage 3: staged radix-2
@@ -14,6 +14,8 @@ using MLStyle: @match
 import AbstractFFTs
 
 include("contracts.jl")
+include("avxradix.jl")
+include("avx_mixedradix_plan.jl")
 include("cpuinfo.jl")
 include("twiddles.jl")
 include("butterflies.jl")

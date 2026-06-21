@@ -204,6 +204,104 @@ The correctness and performance invariants are checked by a suite of tools:
 
 All three tool checks pass on the `:fast` hot path.
 
+## 11. Runtime tuple indexing boxes — unroll with `@generated`
+
+**Effect: 135× (a size-36 kernel: 2293 ns → 18.43 ns).**
+
+Indexing a tuple with a **runtime** variable (`t[r]`, `t[2r+1]`, `ntuple(r -> ... t[r] ..., N)`) is
+type-unstable — Julia can't prove the element type for a non-literal index, so it **boxes and
+allocates**. This is the single most expensive mistake we hit. A faithful port of RustFFT's
+`Butterfly36Avx64` written with `ntuple`/runtime-indexed loops ran at 2293 ns; rewriting it as
+straight-line code with **literal** indices brought it to 18.43 ns (0.92× of rustfft's 16.94 ns).
+
+Rust's `[T; N]` arrays with `for i in 0..N` const-range loops unroll cleanly; the direct Julia port
+of such a loop must be **unrolled**, not transcribed as `for r in 0:N; t[r]; end`. The scalable way to
+unroll (when the count is a *type parameter*) is a **`@generated` function** that emits the
+straight-line body — this is exactly the genfft-style code generation in `src/codelets.jl`. (Macro
+unrollers like Unroll.jl's `@unroll` only work when the bound is a macro-time literal/constant; prefer
+`@generated` since our counts come from type parameters. Don't depend on Unroll.jl — it's inactive.)
+
+## 12. x86 SIMD intrinsics with no SIMD.jl wrapper via `llvmcall`
+
+SIMD.jl covers arithmetic, `shufflevector`, `reinterpret`, and `muladd` (FMA). For instructions it
+doesn't expose — notably **`fmaddsub`/`fmsubadd`** (alternating subtract/add, the core of a SIMD
+complex multiply) — call the exact LLVM intrinsic via `Base.llvmcall` in **module+entry form**,
+converting `Vec ↔ v.data::NTuple{N,VecElement{T}}`:
+
+```julia
+const _IR = """
+declare <4 x double> @llvm.x86.fma.vfmaddsub.pd.256(<4 x double>, <4 x double>, <4 x double>)
+define <4 x double> @entry(<4 x double> %a, <4 x double> %b, <4 x double> %c) #0 {
+  %r = call <4 x double> @llvm.x86.fma.vfmaddsub.pd.256(<4 x double> %a, <4 x double> %b, <4 x double> %c)
+  ret <4 x double> %r
+}
+attributes #0 = { alwaysinline }"""
+@inline fmaddsub(a, b, c) = Vec(Base.llvmcall((_IR, "entry"), NT4, Tuple{NT4,NT4,NT4}, a.data, b.data, c.data))
+```
+
+This produces a single `vfmaddsub231pd` and is **bit-exact** with Rust's `_mm256_fmaddsub_pd`. See
+`src/avxradix/avxport.jl`. When porting an intrinsic-based kernel, match the **exact lane patterns** of each
+`_mm256_permute/unpack/movedup_pd` with `shufflevector`, and verify bit-exact against a Rust golden.
+
+## 13. Faithful porting beats reinterpretation (the local-maximum lesson)
+
+The biggest strategic finding: **reinterpreting** an algorithm in our own style (SoA codelets,
+custom four-step/recursive mixed-radix) repeatedly plateaued at *local maxima* — non-pow2 stalled at
+~0.5–0.85× FFTW across many rounds (4096 cliff → 16384 cliff → orchestration-overhead frontier). A
+**faithful, mechanical, op-for-op port** of RustFFT's actual AVX kernels (same algorithm, same SIMD,
+no deviation) reaches parity: Butterfly36 = 0.92×. When matching a reference implementation's speed is
+the goal, **duplicate it exactly and verify bit-exact at each layer** (Rust golden harness in
+`bench/rustfft_compare/`) rather than re-deriving — re-derivation drifts into a slower local optimum.
+
+## 14. Benchmarking tiny SIMD kernels (the parity-gate methodology)
+
+Confirming a kernel is ≥0.96× of a Rust reference is dominated by *measurement* artifacts at sub-20ns:
+
+- **Call via a `@noinline` concrete wrapper, not a closure.** `@b x (w->kernel!(w,consts))` (or passing
+  a closure to a higher-order timer) puts the closure's call indirection inside the timed region — it
+  reported a "0.82×" that was really ~0.93×. Use `@noinline run!(w)=kernel!(w,CONST1,CONST2)` (consts as
+  `const` globals) and call `run!(w)` directly.
+- **Use repeated in-place reps, not copy-subtract.** rustfft's harness times `copy+transform` and
+  subtracts `copy`; subtracting two similar noisy numbers gives ±15% swings at n≈36. Looping the
+  in-place transform with no copy (data → NaN, but FP *throughput* is identical) + a DCE sink is far
+  more stable.
+- **Pin a core (`taskset -c N`)**, warm up, and **compare MEDIAN times (not min)** with their sigmas.
+  Min rewards a lucky outlier — comparing julia-median to rust-*min* gave a false "0.93×"; rust's σ
+  showed its min was unrepresentative. On **median-to-median** the faithful port is at/above parity,
+  and Julia's σ (0.2–0.4%) is *tighter* than rust's (0.3–3.7%). Gate: `rust_median/julia_median ≥ 0.96`
+  with both distributions tight + comparable.
+
+Measured (median, core-pinned): **Butterfly7 1.04×, Butterfly36 1.05×, MixedRadix4xn-144 0.98×** —
+all ≥0.96×. (The docs comparison plots in `bench/plot_compare.jl` likewise use median, not min.)
+
+## 15. Radix choice dominates; per-radix micro-opt hits a measurement floor (the non-pow2 push)
+
+Hard-won lessons from pushing the faithful port's non-power-of-two coverage to ≥0.96×:
+
+- **Match RustFFT's *radix choice*, not just its algorithm.** The avx_planner prefers **radix-8/9/12/6**
+  ("blazing fast 8xn"), decomposing 2·3-smooth sizes as 8ⁿ·9ᵐ·12ᵏ·6ʲ — *not* radix-4/5. With radix-8,
+  composites reach parity **even at depth 2** (2304 = MR8(MR8(B36)) = 0.97×). Building trees from radix-4/5
+  instead plateaus at ~0.91× — that "depth-2 plateau" was a wrong-radix artifact, not a language limit.
+- **radix-8 is intrinsically cheap; radix-9/12 are not.** A size-8 column butterfly is adds + rotations
+  with **no twiddle multiplies** (21 shuffles / 7 FMAs per pass); the size-9 (3×3) needs complex twiddle
+  mults (**36 shuffles / 24 FMAs** — ~3×). So radix-9/12-heavy (3-heavy) sizes sit at a genuine
+  **~0.85–0.92× floor**; radix-8-dominated sizes are at parity. This is fundamental, not a porting bug.
+- **One scratch buffer, not per-level.** RustFFT's in-place/out-of-place alternation reuses a *single*
+  size-n scratch at every recursion level (pass `scr`, not `buf`, as the inner's scratch). Allocating a
+  distinct buffer per level (depth×n) blows the working set out of cache and makes the per-level gap
+  *compound* with depth (576: 0.82× → 0.97× after the fix on shallow sizes).
+- **Micro-opts that failed (documented so nobody re-tries them):** (a) **chunk-loop unrolling** backfires
+  on already-large kernel bodies — register pressure, 0.96×. (b) **Pre-duplicated twiddles**
+  (store `dup_re`/`dup_im`, drop 2 shuffles/mult) is +5% in an *isolated* colbf micro-bench but
+  **net-neutral/negative end-to-end** — it trades a shuffle for a load and doubles the twiddle array
+  (cache). Isolated micro-benchmarks mislead; always re-measure in the full kernel.
+- **The measurement floor is ~7% on the *ratio*, run-to-run.** Even the in-process *interleaved* harness
+  (rust via ccall to a cdylib, alternating blocks same-process, median+σ, `taskset`) has σ≈2% *within* a
+  run but the absolute ratio drifts ±7% *between* process launches (144× measured at 0.90 / 0.945 / 0.97
+  on identical code). **You cannot validate a ≤5% optimization against a 7% floor** — sub-noise per-radix
+  tuning is not productive without first pinning CPU frequency (`cpupower`, needs root) or ~10× longer
+  averaging. Know the floor before chasing small wins.
+
 ## Summary table
 
 | Trick | Effect | Notes |
@@ -218,3 +316,9 @@ All three tool checks pass on the `:fast` hot path.
 | SoA layout (full transform) | −15% vs AoS | Split/merge overhead cancels shuffles |
 | Zero-allocation plans | no GC pauses | AllocCheck-verified |
 | Static dispatch via `interface_trait` | zero overhead | JET-verified, `TRIM_SAFE` |
+| Unroll via `@generated` (no runtime tuple index) | **135×** | runtime `t[r]` boxes; literal/`@generated` unroll |
+| `fmaddsub`/`fmsubadd` via `llvmcall` | bit-exact w/ rust | x86 intrinsics SIMD.jl lacks |
+| Faithful RustFFT port vs reinterpretation | 0.5–0.85× → **0.92×** | mechanical op-for-op port reaches parity |
+| Match rust's radix (8/9/12/6 not 4/5) | plateau 0.91× → **0.97×** | radix-8 depth-2 parity; single scratch buffer |
+| radix-9/12 vs radix-8 cost | ~0.90× floor | 3× shuffles/FMAs (twiddle mults); fundamental |
+| Per-radix micro-opt below measurement floor | ≤5% vs **7%** noise | ratio drifts ±7% run-to-run; pin freq to chase |

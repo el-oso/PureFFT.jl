@@ -1,15 +1,15 @@
-# Faithful port of rustfft's Radix4 algorithm (src/algorithm/radix4.rs) — the power-of-two
-# workhorse, scalar (LLVM autovectorizes; matches Rust's scalar codegen per bench/lang_compare).
-# This is the same-algorithm artifact for the full-package comparison against the rustfft crate,
+# The classic Radix4 algorithm — the power-of-two
+# workhorse, scalar (LLVM autovectorizes; matches optimized scalar codegen).
+# This is the same-algorithm artifact for the full-package comparison against reference FFT libraries,
 # and the structural base for the AVX round (its Butterfly4 cross-pass is what gets SIMD-ized).
 #
 # N = 2ⁿ = 4^k · base, base ∈ {1,2,4,8,16,32} (32 if n odd, 16 if n even, for n≥4; else 2ⁿ):
 #   1. bit-reversed transpose (radix-4 digit reversal of the width index) → contiguous base leaves
 #   2. base butterflies: a straight-line size-`base` DFT per leaf (reuses @generated `_codelet!`)
 #   3. log₄ Butterfly4 cross-passes with precomputed layered twiddles
-# Correctness is validated against FFTW (not byte-matching rustfft's internal layout).
+# Correctness is validated against FFTW (not byte-matching the internal layout).
 
-# choose base exponent like rustfft: 0..3 → 2ⁿ; n≥4 → 16 (even) or 32 (odd)
+# choose base exponent (standard Radix4): 0..3 → 2ⁿ; n≥4 → 16 (even) or 32 (odd)
 function _radix4_base(n_log2::Int)
     n_log2 <= 3 && return 1 << n_log2
     return iseven(n_log2) ? 16 : 32
@@ -386,7 +386,7 @@ end
 """
     Radix4Plan{T} <: AbstractFFTPlan{T}
 
-Faithful port of rustfft's Radix4 (power-of-two `n`). Preallocated layered twiddles + scratch →
+The classic Radix4 (power-of-two `n`). Preallocated layered twiddles + scratch →
 allocation-free. AoS scalar (autovectorized via `@simd ivdep`); see also [`Radix4SoAPlan`](@ref).
 """
 struct Radix4Plan{T} <: AbstractFFTPlan{T}

@@ -8,7 +8,10 @@ PureFFT's `:fast` variant (autotuned) reaches **40–48 GFLOP/s** on power-of-tw
 AVX-512, single-thread) and **matches or beats both FFTW (MEASURE) and rustfft-AVX across most of
 the range** — leading at n=128/256/16384/65536, at parity at 1024/4096, trailing only at n=64 and
 n=512. It also has **no non-power-of-two cliff** (Bluestein chirp-Z) and generates tailored kernels
-at plan time (dynamic mixed-radix codelets) for sizes the static libraries fall back on.
+at plan time (dynamic mixed-radix codelets) for sizes the static libraries fall back on. Smooth
+(2·3·5) non-power-of-two sizes additionally route through an AVX2 mixed-radix path
+(`AvxMixedRadixPlan`) that reaches FFTW/RustFFT parity on radix-8-dominated sizes (e.g. 720, 1440,
+11520).
 
 The key finding: **same algorithm in both languages performs the same**. The gap between a naive
 Julia FFT and rustfft-AVX was purely implementation work — algorithm choice, cache blocking, SIMD

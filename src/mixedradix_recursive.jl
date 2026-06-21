@@ -4,7 +4,7 @@
 # registers; small codelets are far more efficient (R≈8 ≈55 GF/s vs R≈40 ≈36). This decomposes n into
 # SEVERAL small factors and runs a batch-all mixed-radix: at each level a size-N1 batched SoA codelet
 # (width = M·batch, so always wide/efficient) with the four-step twiddle FUSED into its output store,
-# then a transpose. This is rustfft's structure (small butterflies + batched columns + transposes);
+# then a transpose. This is the structure (small butterflies + batched columns + transposes);
 # it reaches ~0.85–0.91× FFTW on larger smooth sizes where the 2-factor path / Bluestein fall short.
 #
 # Layout (DIT, digit j = j2 + M·j1 with j1 the high digit): transform b, element j at data[j*batch+b].
