@@ -204,6 +204,27 @@ end
     b = avx_transpose4_packed(r5, r6, r7, r8)
     (a[1], a[2], b[1], b[2], a[3], a[4], b[3], b[4])
 end
+# transpose6_packed (rust __m256d): unpack_complex pairs → (u0,u2,u4,u1,u3,u5)
+@inline avx_transpose6_packed(r0, r1, r2, r3, r4, r5) =
+    (avx_unpacklo_complex(r0, r1), avx_unpacklo_complex(r2, r3), avx_unpacklo_complex(r4, r5),
+     avx_unpackhi_complex(r0, r1), avx_unpackhi_complex(r2, r3), avx_unpackhi_complex(r4, r5))
+# transpose9_packed (rust __m256d): permute2f128 pattern (0x30 = (r8_lo, r0_hi))
+@inline avx_transpose9_packed(r0, r1, r2, r3, r4, r5, r6, r7, r8) =
+    (avx_unpacklo_complex(r0, r1), avx_unpacklo_complex(r2, r3), avx_unpacklo_complex(r4, r5), avx_unpacklo_complex(r6, r7),
+     shufflevector(r8, r0, Val((0, 1, 6, 7))),
+     avx_unpackhi_complex(r1, r2), avx_unpackhi_complex(r3, r4), avx_unpackhi_complex(r5, r6), avx_unpackhi_complex(r7, r8))
+# column_butterfly9 (rust 3x3 mixed radix); tw1=W9^1, tw2=W9^2, tw3=W9^4 (broadcast complex); bf3=bf3 twiddle
+@inline function avx_column_butterfly9(r0, r1, r2, r3, r4, r5, r6, r7, r8, tw1, tw2, tw3, bf3)
+    mid0 = avx_column_butterfly3(r0, r3, r6, bf3)
+    mid1 = avx_column_butterfly3(r1, r4, r7, bf3)
+    mid2 = avx_column_butterfly3(r2, r5, r8, bf3)
+    m1_2 = avx_mul_complex(tw1, mid1[2]); m1_3 = avx_mul_complex(tw2, mid1[3])
+    m2_2 = avx_mul_complex(tw2, mid2[2]); m2_3 = avx_mul_complex(tw3, mid2[3])
+    o0 = avx_column_butterfly3(mid0[1], mid1[1], mid2[1], bf3)
+    o1 = avx_column_butterfly3(mid0[2], m1_2, m2_2, bf3)
+    o2 = avx_column_butterfly3(mid0[3], m1_3, m2_3, bf3)
+    (o0[1], o1[1], o2[1], o0[2], o1[2], o2[2], o0[3], o1[3], o2[3])
+end
 
 # transpose5_packed (rust __m256d): note _mm256_blend_pd(a,b,0x03) = lanes 0,1 from b, 2,3 from a
 @inline _blend03(a::V4f, b::V4f) = shufflevector(a, b, Val((4, 5, 2, 3)))
