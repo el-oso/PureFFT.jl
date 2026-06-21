@@ -142,6 +142,8 @@ savefig(p2, joinpath(assets, "comparison_time.png"))
 # --- non-power-of-two (Bluestein) ---
 println("\nNon-power-of-two smooth-composite sizes (PureFFT → codelet / four-step):")
 nq, q_fftw, q_rust, q_pure, qs_fftw, qs_rust, qs_pure = run_benchmarks(nonpow2_sizes())
+# clip y-axis to the data range so a wide σ-ribbon at one noisy (memory-bound) point can't blow up the scale
+ymax3 = 1.1 * maximum(vcat(gflops.(nq, q_fftw), gflops.(nq, q_rust), gflops.(nq, q_pure)))
 
 p3 = plot(;
     xlabel = "Transform size N (non-power-of-two)",
@@ -150,6 +152,7 @@ p3 = plot(;
     xscale = :log2,
     xticks = (tickvals, ticklabels),
     xrotation = 45,
+    ylims = (0, ymax3),
     legend = :topright,
     size = (800, 500),
     dpi = 150,
