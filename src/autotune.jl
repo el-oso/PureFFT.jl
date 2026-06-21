@@ -19,13 +19,15 @@ plan_length(p::AutoPlan)::Int = plan_length(p.inner)
 plan_inverse(p::AutoPlan)::Bool = plan_inverse(p.inner)
 apply_unnormalized!(p::AutoPlan, x::AbstractVector) = apply_unnormalized!(p.inner, x)
 
-# Best (minimum) per-call time for a candidate, applied repeatedly to a scratch buffer.
+# Best (minimum) per-call time for a candidate, applied repeatedly to a scratch buffer. Time-budgeted
+# (≥ a few ms total, ≥ 8 iters) so the minimum is robust enough to rank candidate factorizations —
+# 7 fixed iterations was too noisy and mis-ranked them.
 function _besttime(c::AbstractFFTPlan{T}, y::AbstractVector{Complex{T}}) where {T}
-    apply_unnormalized!(c, y)               # warm up / force compile
-    best = Inf
-    for _ in 1:7
+    apply_unnormalized!(c, y); apply_unnormalized!(c, y)   # warm up / force compile
+    best = Inf; elapsed = 0.0; iters = 0
+    while iters < 8 || (elapsed < 3.0e-3 && iters < 500)
         t = @elapsed apply_unnormalized!(c, y)
-        best = min(best, t)
+        best = min(best, t); elapsed += t; iters += 1
     end
     return best
 end
@@ -85,7 +87,7 @@ end
 # A few balanced small-factor factorizations to try for the recursive mixed-radix plan.
 function _recursive_candidates(n::Int)
     cands = Vector{Int}[]
-    for maxf in (16, 22, 30)
+    for maxf in (16, 24, 36, 48)   # wider range → fewer, larger factors for big n (fewer memory passes)
         f = _recursive_factors(n; maxf = maxf)
         (isnothing(f) || length(f) < 2 || f in cands) && continue
         push!(cands, f)
