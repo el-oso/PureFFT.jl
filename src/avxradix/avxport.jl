@@ -289,8 +289,19 @@ const _ROT90_INV8 = V8f((0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0, -0.0))
 @inline _rot90_inv(::V8f) = _ROT90_INV8
 const _HALF_ROOT2_8 = V8f(ntuple(_ -> sqrt(0.5), Val(8)))
 @inline _half_root2(::V8f) = _HALF_ROOT2_8
+# AVX-512 availability, detected at module-load (precompile) — gates the explicit 512-bit `fmaddsub`
+# intrinsic, which ABORTS at JIT-codegen on a non-AVX512 target (Vec{8} arithmetic is fine — LLVM
+# legalizes it to 2× AVX2). Without AVX-512 we use the muladd+sign form (correct, slower; such a build
+# never picks W=8 via autoplan's timing anyway). Note: like radix4_avx's Vec{8} usage, this assumes the
+# build/precompile machine == the run machine; CI precompiles on the runner, so it's correct there.
+const _HAS_AVX512 = try
+    occursin("avx512f", read("/proc/cpuinfo", String))
+catch
+    false
+end
+const _SGN8 = V8f((-1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0))
 # 512-bit fmaddsub via the AVX-512 intrinsic (i32 4 = current rounding) — fused like the .256 path,
-# avoiding the muladd+sign-vector form that was measured 0.65× (extra mul + longer dependency chain).
+# avoiding the muladd+sign form that was measured 0.65× (extra mul + longer dependency chain).
 const _NT8 = NTuple{8, VecElement{Float64}}
 const _IR_MADDSUB8 = """
 declare <8 x double> @llvm.x86.avx512.vfmaddsub.pd.512(<8 x double>, <8 x double>, <8 x double>, i32)
@@ -301,8 +312,11 @@ define <8 x double> @entry(<8 x double> %a, <8 x double> %b, <8 x double> %c) #0
 attributes #0 = { alwaysinline }"""
 @inline avx_fmaddsub(a::V8f, b::V8f, c::V8f) =
     Vec(Base.llvmcall((_IR_MADDSUB8, "entry"), _NT8, Tuple{_NT8, _NT8, _NT8}, a.data, b.data, c.data))
-@inline avx_mul_complex(left::V8f, right::V8f) =
-    avx_fmaddsub(avx_dup_re(left), right, avx_mul(avx_dup_im(left), avx_swap_complex(right)))
+# width-gated complex multiply: the fmaddsub intrinsic only when AVX-512 is present (else it never
+# codegens). `Val(_HAS_AVX512)` is a compile-time const ⇒ the dead branch (and the intrinsic) is elided.
+@inline _mulc8(l::V8f, r::V8f, ::Val{true}) = avx_fmaddsub(avx_dup_re(l), r, avx_mul(avx_dup_im(l), avx_swap_complex(r)))
+@inline _mulc8(l::V8f, r::V8f, ::Val{false}) = muladd(avx_dup_re(l), r, _SGN8 * (avx_dup_im(l) * avx_swap_complex(r)))
+@inline avx_mul_complex(left::V8f, right::V8f) = _mulc8(left, right, Val(_HAS_AVX512))
 @inline avx_broadcast_complex8(re::Float64, im::Float64) = V8f((re, im, re, im, re, im, re, im))
 @inline function avx_broadcast_twiddle8(index::Int, len::Int, forward::Bool)
     r, i = compute_twiddle(index, len, forward); avx_broadcast_complex8(r, i)
