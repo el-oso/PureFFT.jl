@@ -182,6 +182,29 @@ end
      avx_unpackhi_complex(r1, r2), avx_unpackhi_complex(r3, r4))
 end
 
+# ---- column_butterfly8 (rust 4x2 mixed radix) + transpose8 + bf8 twiddle helpers ----
+const _HALF_ROOT2 = V4f((sqrt(0.5), sqrt(0.5), sqrt(0.5), sqrt(0.5)))
+@inline avx_bf8_tw1(x, rot) = avx_mul(_HALF_ROOT2, avx_add(avx_rotate90(x, rot), x))   # apply_butterfly8_twiddle1
+@inline avx_bf8_tw3(x, rot) = avx_mul(_HALF_ROOT2, avx_sub(avx_rotate90(x, rot), x))   # apply_butterfly8_twiddle3
+@inline function avx_column_butterfly8(r1, r2, r3, r4, r5, r6, r7, r8, rot)
+    m0 = avx_column_butterfly4(r1, r3, r5, r7, rot)
+    m1 = avx_column_butterfly4(r2, r4, r6, r8, rot)
+    m1_2 = avx_bf8_tw1(m1[2], rot)
+    m1_3 = avx_rotate90(m1[3], rot)
+    m1_4 = avx_bf8_tw3(m1[4], rot)
+    o0, o1 = avx_butterfly2(m0[1], m1[1])
+    o2, o3 = avx_butterfly2(m0[2], m1_2)
+    o4, o5 = avx_butterfly2(m0[3], m1_3)
+    o6, o7 = avx_butterfly2(m0[4], m1_4)
+    (o0, o2, o4, o6, o1, o3, o5, o7)
+end
+# transpose8_packed (rust __m256d): two transpose4 + reorder
+@inline function avx_transpose8_packed(r1, r2, r3, r4, r5, r6, r7, r8)
+    a = avx_transpose4_packed(r1, r2, r3, r4)
+    b = avx_transpose4_packed(r5, r6, r7, r8)
+    (a[1], a[2], b[1], b[2], a[3], a[4], b[3], b[4])
+end
+
 # transpose5_packed (rust __m256d): note _mm256_blend_pd(a,b,0x03) = lanes 0,1 from b, 2,3 from a
 @inline _blend03(a::V4f, b::V4f) = shufflevector(a, b, Val((4, 5, 2, 3)))
 @inline function avx_transpose5_packed(r1::V4f, r2::V4f, r3::V4f, r4::V4f, r5::V4f)
