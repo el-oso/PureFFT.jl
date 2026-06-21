@@ -352,3 +352,17 @@ end
     a = avx_transpose4_packed(r1, r2, r3, r4); b = avx_transpose4_packed(r5, r6, r7, r8); c = avx_transpose4_packed(r9, r10, r11, r12)
     (a[1], b[1], c[1], a[2], b[2], c[2], a[3], b[3], c[3], a[4], b[4], c[4])
 end
+# transpose9 at W=8 (9×4 → 4×9): 9 is not a multiple of CPV=4, so it can't be whole transpose4 blocks —
+# two transpose4 (rows 0-3, 4-7) + row 8, with shuffles bridging the 9-not-÷4 boundaries. Verified
+# bit-exact against the V4f path. out[c·9+r] = in[r,c].
+@inline function avx_transpose9_packed(v0::V8f, v1::V8f, v2::V8f, v3::V8f, v4::V8f, v5::V8f, v6::V8f, v7::V8f, v8::V8f)
+    a = avx_transpose4_packed(v0, v1, v2, v3); b = avx_transpose4_packed(v4, v5, v6, v7)
+    (a[1], b[1],
+     shufflevector(v8, a[2], Val((0, 1, 8, 9, 10, 11, 12, 13))),
+     shufflevector(a[2], b[2], Val((6, 7, 8, 9, 10, 11, 12, 13))),
+     shufflevector(shufflevector(b[2], v8, Val((6, 7, 10, 11, 0, 0, 0, 0))), a[3], Val((0, 1, 2, 3, 8, 9, 10, 11))),
+     shufflevector(a[3], b[3], Val((4, 5, 6, 7, 8, 9, 10, 11))),
+     shufflevector(shufflevector(b[3], v8, Val((4, 5, 6, 7, 12, 13, 0, 0))), a[4], Val((0, 1, 2, 3, 4, 5, 8, 9))),
+     shufflevector(a[4], b[4], Val((2, 3, 4, 5, 6, 7, 8, 9))),
+     shufflevector(b[4], v8, Val((2, 3, 4, 5, 6, 7, 14, 15))))
+end

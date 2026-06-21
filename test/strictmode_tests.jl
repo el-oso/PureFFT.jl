@@ -7,7 +7,9 @@
 # disabled the macros are zero-cost no-ops, so we skip the assertions rather than pass them vacuously.
 
 @testitem "StrictMode dogfood: PureFFT declares its perf guarantees" begin
-    using StrictMode
+    # StrictMode's analysis backend (AllocCheck + JET) is a weak dependency — both must be loaded for the
+    # :full checks to run (else StrictMode errors with a clear message). They're test-env deps.
+    using StrictMode, AllocCheck, JET
 
     if !StrictMode.checks_enabled()
         @info "StrictMode checks disabled in this env — skipping dogfood (enable_checks! + restart to run)"
@@ -18,7 +20,8 @@
         plans = Any[
             (P.Radix4AvxPlan(ComplexF64, 1024), 1024),   # power-of-two AVX-512 radix-4
             (P.CodeletPlan(ComplexF64, 12), 12),         # small non-pow2 generated codelet
-            (P.autoplan(ComplexF64, 768), 768),          # non-pow2, AVX-512 (W=8) faithful tree
+            (P.autoplan(ComplexF64, 768), 768),          # non-pow2, AVX-512 (W=8) radix-12 tree
+            (P.autoplan(ComplexF64, 576), 576),          # non-pow2, AVX-512 (W=8) radix-9 tree
             (P.autoplan(ComplexF64, 1080), 1080),        # non-pow2, AVX2 (W=4) faithful tree
             (P.BluesteinPlan(ComplexF64, 97), 97),       # chirp-Z
             (P.RaderPlan(ComplexF64, 769), 769),         # prime via cyclic convolution

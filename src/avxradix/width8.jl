@@ -20,25 +20,37 @@ function butterfly64_w8!(out, inp, scr, base::Int, tw, rot)
         m = avx_column_butterfly8(_L8(scr, b), _L8(scr, b+8), _L8(scr, b+16), _L8(scr, b+24), _L8(scr, b+32), _L8(scr, b+40), _L8(scr, b+48), _L8(scr, b+56), rot)
         for r in 0:7; _S8(out, b + 8r, m[r+1]); end; end
 end
+# Store loops use Base.Cartesian.@nexprs so the tuple is indexed with LITERAL k/j (no runtime tuple index
+# → no bounds-check throw path; matches the V4f kernels + CLAUDE.md rule #1). r[1]/t[k] then constant-fold.
 @inline function _colbf8_w8!(buf, o, ::Val{M}, tw, rot) where {M}
     @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c
         r = avx_column_butterfly8(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), _L8(buf,ib+3M), _L8(buf,ib+4M), _L8(buf,ib+5M), _L8(buf,ib+6M), _L8(buf,ib+7M), rot)
-        _S8(buf, ib, r[1]); for j in 1:7; _S8(buf, ib + j*M, avx_mul_complex(tw[c*7+j], r[j+1])); end; end
+        _S8(buf, ib, r[1]); Base.Cartesian.@nexprs 7 j -> _S8(buf, ib + j*M, avx_mul_complex(tw[c*7+j], r[j+1])); end
 end
 @inline function _trans8_w8!(out, oo, buf, o, ::Val{M}) where {M}
     @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c; ob = oo + 32c
         t = avx_transpose8_packed(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), _L8(buf,ib+3M), _L8(buf,ib+4M), _L8(buf,ib+5M), _L8(buf,ib+6M), _L8(buf,ib+7M))
-        for k in 1:8; _S8(out, ob + 4(k-1), t[k]); end; end
+        Base.Cartesian.@nexprs 8 k -> _S8(out, ob + 4(k-1), t[k]); end
 end
 @inline function _colbf12_w8!(buf, o, ::Val{M}, tw, bf3, rot) where {M}
     @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c
         r = avx_column_butterfly12(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), _L8(buf,ib+3M), _L8(buf,ib+4M), _L8(buf,ib+5M), _L8(buf,ib+6M), _L8(buf,ib+7M), _L8(buf,ib+8M), _L8(buf,ib+9M), _L8(buf,ib+10M), _L8(buf,ib+11M), bf3, rot)
-        _S8(buf, ib, r[1]); for j in 1:11; _S8(buf, ib + j*M, avx_mul_complex(tw[c*11+j], r[j+1])); end; end
+        _S8(buf, ib, r[1]); Base.Cartesian.@nexprs 11 j -> _S8(buf, ib + j*M, avx_mul_complex(tw[c*11+j], r[j+1])); end
 end
 @inline function _trans12_w8!(out, oo, buf, o, ::Val{M}) where {M}
     @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c; ob = oo + 48c
         t = avx_transpose12_packed(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), _L8(buf,ib+3M), _L8(buf,ib+4M), _L8(buf,ib+5M), _L8(buf,ib+6M), _L8(buf,ib+7M), _L8(buf,ib+8M), _L8(buf,ib+9M), _L8(buf,ib+10M), _L8(buf,ib+11M))
-        for k in 1:12; _S8(out, ob + 4(k-1), t[k]); end; end
+        Base.Cartesian.@nexprs 12 k -> _S8(out, ob + 4(k-1), t[k]); end
+end
+@inline function _colbf9_w8!(buf, o, ::Val{M}, tw, tw1, tw2, tw3, bf3) where {M}
+    @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c
+        r = avx_column_butterfly9(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), _L8(buf,ib+3M), _L8(buf,ib+4M), _L8(buf,ib+5M), _L8(buf,ib+6M), _L8(buf,ib+7M), _L8(buf,ib+8M), tw1, tw2, tw3, bf3)
+        _S8(buf, ib, r[1]); Base.Cartesian.@nexprs 8 j -> _S8(buf, ib + j*M, avx_mul_complex(tw[c*8+j], r[j+1])); end
+end
+@inline function _trans9_w8!(out, oo, buf, o, ::Val{M}) where {M}
+    @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c; ob = oo + 36c
+        t = avx_transpose9_packed(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), _L8(buf,ib+3M), _L8(buf,ib+4M), _L8(buf,ib+5M), _L8(buf,ib+6M), _L8(buf,ib+7M), _L8(buf,ib+8M))
+        Base.Cartesian.@nexprs 9 k -> _S8(out, ob + 4(k-1), t[k]); end
 end
 
 # ---- W=8 kernel types (reuse Kernel/RPlan/applyplan! + the proc_ip!/proc_oop! alternation) ----
@@ -85,6 +97,24 @@ end
     @inbounds for f in 0:(cnt-1); _trans12_w8!(out, f*n, inp, f*n, Val(M)); end
 end
 
+struct MR9W8{M, I <: Kernel} <: Kernel
+    inner::I; tw::Vector{V8f}; tw1::V8f; tw2::V8f; tw3::V8f; bf3::V8f
+end
+klen(::MR9W8{M}) where {M} = 9M
+MR9W8(inner::Kernel, fwd::Bool) = (M = klen(inner); MR9W8{M, typeof(inner)}(inner, mr_twiddles_w8(9, M, 9M, fwd), avx_broadcast_twiddle8(1, 9, fwd), avx_broadcast_twiddle8(2, 9, fwd), avx_broadcast_twiddle8(4, 9, fwd), avx_broadcast_twiddle8(1, 3, fwd)))
+@inline function proc_ip!(k::MR9W8{M}, buf, scr) where {M}
+    n = 9M; cnt = length(buf) ÷ n
+    @inbounds for f in 0:(cnt-1); _colbf9_w8!(buf, f*n, Val(M), k.tw, k.tw1, k.tw2, k.tw3, k.bf3); end
+    proc_oop!(k.inner, scr, buf, scr)
+    @inbounds for f in 0:(cnt-1); _trans9_w8!(buf, f*n, scr, f*n, Val(M)); end
+end
+@inline function proc_oop!(k::MR9W8{M}, out, inp, scr) where {M}
+    n = 9M; cnt = length(inp) ÷ n
+    @inbounds for f in 0:(cnt-1); _colbf9_w8!(inp, f*n, Val(M), k.tw, k.tw1, k.tw2, k.tw3, k.bf3); end
+    proc_ip!(k.inner, inp, scr)
+    @inbounds for f in 0:(cnt-1); _trans9_w8!(out, f*n, inp, f*n, Val(M)); end
+end
+
 # W=8-clean tree for n = 2^(6+3a+2b)·3^b = Butterfly64 · radix-8^a · radix-12^b (every len_per_row
 # divisible by CPV=4). Returns nothing for any other size. b radix-12 steps consume the 3s; a radix-8
 # steps consume the leftover 2s after the base (2^6) and the 12s (2^2 each).
@@ -92,13 +122,23 @@ function plan_tree_w8(n::Int, fwd::Bool = true)
     _HAS_AVX512 || return nothing                           # no real AVX-512 ⇒ don't build/time a W=8 tree
     v2 = 0; t = n; while t % 2 == 0; t ÷= 2; v2 += 1; end
     v3 = 0; while t % 3 == 0; t ÷= 3; v3 += 1; end
-    t == 1 || return nothing                               # not 2·3-smooth
-    b = v3                                                  # one radix-12 per factor of 3
-    rem2 = v2 - 6 - 2b                                      # 2s left after Butterfly64 (2^6) and b·12 (2^2 each)
-    (rem2 >= 0 && rem2 % 3 == 0) || return nothing         # remainder must be a power of radix-8 (2^3)
-    a = rem2 ÷ 3
+    t == 1 || return nothing                                # not 2·3-smooth
+    # Consume the 3s with b9 radix-9 (3² each, no 2s) + b12 radix-12 (3·2² each), and the leftover 2s with
+    # `a` radix-8 (2³) over the Butterfly64 base (2⁶):  2·b9 + b12 = v3,  6 + 2·b12 + 3·a = v2.
+    # Prefer MORE radix-9 (the radix that gains most from 512-bit), falling back to radix-12 for the 2-count
+    # — so every size the old radix-12-only planner handled still resolves (with b9 = 0).
+    b9 = -1; b12 = 0; a = 0
+    for cand9 in (v3 ÷ 2):-1:0
+        c12 = v3 - 2cand9
+        rem2 = v2 - 6 - 2c12
+        if rem2 >= 0 && rem2 % 3 == 0
+            b9 = cand9; b12 = c12; a = rem2 ÷ 3; break
+        end
+    end
+    b9 < 0 && return nothing
     k::Kernel = B64W8(fwd)
-    for _ in 1:b; k = MR12W8(k, fwd); end
-    for _ in 1:a; k = MR8W8(k, fwd); end
+    for _ in 1:b9;  k = MR9W8(k, fwd);  end
+    for _ in 1:b12; k = MR12W8(k, fwd); end
+    for _ in 1:a;   k = MR8W8(k, fwd);  end
     RPlan(k)
 end

@@ -17,7 +17,7 @@ StrictMode.checks_enabled() || error("StrictMode checks disabled — set [prefer
 
 # Warm a representative spread so the usage-driven sweep sees the real hot kernels (autoplan routes each
 # to its winning path: pow2 radix-4 AVX, codelet, four-step, the W=4/W=8 faithful trees, Rader, Bluestein).
-for n in (64, 256, 1024, 4096, 16384, 12, 27, 768, 1080, 2520, 6144, 97, 769)
+for n in (64, 256, 1024, 4096, 16384, 12, 27, 576, 768, 1080, 2520, 6144, 97, 769)
     p = PureFFT.autoplan(ComplexF64, n)
     PureFFT.apply_unnormalized!(p, randn(ComplexF64, n))
 end
