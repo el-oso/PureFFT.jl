@@ -319,3 +319,22 @@ end
 @inline function avx_store_complex8!(x::AbstractVector{Complex{Float64}}, i::Int, v::V8f)
     GC.@preserve x vstore(v, reinterpret(Ptr{Float64}, pointer(x)) + i * 16)
 end
+
+# ---- W=8 packed transposes (verified end-to-end: B64 bit-exact, 768=MR12(B64) rel-err 2e-16) ----
+# 4×4 register transpose (the radix4_avx _transpose4 pattern): out[k] = column (k-1) of the 4 rows.
+@inline function avx_transpose4_packed(C0::V8f, C1::V8f, C2::V8f, C3::V8f)
+    P0 = shufflevector(C0, C1, Val((0, 1, 8, 9, 2, 3, 10, 11))); P1 = shufflevector(C0, C1, Val((4, 5, 12, 13, 6, 7, 14, 15)))
+    P2 = shufflevector(C2, C3, Val((0, 1, 8, 9, 2, 3, 10, 11))); P3 = shufflevector(C2, C3, Val((4, 5, 12, 13, 6, 7, 14, 15)))
+    (shufflevector(P0, P2, Val((0, 1, 2, 3, 8, 9, 10, 11))), shufflevector(P0, P2, Val((4, 5, 6, 7, 12, 13, 14, 15))),
+     shufflevector(P1, P3, Val((0, 1, 2, 3, 8, 9, 10, 11))), shufflevector(P1, P3, Val((4, 5, 6, 7, 12, 13, 14, 15))))
+end
+# transposeN at W=8: each column's N rows grouped contiguously (each column = N/4 V8f). Reorder differs
+# from the V4f (CPV=2) versions because the 4×4 register transpose yields 4-complex column vectors.
+@inline function avx_transpose8_packed(r1::V8f, r2::V8f, r3::V8f, r4::V8f, r5::V8f, r6::V8f, r7::V8f, r8::V8f)
+    a = avx_transpose4_packed(r1, r2, r3, r4); b = avx_transpose4_packed(r5, r6, r7, r8)
+    (a[1], b[1], a[2], b[2], a[3], b[3], a[4], b[4])
+end
+@inline function avx_transpose12_packed(r1::V8f, r2::V8f, r3::V8f, r4::V8f, r5::V8f, r6::V8f, r7::V8f, r8::V8f, r9::V8f, r10::V8f, r11::V8f, r12::V8f)
+    a = avx_transpose4_packed(r1, r2, r3, r4); b = avx_transpose4_packed(r5, r6, r7, r8); c = avx_transpose4_packed(r9, r10, r11, r12)
+    (a[1], b[1], c[1], a[2], b[2], c[2], a[3], b[3], c[3], a[4], b[4], c[4])
+end
