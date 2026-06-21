@@ -47,18 +47,19 @@ end
 @inline function _bf36_twmul(m, t1, t2, t3, t4, t5)
     (m[1], avx_mul_complex(m[2], t1), avx_mul_complex(m[3], t2), avx_mul_complex(m[4], t3), avx_mul_complex(m[5], t4), avx_mul_complex(m[6], t5))
 end
-@inline butterfly36!(buf, tw::NTuple{15, V4f}, tw3::V4f) = butterfly36!(buf, 0, tw, tw3)
-function butterfly36!(buf, base::Int, tw::NTuple{15, V4f}, tw3::V4f)
-    mid0 = _bf36_twmul(avx_column_butterfly6(_bf36_ld(buf, base + 0), tw3), tw[1], tw[2], tw[3], tw[4], tw[5])
-    mid1 = _bf36_twmul(avx_column_butterfly6(_bf36_ld(buf, base + 2), tw3), tw[6], tw[7], tw[8], tw[9], tw[10])
-    mid2 = _bf36_twmul(avx_column_butterfly6(_bf36_ld(buf, base + 4), tw3), tw[11], tw[12], tw[13], tw[14], tw[15])
+@inline butterfly36!(buf, tw::NTuple{15, V4f}, tw3::V4f) = butterfly36!(buf, buf, 0, tw, tw3)
+@inline butterfly36!(buf, base::Int, tw::NTuple{15, V4f}, tw3::V4f) = butterfly36!(buf, buf, base, tw, tw3)
+function butterfly36!(out, inp, base::Int, tw::NTuple{15, V4f}, tw3::V4f)  # out-of-place: load inp, store out (out===inp ⇒ in-place)
+    mid0 = _bf36_twmul(avx_column_butterfly6(_bf36_ld(inp, base + 0), tw3), tw[1], tw[2], tw[3], tw[4], tw[5])
+    mid1 = _bf36_twmul(avx_column_butterfly6(_bf36_ld(inp, base + 2), tw3), tw[6], tw[7], tw[8], tw[9], tw[10])
+    mid2 = _bf36_twmul(avx_column_butterfly6(_bf36_ld(inp, base + 4), tw3), tw[11], tw[12], tw[13], tw[14], tw[15])
     t0, t1, t2 = avx_transpose_6x6(mid0, mid1, mid2)
     o0 = avx_column_butterfly6(t0, tw3)
-    avx_store_complex!(buf, base + 0, o0[1]); avx_store_complex!(buf, base + 6, o0[2]); avx_store_complex!(buf, base + 12, o0[3]); avx_store_complex!(buf, base + 18, o0[4]); avx_store_complex!(buf, base + 24, o0[5]); avx_store_complex!(buf, base + 30, o0[6])
+    avx_store_complex!(out, base + 0, o0[1]); avx_store_complex!(out, base + 6, o0[2]); avx_store_complex!(out, base + 12, o0[3]); avx_store_complex!(out, base + 18, o0[4]); avx_store_complex!(out, base + 24, o0[5]); avx_store_complex!(out, base + 30, o0[6])
     o1 = avx_column_butterfly6(t1, tw3)
-    avx_store_complex!(buf, base + 2, o1[1]); avx_store_complex!(buf, base + 8, o1[2]); avx_store_complex!(buf, base + 14, o1[3]); avx_store_complex!(buf, base + 20, o1[4]); avx_store_complex!(buf, base + 26, o1[5]); avx_store_complex!(buf, base + 32, o1[6])
+    avx_store_complex!(out, base + 2, o1[1]); avx_store_complex!(out, base + 8, o1[2]); avx_store_complex!(out, base + 14, o1[3]); avx_store_complex!(out, base + 20, o1[4]); avx_store_complex!(out, base + 26, o1[5]); avx_store_complex!(out, base + 32, o1[6])
     o2 = avx_column_butterfly6(t2, tw3)
-    avx_store_complex!(buf, base + 4, o2[1]); avx_store_complex!(buf, base + 10, o2[2]); avx_store_complex!(buf, base + 16, o2[3]); avx_store_complex!(buf, base + 22, o2[4]); avx_store_complex!(buf, base + 28, o2[5]); avx_store_complex!(buf, base + 34, o2[6])
+    avx_store_complex!(out, base + 4, o2[1]); avx_store_complex!(out, base + 10, o2[2]); avx_store_complex!(out, base + 16, o2[3]); avx_store_complex!(out, base + 22, o2[4]); avx_store_complex!(out, base + 28, o2[5]); avx_store_complex!(out, base + 34, o2[6])
 end
 
 # ===== shared helpers =====

@@ -22,7 +22,9 @@ B36(fwd::Bool) = B36(36, bf36_twiddles(fwd), avx_broadcast_twiddle(1, 3, fwd))
     end
 end
 @inline function proc_oop!(k::B36, out, inp, scr)
-    copyto!(out, inp); proc_ip!(k, out, scr)
+    @inbounds for f in 0:(length(inp) ÷ 36 - 1)
+        butterfly36!(out, inp, 36f, k.tw, k.tw3)    # true out-of-place: load inp, store out (no copy)
+    end
 end
 
 # ---- column-butterfly + transpose passes (R=4,5; even M; per-FFT at offset `o`) ----
