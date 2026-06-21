@@ -1,6 +1,7 @@
 # PureFFT.jl
 
 [![CI](https://github.com/el-oso/PureFFT.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/el-oso/PureFFT.jl/actions/workflows/CI.yml)
+[![Coverage](https://coveralls.io/repos/github/el-oso/PureFFT.jl/badge.svg?branch=master)](https://coveralls.io/github/el-oso/PureFFT.jl?branch=master)
 [![Docs](https://img.shields.io/badge/docs-dev-blue.svg)](https://el-oso.github.io/PureFFT.jl/dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
