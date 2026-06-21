@@ -6,9 +6,11 @@ Input: `Vector{ComplexF64}`, power-of-two sizes. FFTW at `MEASURE` flag. RustFFT
 
 ## GFLOP/s comparison
 
-![GFLOP/s vs transform size: FFTW, RustFFT, PureFFT :fast](assets/comparison.png)
+![Throughput relative to FFTW (power-of-two; higher = faster): RustFFT, PureFFT :fast](assets/comparison.png)
 
-Flop model: `5 · N · log2(N)` (standard radix-2 count). Shaded bands are ±σ over the timing samples.
+Plots are **relative to FFTW** (FFTW = 1.0), so they are *clock-independent* — the absolute GFLOP/s (and
+hence the CPU clock) cancels, leaving only the speed ratio. Shaded bands are a robust central-68% spread
+`(q84−q16)/2` (outlier-insensitive). (The tables below give absolute GFLOP/s via the `5·N·log2(N)` model.)
 
 The same data as runtime **relative to FFTW** (lower = faster; FFTW is the flat 1.0 baseline) reads parity
 more directly than overlapping log-log throughput lines:
@@ -56,14 +58,14 @@ radix-8/9/12, `src/avxradix/width8.jl`). `autoplan` times W=8 against W=4 and ke
 On the same decomposition, W=8 beats W=4 **1.03–1.11×** and is at/above RustFFT parity (**0.96–1.07×**)
 across L1→L3 (768/9216/110592) — see `performance.md` §16:
 
-![AVX-512 (W=8) vs AVX2 (W=4) vs RustFFT on non-power-of-two (same decomposition)](assets/avx512_nonpow2.png)
+![AVX-512 (W=8) and RustFFT relative to PureFFT W=4 on non-power-of-two, same decomposition (higher = faster)](assets/avx512_nonpow2.png)
 
 The recursive path is the parity breakthrough: the old 2-factor four-step was forced into huge
 register-spilling codelets for large n (e.g. 5760 → 80×72) and *had no valid split above 16384* (it
 fell to Bluestein at ~3–5 GF/s). Small codelets are far more efficient (R≈8 ≈55 GF/s vs R≈40 ≈36), so
 decomposing into ~3 small factors recovers most of the gap **at every size**:
 
-![GFLOP/s on non-power-of-two sizes](assets/comparison_nonpow2.png)
+![Throughput relative to FFTW on non-power-of-two sizes (higher = faster)](assets/comparison_nonpow2.png)
 
 | regime | example n | PureFFT | note |
 |---|---:|---:|---|

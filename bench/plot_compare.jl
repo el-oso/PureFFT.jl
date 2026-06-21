@@ -69,20 +69,23 @@ function run_benchmarks(sizes)
         br = @benchmark $pr * y setup = (y = copy($x)) samples = SAMPLES seconds = SECONDS
         bp = @benchmark PureFFT.pfft!(y, $pp) setup = (y = copy($x)) samples = SAMPLES seconds = SECONDS
         tm = median(bm).time / 1.0e9; tr = median(br).time / 1.0e9; tp = median(bp).time / 1.0e9
-        rσ(b) = 100 * std(b).time / median(b).time
+        # Robust relative spread for the ribbon: the central-68% half-width (q84−q16)/2, normalized to the
+        # median. Unlike std/median it is NOT inflated by a handful of GC/OS-preempted outlier samples
+        # (which is why the median lines were clean but the std ribbons were wide).
+        relspread(b) = (quantile(b.times, 0.84) - quantile(b.times, 0.16)) / 2 / median(b.times)
 
         @printf(
             "n = %-8d  FFTW %6.1f (σ%4.1f%%)  RustFFT %6.1f (σ%4.1f%%)  PureFFT %6.1f (σ%4.1f%%) GFLOP/s\n",
-            n, gflops(n, tm), rσ(bm), gflops(n, tr), rσ(br), gflops(n, tp), rσ(bp),
+            n, gflops(n, tm), 100relspread(bm), gflops(n, tr), 100relspread(br), gflops(n, tp), 100relspread(bp),
         )
 
         push!(ns, n)
         push!(t_fftw, tm)
         push!(t_rust, tr)
         push!(t_pure, tp)
-        push!(s_fftw, std(bm).time / median(bm).time)
-        push!(s_rust, std(br).time / median(br).time)
-        push!(s_pure, std(bp).time / median(bp).time)
+        push!(s_fftw, relspread(bm))
+        push!(s_rust, relspread(br))
+        push!(s_pure, relspread(bp))
     end
 
     return ns, t_fftw, t_rust, t_pure, s_fftw, s_rust, s_pure
@@ -104,13 +107,18 @@ println("Single-thread, in-place, planning excluded\n")
 println("Power-of-two sizes:")
 ns, t_fftw, t_rust, t_pure, s_fftw, s_rust, s_pure = run_benchmarks(pow2_sizes())
 tickvals, ticklabels = pow2_ticks()
-# GFLOP/s error bar = gflops · (σ_t/median_t)  (first-order propagation of the timing σ)
-gerr(ns, t, s) = gflops.(ns, t) .* s
+# All plots are RELATIVE to FFTW (FFTW = 1.0 baseline) so they are CLOCK-INDEPENDENT — the absolute
+# GFLOP/s (and thus the CPU clock) cancels out, leaving only the speed ratio (so base/boost/pinned all
+# give the same plot). Throughput ratio = t_FFTW / t_x (>1 ⇒ faster than FFTW). Ribbon on a ratio r is
+# the first-order propagation of both relative spreads: rerr = r·√(σx²+σf²).
+relthru(t_x, t_f) = t_f ./ t_x
+rerr(r, sx, sf) = r .* sqrt.(sx .^ 2 .+ sf .^ 2)
+relband(t_x, t_f, sx, sf) = rerr(relthru(t_x, t_f), sx, sf)
 
 p1 = plot(;
     xlabel = "Transform size N",
-    ylabel = "GFLOP/s",
-    title = "FFT throughput: FFTW vs RustFFT vs PureFFT\n(Zen 5, single-thread, ComplexF64, power-of-two, planning excluded)",
+    ylabel = "throughput relative to FFTW  (higher = faster)",
+    title = "FFT throughput relative to FFTW\n(Zen 5, single-thread, ComplexF64, power-of-two; FFTW = 1.0)",
     xscale = :log2,
     xticks = (tickvals, ticklabels),
     xrotation = 45,
@@ -119,9 +127,9 @@ p1 = plot(;
     dpi = 150,
     margin = 5Plots.mm,
 )
-plot!(p1, ns, gflops.(ns, t_fftw); ribbon = gerr(ns, t_fftw, s_fftw), fillalpha = 0.18, label = LABELS.fftw, color = COLORS.fftw, linewidth = 2, marker = :circle, markersize = 4)
-plot!(p1, ns, gflops.(ns, t_rust); ribbon = gerr(ns, t_rust, s_rust), fillalpha = 0.18, label = LABELS.rust, color = COLORS.rust, linewidth = 2, marker = :circle, markersize = 4)
-plot!(p1, ns, gflops.(ns, t_pure); ribbon = gerr(ns, t_pure, s_pure), fillalpha = 0.18, label = LABELS.pure, color = COLORS.pure, linewidth = 2, marker = :circle, markersize = 4)
+hline!(p1, [1.0]; label = LABELS.fftw * " (baseline)", color = COLORS.fftw, linewidth = 2, linestyle = :dash)
+plot!(p1, ns, relthru(t_rust, t_fftw); ribbon = relband(t_rust, t_fftw, s_rust, s_fftw), fillalpha = 0.18, label = LABELS.rust, color = COLORS.rust, linewidth = 2, marker = :circle, markersize = 4)
+plot!(p1, ns, relthru(t_pure, t_fftw); ribbon = relband(t_pure, t_fftw, s_pure, s_fftw), fillalpha = 0.18, label = LABELS.pure, color = COLORS.pure, linewidth = 2, marker = :circle, markersize = 4)
 savefig(p1, joinpath(assets, "comparison.png"))
 
 # Runtime normalized to FFTW: FFTW is the flat 1.0 baseline; a curve at 1.2 means 20 % slower
@@ -138,8 +146,6 @@ p2 = plot(;
     dpi = 150,
     margin = 5Plots.mm,
 )
-# ribbon on a ratio r = t_x/t_fftw: first-order propagation of both relative σ's, rerr = r·√(σ_x²+σ_fftw²)
-rerr(r, sx, sf) = r .* sqrt.(sx .^ 2 .+ sf .^ 2)
 hline!(p2, [1.0]; label = "FFTW (baseline)", color = COLORS.fftw, linewidth = 2, linestyle = :dash)
 plot!(p2, ns, t_rust ./ t_fftw; ribbon = rerr(t_rust ./ t_fftw, s_rust, s_fftw), fillalpha = 0.18, label = LABELS.rust, color = COLORS.rust, linewidth = 2, marker = :circle, markersize = 4)
 plot!(p2, ns, t_pure ./ t_fftw; ribbon = rerr(t_pure ./ t_fftw, s_pure, s_fftw), fillalpha = 0.18, label = LABELS.pure, color = COLORS.pure, linewidth = 2, marker = :circle, markersize = 4)
@@ -148,25 +154,25 @@ savefig(p2, joinpath(assets, "comparison_time.png"))
 # --- non-power-of-two (Bluestein) ---
 println("\nNon-power-of-two smooth-composite sizes (PureFFT → codelet / four-step):")
 nq, q_fftw, q_rust, q_pure, qs_fftw, qs_rust, qs_pure = run_benchmarks(nonpow2_sizes())
-# clip y-axis to the data range so a wide σ-ribbon at one noisy (memory-bound) point can't blow up the scale
-ymax3 = 1.1 * maximum(vcat(gflops.(nq, q_fftw), gflops.(nq, q_rust), gflops.(nq, q_pure)))
+# clip y so a noisy point can't blow up the scale (relative ratios now)
+relmax3 = 1.15 * maximum(vcat(relthru(q_rust, q_fftw), relthru(q_pure, q_fftw)))
 
 p3 = plot(;
     xlabel = "Transform size N (non-power-of-two)",
-    ylabel = "GFLOP/s (nominal 5·N·log₂N)",
-    title = "FFT throughput on non-power-of-two (smooth composite) sizes\n(Zen 5, single-thread, ComplexF64; PureFFT uses the recursive mixed-radix path)",
+    ylabel = "throughput relative to FFTW  (higher = faster)",
+    title = "FFT throughput relative to FFTW — non-power-of-two (smooth composite)\n(Zen 5, single-thread, ComplexF64; FFTW = 1.0)",
     xscale = :log2,
     xticks = (tickvals, ticklabels),
     xrotation = 45,
-    ylims = (0, ymax3),
+    ylims = (0, relmax3),
     legend = :topright,
     size = (800, 500),
     dpi = 150,
     margin = 5Plots.mm,
 )
-plot!(p3, nq, gflops.(nq, q_fftw); ribbon = gerr(nq, q_fftw, qs_fftw), fillalpha = 0.18, label = LABELS.fftw, color = COLORS.fftw, linewidth = 2, marker = :circle, markersize = 4)
-plot!(p3, nq, gflops.(nq, q_rust); ribbon = gerr(nq, q_rust, qs_rust), fillalpha = 0.18, label = LABELS.rust, color = COLORS.rust, linewidth = 2, marker = :circle, markersize = 4)
-plot!(p3, nq, gflops.(nq, q_pure); ribbon = gerr(nq, q_pure, qs_pure), fillalpha = 0.18, label = "PureFFT :fast (mixed-radix)", color = COLORS.pure, linewidth = 2, marker = :circle, markersize = 4)
+hline!(p3, [1.0]; label = LABELS.fftw * " (baseline)", color = COLORS.fftw, linewidth = 2, linestyle = :dash)
+plot!(p3, nq, relthru(q_rust, q_fftw); ribbon = relband(q_rust, q_fftw, qs_rust, qs_fftw), fillalpha = 0.18, label = LABELS.rust, color = COLORS.rust, linewidth = 2, marker = :circle, markersize = 4)
+plot!(p3, nq, relthru(q_pure, q_fftw); ribbon = relband(q_pure, q_fftw, qs_pure, qs_fftw), fillalpha = 0.18, label = "PureFFT :fast (mixed-radix)", color = COLORS.pure, linewidth = 2, marker = :circle, markersize = 4)
 savefig(p3, joinpath(assets, "comparison_nonpow2.png"))
 
 println("\nSaved: $(joinpath(assets, "comparison.png"))")
