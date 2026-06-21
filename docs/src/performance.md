@@ -336,7 +336,11 @@ reasons the full path beats the cb8 PoC: (1) the *radix-12/9* column butterflies
 (9216 ≈ 0.72× W4) — that was **not** memory bandwidth but **runtime tuple indexing** in the store loops
 (`for k in 1:N; t[k]`, the CLAUDE.md rule-#1 trap); unrolling with `@nexprs` (literal indices) fixed it.
 So the net payoff is a real, consistent few-percent over W=4 across the size range — and W=8 is the routed
-default for the sizes it covers (`autoplan` times it). radix-9 stays just under rust (shuffle-bound floor).
+default for the sizes it covers (`autoplan` times it). Coverage now spans **2·3·5-smooth** (W=8
+`transpose5`/`transpose9` derived as one+ `transpose4` block + leftover rows + bridging shuffles): autoplan
+routes 5-smooth sizes (2880/23040/46080) to W=8 too, each beating FFTW and approaching rust (0.88–1.00×).
+radix-5/9 stay just under rust (the intrinsic shuffle-bound floor for radices that aren't a multiple of
+CPV=4); only the `vpermt2pd`-native redesign would close that.
 
 ## Summary table
 

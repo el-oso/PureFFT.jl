@@ -30,10 +30,11 @@ Status + planned work. This is the canonical, checked-in roadmap (human- and age
 - **radix-9 below rust (~0.86×)** — radix-9 W=8 is correct + the best PureFFT option for low-2-count sizes
   (576 beats FFTW), but stays under rust — the intrinsic radix-9 shuffle-bound floor (transpose9 = 2×
   transpose4 + bridging shuffles). Only the `vpermt2pd` redesign (below) would lift it.
-- **5-smooth coverage** — the main comparison plots use 5-smooth sizes, which W=8 doesn't cover yet
-  (needs `transpose5`/`transpose9` derived at W=8, like `transpose4/8/12` already are in
-  `src/avxradix/avxport.jl`). Doing this lets the *main* plots show W=8, not just the 2·3-smooth demo
-  (`docs/src/assets/avx512_nonpow2.png`).
+- **5-smooth coverage — DONE.** `transpose5`/`transpose9` derived at W=8 (each: one+ `transpose4` block +
+  leftover rows + bridging shuffles, bit-exact-verified); `MR5W8`/`MR9W8` added and `plan_tree_w8` extended
+  to 2·3·5-smooth. autoplan now routes 5-smooth sizes (2880/23040/46080) to W=8 — each **beats FFTW** and
+  approaches rust (0.88–1.00×, 46080 at parity). radix-5/9 stay just under rust (shuffle-bound floor); only
+  the `vpermt2pd` redesign (below) would close that.
 - **Proper AVX-512 CPU detection** — currently `_HAS_AVX512` is read from `/proc/cpuinfo` at precompile
   (Linux). Replace with a portable feature query (e.g. HostCPUFeatures) so non-Linux + cross-machine
   precompile are handled cleanly; also skip *building* W=8 plans entirely when unavailable (today

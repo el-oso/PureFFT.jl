@@ -366,3 +366,12 @@ end
      shufflevector(a[4], b[4], Val((2, 3, 4, 5, 6, 7, 8, 9))),
      shufflevector(b[4], v8, Val((2, 3, 4, 5, 6, 7, 14, 15))))
 end
+# transpose5 at W=8 (5×4 → 4×5): one transpose4 (rows 0-3) + row 4 + bridging shuffles. Verified bit-exact.
+@inline function avx_transpose5_packed(v0::V8f, v1::V8f, v2::V8f, v3::V8f, v4::V8f)
+    a = avx_transpose4_packed(v0, v1, v2, v3)
+    (a[1],
+     shufflevector(v4, a[2], Val((0, 1, 8, 9, 10, 11, 12, 13))),
+     shufflevector(shufflevector(a[2], v4, Val((6, 7, 10, 11, 0, 0, 0, 0))), a[3], Val((0, 1, 2, 3, 8, 9, 10, 11))),
+     shufflevector(shufflevector(a[3], v4, Val((4, 5, 6, 7, 12, 13, 0, 0))), a[4], Val((0, 1, 2, 3, 4, 5, 8, 9))),
+     shufflevector(a[4], v4, Val((2, 3, 4, 5, 6, 7, 14, 15))))
+end

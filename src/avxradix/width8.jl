@@ -52,6 +52,16 @@ end
         t = avx_transpose9_packed(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), _L8(buf,ib+3M), _L8(buf,ib+4M), _L8(buf,ib+5M), _L8(buf,ib+6M), _L8(buf,ib+7M), _L8(buf,ib+8M))
         Base.Cartesian.@nexprs 9 k -> _S8(out, ob + 4(k-1), t[k]); end
 end
+@inline function _colbf5_w8!(buf, o, ::Val{M}, tw, t0, t1) where {M}
+    @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c
+        r = avx_column_butterfly5(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), _L8(buf,ib+3M), _L8(buf,ib+4M), t0, t1)
+        _S8(buf, ib, r[1]); Base.Cartesian.@nexprs 4 j -> _S8(buf, ib + j*M, avx_mul_complex(tw[c*4+j], r[j+1])); end
+end
+@inline function _trans5_w8!(out, oo, buf, o, ::Val{M}) where {M}
+    @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c; ob = oo + 20c
+        t = avx_transpose5_packed(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), _L8(buf,ib+3M), _L8(buf,ib+4M))
+        Base.Cartesian.@nexprs 5 k -> _S8(out, ob + 4(k-1), t[k]); end
+end
 
 # ---- W=8 kernel types (reuse Kernel/RPlan/applyplan! + the proc_ip!/proc_oop! alternation) ----
 struct B64W8 <: Kernel
@@ -115,18 +125,36 @@ end
     @inbounds for f in 0:(cnt-1); _trans9_w8!(out, f*n, inp, f*n, Val(M)); end
 end
 
-# W=8-clean tree for n = 2^(6+3a+2b)·3^b = Butterfly64 · radix-8^a · radix-12^b (every len_per_row
-# divisible by CPV=4). Returns nothing for any other size. b radix-12 steps consume the 3s; a radix-8
-# steps consume the leftover 2s after the base (2^6) and the 12s (2^2 each).
+struct MR5W8{M, I <: Kernel} <: Kernel
+    inner::I; tw::Vector{V8f}; t0::V8f; t1::V8f
+end
+klen(::MR5W8{M}) where {M} = 5M
+MR5W8(inner::Kernel, fwd::Bool) = (M = klen(inner); MR5W8{M, typeof(inner)}(inner, mr_twiddles_w8(5, M, 5M, fwd), avx_broadcast_twiddle8(1, 5, fwd), avx_broadcast_twiddle8(2, 5, fwd)))
+@inline function proc_ip!(k::MR5W8{M}, buf, scr) where {M}
+    n = 5M; cnt = length(buf) ÷ n
+    @inbounds for f in 0:(cnt-1); _colbf5_w8!(buf, f*n, Val(M), k.tw, k.t0, k.t1); end
+    proc_oop!(k.inner, scr, buf, scr)
+    @inbounds for f in 0:(cnt-1); _trans5_w8!(buf, f*n, scr, f*n, Val(M)); end
+end
+@inline function proc_oop!(k::MR5W8{M}, out, inp, scr) where {M}
+    n = 5M; cnt = length(inp) ÷ n
+    @inbounds for f in 0:(cnt-1); _colbf5_w8!(inp, f*n, Val(M), k.tw, k.t0, k.t1); end
+    proc_ip!(k.inner, inp, scr)
+    @inbounds for f in 0:(cnt-1); _trans5_w8!(out, f*n, inp, f*n, Val(M)); end
+end
+
+# W=8-clean tree for n = 2^(6+3a+2b)·3^b·5^v5 = Butterfly64 · radix-8^a · radix-12^b · radix-9^b9 · radix-5^v5
+# (every len_per_row divisible by CPV=4). Returns nothing for any other size.
 function plan_tree_w8(n::Int, fwd::Bool = true)
     _HAS_AVX512 || return nothing                           # no real AVX-512 ⇒ don't build/time a W=8 tree
     v2 = 0; t = n; while t % 2 == 0; t ÷= 2; v2 += 1; end
     v3 = 0; while t % 3 == 0; t ÷= 3; v3 += 1; end
-    t == 1 || return nothing                                # not 2·3-smooth
-    # Consume the 3s with b9 radix-9 (3² each, no 2s) + b12 radix-12 (3·2² each), and the leftover 2s with
-    # `a` radix-8 (2³) over the Butterfly64 base (2⁶):  2·b9 + b12 = v3,  6 + 2·b12 + 3·a = v2.
-    # Prefer MORE radix-9 (the radix that gains most from 512-bit), falling back to radix-12 for the 2-count
-    # — so every size the old radix-12-only planner handled still resolves (with b9 = 0).
+    v5 = 0; while t % 5 == 0; t ÷= 5; v5 += 1; end
+    t == 1 || return nothing                                # not 2·3·5-smooth
+    # Consume the 3s with b9 radix-9 (3² each, no 2s) + b12 radix-12 (3·2² each), the leftover 2s with `a`
+    # radix-8 (2³) over the Butterfly64 base (2⁶), and the 5s with radix-5 (no 2s/3s):  2·b9 + b12 = v3,
+    # 6 + 2·b12 + 3·a = v2.  Prefer MORE radix-9 (gains most from 512-bit), falling back to radix-12 for the
+    # 2-count — so every size the old radix-12-only planner handled still resolves (with b9 = 0).
     b9 = -1; b12 = 0; a = 0
     for cand9 in (v3 ÷ 2):-1:0
         c12 = v3 - 2cand9
@@ -140,5 +168,6 @@ function plan_tree_w8(n::Int, fwd::Bool = true)
     for _ in 1:b9;  k = MR9W8(k, fwd);  end
     for _ in 1:b12; k = MR12W8(k, fwd); end
     for _ in 1:a;   k = MR8W8(k, fwd);  end
+    for _ in 1:v5;  k = MR5W8(k, fwd);  end
     RPlan(k)
 end

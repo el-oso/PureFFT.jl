@@ -22,6 +22,7 @@
             (P.CodeletPlan(ComplexF64, 12), 12),         # small non-pow2 generated codelet
             (P.autoplan(ComplexF64, 768), 768),          # non-pow2, AVX-512 (W=8) radix-12 tree
             (P.autoplan(ComplexF64, 576), 576),          # non-pow2, AVX-512 (W=8) radix-9 tree
+            (P.autoplan(ComplexF64, 2880), 2880),        # non-pow2, AVX-512 (W=8) radix-5 tree (5-smooth)
             (P.autoplan(ComplexF64, 1080), 1080),        # non-pow2, AVX2 (W=4) faithful tree
             (P.BluesteinPlan(ComplexF64, 97), 97),       # chirp-Z
             (P.RaderPlan(ComplexF64, 769), 769),         # prime via cyclic convolution
