@@ -204,6 +204,23 @@ end
         @test_opt target_modules = (PureFFT,) PureFFT.apply_unnormalized!(PureFFT.AvxMixedRadixPlan(ComplexF64, 1080), x)
     end
 
+    @testset "AVX-512 (W=8) path (AvxMixedRadixPlanW8)" begin
+        @test isnothing(PureFFT.AvxMixedRadixPlanW8(ComplexF64, 1080))  # has a 5 → not 2·3-smooth/W=8-clean
+        @test isnothing(PureFFT.AvxMixedRadixPlanW8(ComplexF64, 144))   # too small for the Butterfly64 base
+        @test isnothing(PureFFT.AvxMixedRadixPlanW8(ComplexF32, 768))   # Float64-only
+        for n in (768, 9216)                                            # = 2^(6+3a+2b)·3^b, W=8-clean
+            p = PureFFT.AvxMixedRadixPlanW8(ComplexF64, n)
+            @test p isa PureFFT.AvxMixedRadixPlan
+            x = randn(ComplexF64, n)
+            y = copy(x); pfft!(y, p)
+            @test relerr(y, fft(x)) < 1e-10
+            pii = PureFFT.AvxMixedRadixPlanW8(ComplexF64, n; inverse = true)
+            pfft!(y, pii)
+            @test relerr(y, x) < 1e-10
+        end
+        @test_opt target_modules = (PureFFT,) PureFFT.apply_unnormalized!(PureFFT.AvxMixedRadixPlanW8(ComplexF64, 768), randn(ComplexF64, 768))
+    end
+
     @testset "four-step hot path is dispatch-free" begin
         x = randn(ComplexF64, 144)
         p = plan_pfft(x; variant = :fast)

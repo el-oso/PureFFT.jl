@@ -29,3 +29,16 @@ function AvxMixedRadixPlan(::Type{Complex{T}}, n::Integer; inverse::Bool = false
     isnothing(tree) && return nothing
     return AvxMixedRadixPlan{T, typeof(tree.k)}(Int(n), inverse, tree)
 end
+
+"""
+    AvxMixedRadixPlanW8(Complex{T}, n; inverse=false) -> AvxMixedRadixPlan or nothing
+
+AVX-512 (Vec{8}) variant for W=8-clean sizes (n = 2^(6+3a+2b)·3^b). `nothing` otherwise. Only beats the
+W=4 path on small compute-bound sizes, so `autoplan` times it and keeps it only when it wins.
+"""
+function AvxMixedRadixPlanW8(::Type{Complex{T}}, n::Integer; inverse::Bool = false) where {T}
+    T === Float64 || return nothing
+    tree = AvxRadix.plan_tree_w8(Int(n), !inverse)
+    isnothing(tree) && return nothing
+    return AvxMixedRadixPlan{T, typeof(tree.k)}(Int(n), inverse, tree)
+end
