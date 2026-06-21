@@ -27,6 +27,18 @@ end
     end
 end
 
+# ---- leaf: Butterfly64 (8x8, two-phase; needs scratch ≥ its length) ----
+struct B64 <: Kernel
+    n::Int; tw::Vector{V4f}; rot::V4f
+end
+B64(fwd::Bool) = B64(64, bf64_twiddles(fwd), fwd ? _ROT90_FWD : _ROT90_INV)
+@inline function proc_ip!(k::B64, buf, scr)
+    @inbounds for f in 0:(length(buf) ÷ 64 - 1); butterfly64!(buf, buf, scr, 64f, k.tw, k.rot); end
+end
+@inline function proc_oop!(k::B64, out, inp, scr)
+    @inbounds for f in 0:(length(inp) ÷ 64 - 1); butterfly64!(out, inp, out, 64f, k.tw, k.rot); end  # out = workspace
+end
+
 # ---- column-butterfly + transpose passes (R=3,4,5; even M; per-FFT at offset `o`) ----
 @inline function _colbf3!(buf, o, ::Val{M}, tw, bf3) where {M}
     @inbounds for c in 0:(M ÷ 2 - 1)

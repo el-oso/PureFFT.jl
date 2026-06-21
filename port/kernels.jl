@@ -62,6 +62,31 @@ function butterfly36!(out, inp, base::Int, tw::NTuple{15, V4f}, tw3::V4f)  # out
     avx_store_complex!(out, base + 4, o2[1]); avx_store_complex!(out, base + 10, o2[2]); avx_store_complex!(out, base + 16, o2[3]); avx_store_complex!(out, base + 22, o2[4]); avx_store_complex!(out, base + 28, o2[5]); avx_store_complex!(out, base + 34, o2[6])
 end
 
+# ===== Butterfly64 (rust Butterfly64Avx64): 8x8, two-phase (col+twiddle+transpose, then row) =====
+# twiddles: gen_butterfly_twiddles_separated_columns!(8,8) = 28 = [mixedradix_twiddle_chunk(cs*2, r, 64)
+# for cs in 0:3, r in 1:7], index [7cs + r].
+bf64_twiddles(fwd) = [avx_mixedradix_twiddle_chunk(cs * 2, r, 64, fwd) for cs in 0:3 for r in 1:7]
+@inline _bf64_ld8(buf, b) = (avx_load_complex(buf, b), avx_load_complex(buf, b + 8), avx_load_complex(buf, b + 16), avx_load_complex(buf, b + 24),
+                             avx_load_complex(buf, b + 32), avx_load_complex(buf, b + 40), avx_load_complex(buf, b + 48), avx_load_complex(buf, b + 56))
+# out-of-place size-64 FFT: load inp, store out; scr (size ≥64 at base) is phase-1 workspace (out===scr ⇒ in-place ok)
+function butterfly64!(out, inp, scr, base::Int, tw::Vector{V4f}, rot::V4f)
+    @inbounds for cs in 0:3                                  # phase 1: col bf8 + twiddle + transpose → scr
+        b = base + cs * 2
+        m = avx_column_butterfly8(_bf64_ld8(inp, b)..., rot)
+        t = avx_transpose8_packed(m[1], avx_mul_complex(tw[7cs + 1], m[2]), avx_mul_complex(tw[7cs + 2], m[3]), avx_mul_complex(tw[7cs + 3], m[4]),
+                                  avx_mul_complex(tw[7cs + 4], m[5]), avx_mul_complex(tw[7cs + 5], m[6]), avx_mul_complex(tw[7cs + 6], m[7]), avx_mul_complex(tw[7cs + 7], m[8]))
+        ob = base + cs * 16
+        avx_store_complex!(scr, ob, t[1]); avx_store_complex!(scr, ob + 2, t[2]); avx_store_complex!(scr, ob + 4, t[3]); avx_store_complex!(scr, ob + 6, t[4])
+        avx_store_complex!(scr, ob + 8, t[5]); avx_store_complex!(scr, ob + 10, t[6]); avx_store_complex!(scr, ob + 12, t[7]); avx_store_complex!(scr, ob + 14, t[8])
+    end
+    @inbounds for cs in 0:3                                  # phase 2: row bf8 (scr → out)
+        b = base + cs * 2
+        m = avx_column_butterfly8(_bf64_ld8(scr, b)..., rot)
+        avx_store_complex!(out, b, m[1]); avx_store_complex!(out, b + 8, m[2]); avx_store_complex!(out, b + 16, m[3]); avx_store_complex!(out, b + 24, m[4])
+        avx_store_complex!(out, b + 32, m[5]); avx_store_complex!(out, b + 40, m[6]); avx_store_complex!(out, b + 48, m[7]); avx_store_complex!(out, b + 56, m[8])
+    end
+end
+
 # ===== shared helpers =====
 seeded(n) = [Complex(((k * 2 + 1) % 17) / 17 - 0.5, ((k * 3 + 2) % 19) / 19 - 0.5) for k in 0:(n - 1)]
 function golden_fft(n)
