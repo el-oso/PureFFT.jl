@@ -9,29 +9,36 @@ A from-scratch, pure-Julia FFT built as an **investigation**: *where does the sp
 rustfft / FFTW actually come from — the algorithm, the LLVM compiler, or Rust the language? And
 can pure Julia match it?*
 
-See **[REPORT.md](REPORT.md)** for the full findings, including an honest accounting of what is and
-isn't proven. Short version: **on the real workload (one transform of size N), Rust's `rustfft` is
-~2× faster than this pure-Julia FFT** — parity was not reached. What *is* established: rustfft (Rust)
-≈ FFTW (C) (a Rust-vs-C result), and Julia's compiled *batched* kernel hits ~38 GFLOP/s on a
-friendly microbenchmark (necessary, not sufficient). The belief that the remaining 2× is
-implementation rather than language is reasonable but **unproven** — it would take a Julia FFT at
-parity, or a same-algorithm Julia-vs-Rust head-to-head, to settle.
+**Answer: yes — pure Julia matches it.** PureFFT's `:fast` (autotuned) reaches **40–48 GFLOP/s** on
+power-of-two sizes (AMD Zen 5, AVX-512, single-thread) and **matches or beats both FFTW (MEASURE) and
+rustfft-AVX across most of the range** — power-of-two and smooth non-power-of-two alike, with no size
+cliff. The gap an earlier round measured (~2×) was **implementation, not language**: algorithm choice,
+cache blocking, SIMD codelets, radix-16 pass fusion, register-resident small-n kernels, and a *faithful
+op-for-op port* of rustfft's AVX mixed-radix (`src/avxradix/`) closed it. Julia and Rust share the LLVM
+backend — same algorithm, same speed. PureFFT even runs an **AVX-512 (`Vec{8}`) non-pow2 path that beats
+rustfft** (which is AVX2-only) on the sizes it covers — see the
+[docs](https://el-oso.github.io/PureFFT.jl/dev/) (Benchmarks + Performance) for numbers and the
+engineering. (The remaining gap is a ~0.85–0.92× floor on 3-heavy / radix-9-12 non-pow2 sizes — see
+`docs/src/performance.md` §15.)
+
+> Historical note: an early `REPORT.md` concluded the 2× was unproven; it predates the radix-4 AVX
+> engine and the faithful port and is superseded by the current results.
 
 ## Layout
 
 ```
 src/         core deps: AbstractFFTs, TypeContracts (compile-time plan contract)
-  contracts.jl   AbstractFFTPlan interface (TypeContracts @contract/@verify, zero runtime cost)
-  radix2.jl      Stage 1: scalar radix-2 baseline
-  mixedradix.jl  Stage 2: mixed-radix, any N incl. primes
-  staged.jl      Stage 3: staged radix-2 + Base @simd kernel
-  codelets.jl    @generated straight-line DFT codelets (Julia's genfft-equivalent; AoS + SoA)
-  recursive.jl   Stage 4: cache-oblivious recursive DIT + generated codelets
-  soa.jl         Stage 5: split re/im recursive (negative finding — see REPORT)
-  blocked.jl     Stage 7: cache-blocked four-step + batched SIMD kernel (best at medium/large N)
-  autotune.jl    Stage 9: :fast — times candidates, keeps the fastest
-test/        correctness vs FFTW (392 tests)
-bench/       compare.jl, batched_proof.jl (≥FFTW kernel), llvm_inspect.jl, alloccheck.jl
+  contracts.jl    AbstractFFTPlan interface (TypeContracts @contract/@verify, zero runtime cost)
+  radix2/mixedradix/staged/recursive/soa/blocked.jl   variant ladder: scalar → cache-blocked four-step
+  codelets.jl     @generated straight-line DFT codelets (Julia's genfft-equivalent; AoS + SoA)
+  radix4_avx.jl   the power-of-two AVX-512 radix-4 engine (:radix4avx, 40–48 GFLOP/s)
+  avxradix/       faithful op-for-op port of rustfft's AVX mixed-radix (non-pow2);
+                  width8.jl = the AVX-512 (Vec{8}, W=8) variant that beats rustfft
+  rader.jl, bluestein.jl   prime-size paths (Rader cyclic convolution / Bluestein chirp-Z)
+  autotune.jl     :fast — times candidates per size, keeps the fastest
+test/        correctness + JET dispatch-free + TrimCheck + StrictMode + perf guard (ReTestItems, ~970 checks)
+bench/       plot_compare.jl (comparison plots), cpufreq_lock.sh (stable benchmarking),
+             strictmode_audit.jl, alloccheck.jl, llvm_inspect.jl
 ```
 
 ## Use
@@ -72,7 +79,7 @@ PureFFT.apply_irfft!(ip, Complex{Float64}.(out_c), out_r)
 ## Reproduce
 
 ```bash
-julia --project=.     -e 'using Pkg; Pkg.test()'      # correctness (392 tests)
+julia --project=.     -e 'using Pkg; Pkg.test()'      # correctness + JET + TrimCheck (~970 checks)
 julia --project=bench bench/compare.jl                # FFTW / RustFFT / PureFFT table
 julia --project=bench bench/batched_proof.jl          # batched kernel ≥ FFTW throughput
 julia --project=bench bench/llvm_inspect.jl           # confirm AVX-512 autovectorization

@@ -9,9 +9,11 @@ AVX-512, single-thread) and **matches or beats both FFTW (MEASURE) and rustfft-A
 the range** — leading at n=128/256/16384/65536, at parity at 1024/4096, trailing only at n=64 and
 n=512. It also has **no non-power-of-two cliff** (Bluestein chirp-Z) and generates tailored kernels
 at plan time (dynamic mixed-radix codelets) for sizes the static libraries fall back on. Smooth
-(2·3·5) non-power-of-two sizes additionally route through an AVX2 mixed-radix path
-(`AvxMixedRadixPlan`) that reaches FFTW/RustFFT parity on radix-8-dominated sizes (e.g. 720, 1440,
-11520).
+(2·3·5) non-power-of-two sizes additionally route through a **faithful mechanical port of RustFFT's
+AVX mixed-radix** (`AvxMixedRadixPlan`) at FFTW/RustFFT parity on radix-8-dominated sizes — and,
+uniquely (RustFFT is AVX2-only), through an **AVX-512 `Vec{8}` path** (`src/avxradix/width8.jl`) that
+**beats RustFFT** on the W=8-clean sizes it covers. `autoplan` times every candidate and keeps the
+fastest per size, so it's always a strict improvement.
 
 The key finding: **same algorithm in both languages performs the same**. The gap between a naive
 Julia FFT and rustfft-AVX was purely implementation work — algorithm choice, cache blocking, SIMD
@@ -61,9 +63,11 @@ All variants match FFTW to machine precision (relative error ≤ 5e-16); the ReT
 | `:radix4avx` | **40–48** | Radix4 + AVX Butterfly16/32, radix-16 fusion, small-n register kernels |
 | `:bluestein` | non-pow2 | chirp-Z, O(n log n) on primes |
 | `:codelet` | non-pow2 | dynamically-generated mixed-radix kernel (small smooth) |
-| recursive mixed-radix (via `:fast`) | **18–30** | multi-factor small codelets + fused twiddle + SIMD transpose; any smooth composite non-pow2 (~0.6–0.87× FFTW, no size cliff) |
+| recursive mixed-radix (via `:fast`) | **18–30** | fallback for smooth sizes the faithful port doesn't cover; multi-factor small codelets + fused twiddle + SIMD transpose; no size cliff |
+| faithful RustFFT-AVX (via `:fast`) | non-pow2 | mechanical AVX2 port at FFTW/RustFFT parity; an **AVX-512 (W=8)** variant beats RustFFT on the sizes it covers |
 | `:fast` | **best-of** | Autotuner picks fastest per size (pow2 + non-pow2) |
 
 Reference: FFTW/rustfft ≈ 35–46 GFLOP/s on the same hardware.
 
-A real-input variant (`prfft`/`pirfft`) is under development.
+Real-input transforms (`prfft`/`pirfft`, with `plan_prfft`/`plan_pirfft`) are supported, exploiting
+Hermitian symmetry for real `Vector{Float64}` input.

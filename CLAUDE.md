@@ -70,8 +70,11 @@ measurements are in `docs/src/performance.md`; this file is the must-follow summ
 ## Standing rules
 
 - `isnothing(x)` / `!isnothing(x)` — never `=== nothing` / `!== nothing`.
-- **Regenerate `bench/plot_compare.jl` plots before every push** (catches regressions; benches need
-  the CPU `performance` governor for stable numbers).
+- **Regenerate `bench/plot_compare.jl` plots before every push** (catches regressions). For low-noise
+  numbers, pin the CPU clock first: `sudo bench/cpufreq_lock.sh pin 4500` (the governor is already
+  `performance`; the real noise source is opportunistic boost drifting under load — base clock is only
+  2 GHz, so `pin` clamps to a fixed high clock with boost on). `restore` after. Always `taskset -c 2`
+  and keep that core's SMT sibling idle.
 - Commit author email: `15278831+el-oso@users.noreply.github.com` (never a real address).
 - End commit messages with `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
 - No Python anywhere (per the global rule).
