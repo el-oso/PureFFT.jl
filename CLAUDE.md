@@ -48,6 +48,17 @@ measurements are in `docs/src/performance.md`; this file is the must-follow summ
 - **Verify each layer BIT-EXACT against Rust golden values** (the harness in
   `bench/rustfft_compare/`, `cargo run --bin verify` → `golden.txt`; Julia diff in `port/`) before
   building the next layer up. Numerically expect ≤1e-15 rel-error (twiddle cos/sin may differ 1 ULP).
+- **Match rust's RADIX CHOICE, not just the algorithm** (see `docs/src/performance.md` §15). The planner
+  prefers **radix-8/9/12/6** (8ⁿ·9ᵐ·12ᵏ·6ʲ), NOT radix-4/5 — radix-8 reaches depth-2 parity (0.97×);
+  radix-4/5 plateau ~0.91×. radix-9/12 are intrinsically ~3× more shuffle/FMA-heavy (twiddle mults) than
+  radix-8, so 3-heavy sizes have a real **~0.85–0.92× floor** — not a bug. Use **ONE** size-n scratch
+  buffer reused at every level (rust's in/out-of-place alternation; pass `scr` not `buf` as inner scratch),
+  not depth×n (cache).
+- **Know the measurement floor before micro-optimizing.** Even the in-process interleaved harness
+  (`port/measure.jl`, rust via the cdylib) drifts **±7% on the ratio run-to-run** (σ≈2% within a run). Do
+  NOT chase ≤5% per-radix opts against it — they're sub-noise (chunk-unroll and pre-dup twiddles both
+  tested, both fail end-to-end). Pin CPU frequency first if you must. Isolated micro-benchmarks mislead —
+  re-measure in the full kernel.
 
 ## Standing rules
 

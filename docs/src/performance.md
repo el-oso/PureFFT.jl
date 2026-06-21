@@ -274,6 +274,34 @@ Confirming a kernel is ≥0.96× of a Rust reference is dominated by *measuremen
 Measured (median, core-pinned): **Butterfly7 1.04×, Butterfly36 1.05×, MixedRadix4xn-144 0.98×** —
 all ≥0.96×. (The docs comparison plots in `bench/plot_compare.jl` likewise use median, not min.)
 
+## 15. Radix choice dominates; per-radix micro-opt hits a measurement floor (the non-pow2 push)
+
+Hard-won lessons from pushing the faithful port's non-power-of-two coverage to ≥0.96×:
+
+- **Match RustFFT's *radix choice*, not just its algorithm.** The avx_planner prefers **radix-8/9/12/6**
+  ("blazing fast 8xn"), decomposing 2·3-smooth sizes as 8ⁿ·9ᵐ·12ᵏ·6ʲ — *not* radix-4/5. With radix-8,
+  composites reach parity **even at depth 2** (2304 = MR8(MR8(B36)) = 0.97×). Building trees from radix-4/5
+  instead plateaus at ~0.91× — that "depth-2 plateau" was a wrong-radix artifact, not a language limit.
+- **radix-8 is intrinsically cheap; radix-9/12 are not.** A size-8 column butterfly is adds + rotations
+  with **no twiddle multiplies** (21 shuffles / 7 FMAs per pass); the size-9 (3×3) needs complex twiddle
+  mults (**36 shuffles / 24 FMAs** — ~3×). So radix-9/12-heavy (3-heavy) sizes sit at a genuine
+  **~0.85–0.92× floor**; radix-8-dominated sizes are at parity. This is fundamental, not a porting bug.
+- **One scratch buffer, not per-level.** RustFFT's in-place/out-of-place alternation reuses a *single*
+  size-n scratch at every recursion level (pass `scr`, not `buf`, as the inner's scratch). Allocating a
+  distinct buffer per level (depth×n) blows the working set out of cache and makes the per-level gap
+  *compound* with depth (576: 0.82× → 0.97× after the fix on shallow sizes).
+- **Micro-opts that failed (documented so nobody re-tries them):** (a) **chunk-loop unrolling** backfires
+  on already-large kernel bodies — register pressure, 0.96×. (b) **Pre-duplicated twiddles**
+  (store `dup_re`/`dup_im`, drop 2 shuffles/mult) is +5% in an *isolated* colbf micro-bench but
+  **net-neutral/negative end-to-end** — it trades a shuffle for a load and doubles the twiddle array
+  (cache). Isolated micro-benchmarks mislead; always re-measure in the full kernel.
+- **The measurement floor is ~7% on the *ratio*, run-to-run.** Even the in-process *interleaved* harness
+  (rust via ccall to a cdylib, alternating blocks same-process, median+σ, `taskset`) has σ≈2% *within* a
+  run but the absolute ratio drifts ±7% *between* process launches (144× measured at 0.90 / 0.945 / 0.97
+  on identical code). **You cannot validate a ≤5% optimization against a 7% floor** — sub-noise per-radix
+  tuning is not productive without first pinning CPU frequency (`cpupower`, needs root) or ~10× longer
+  averaging. Know the floor before chasing small wins.
+
 ## Summary table
 
 | Trick | Effect | Notes |
@@ -291,3 +319,6 @@ all ≥0.96×. (The docs comparison plots in `bench/plot_compare.jl` likewise us
 | Unroll via `@generated` (no runtime tuple index) | **135×** | runtime `t[r]` boxes; literal/`@generated` unroll |
 | `fmaddsub`/`fmsubadd` via `llvmcall` | bit-exact w/ rust | x86 intrinsics SIMD.jl lacks |
 | Faithful RustFFT port vs reinterpretation | 0.5–0.85× → **0.92×** | mechanical op-for-op port reaches parity |
+| Match rust's radix (8/9/12/6 not 4/5) | plateau 0.91× → **0.97×** | radix-8 depth-2 parity; single scratch buffer |
+| radix-9/12 vs radix-8 cost | ~0.90× floor | 3× shuffles/FMAs (twiddle mults); fundamental |
+| Per-radix micro-opt below measurement floor | ≤5% vs **7%** noise | ratio drifts ±7% run-to-run; pin freq to chase |
