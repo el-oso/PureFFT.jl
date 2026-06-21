@@ -16,12 +16,13 @@ struct B36 <: Kernel
     tw3::V4f
 end
 B36(fwd::Bool) = B36(36, bf36_twiddles(fwd), avx_broadcast_twiddle(1, 3, fwd))
-@inline function proc_ip!(k::B36, buf, scr)
+fdepth(::B36) = 0
+@inline function proc_ip!(k::B36, buf, scrs, lvl)
     @inbounds for f in 0:(length(buf) ÷ 36 - 1)
         butterfly36!(buf, 36f, k.tw, k.tw3)     # base offset, no SubArray alloc
     end
 end
-@inline function proc_oop!(k::B36, out, inp, scr)
+@inline function proc_oop!(k::B36, out, inp, scrs, lvl)
     @inbounds for f in 0:(length(inp) ÷ 36 - 1)
         butterfly36!(out, inp, 36f, k.tw, k.tw3)    # true out-of-place: load inp, store out (no copy)
     end
@@ -74,20 +75,21 @@ struct MR4{M, I <: Kernel} <: Kernel
     inner::I; tw::Vector{V4f}; rot::V4f
 end
 klen(::MR4{M}) where {M} = 4M
+fdepth(k::MR4) = 1 + fdepth(k.inner)
 function MR4(inner::Kernel, fwd::Bool)
     M = klen(inner)
     MR4{M, typeof(inner)}(inner, mr_twiddles(4, M, 4M, fwd), fwd ? _ROT90_FWD : _ROT90_INV)
 end
-@inline function proc_ip!(k::MR4{M}, buf, scr) where {M}
-    n = 4M; cnt = length(buf) ÷ n
+@inline function proc_ip!(k::MR4{M}, buf, scrs, lvl) where {M}
+    n = 4M; cnt = length(buf) ÷ n; s = scrs[lvl]               # distinct per-level scratch
     @inbounds for f in 0:(cnt - 1); _colbf4!(buf, f * n, M, k.tw, k.rot); end
-    proc_oop!(k.inner, scr, buf, buf)
-    @inbounds for f in 0:(cnt - 1); _trans4!(buf, f * n, scr, f * n, M); end
+    proc_oop!(k.inner, s, buf, scrs, lvl + 1)                  # inner: buf→s
+    @inbounds for f in 0:(cnt - 1); _trans4!(buf, f * n, s, f * n, M); end
 end
-@inline function proc_oop!(k::MR4{M}, out, inp, scr) where {M}
+@inline function proc_oop!(k::MR4{M}, out, inp, scrs, lvl) where {M}
     n = 4M; cnt = length(inp) ÷ n
     @inbounds for f in 0:(cnt - 1); _colbf4!(inp, f * n, M, k.tw, k.rot); end
-    proc_ip!(k.inner, inp, scr)
+    proc_ip!(k.inner, inp, scrs, lvl)
     @inbounds for f in 0:(cnt - 1); _trans4!(out, f * n, inp, f * n, M); end
 end
 
@@ -96,26 +98,27 @@ struct MR5{M, I <: Kernel} <: Kernel
     inner::I; tw::Vector{V4f}; t0::V4f; t1::V4f
 end
 klen(::MR5{M}) where {M} = 5M
+fdepth(k::MR5) = 1 + fdepth(k.inner)
 function MR5(inner::Kernel, fwd::Bool)
     M = klen(inner)
     MR5{M, typeof(inner)}(inner, mr_twiddles(5, M, 5M, fwd), avx_broadcast_twiddle(1, 5, fwd), avx_broadcast_twiddle(2, 5, fwd))
 end
-@inline function proc_ip!(k::MR5{M}, buf, scr) where {M}
-    n = 5M; cnt = length(buf) ÷ n
+@inline function proc_ip!(k::MR5{M}, buf, scrs, lvl) where {M}
+    n = 5M; cnt = length(buf) ÷ n; s = scrs[lvl]
     @inbounds for f in 0:(cnt - 1); _colbf5!(buf, f * n, M, k.tw, k.t0, k.t1); end
-    proc_oop!(k.inner, scr, buf, buf)
-    @inbounds for f in 0:(cnt - 1); _trans5!(buf, f * n, scr, f * n, M); end
+    proc_oop!(k.inner, s, buf, scrs, lvl + 1)
+    @inbounds for f in 0:(cnt - 1); _trans5!(buf, f * n, s, f * n, M); end
 end
-@inline function proc_oop!(k::MR5{M}, out, inp, scr) where {M}
+@inline function proc_oop!(k::MR5{M}, out, inp, scrs, lvl) where {M}
     n = 5M; cnt = length(inp) ÷ n
     @inbounds for f in 0:(cnt - 1); _colbf5!(inp, f * n, M, k.tw, k.t0, k.t1); end
-    proc_ip!(k.inner, inp, scr)
+    proc_ip!(k.inner, inp, scrs, lvl)
     @inbounds for f in 0:(cnt - 1); _trans5!(out, f * n, inp, f * n, M); end
 end
 
 # ---- top-level: FFT(x) in place ----
-struct RPlan{K <: Kernel}; k::K; scr::Vector{ComplexF64}; end
-RPlan(k::Kernel) = RPlan(k, Vector{ComplexF64}(undef, klen(k)))
+struct RPlan{K <: Kernel}; k::K; scrs::Vector{Vector{ComplexF64}}; end
+RPlan(k::Kernel) = RPlan(k, [Vector{ComplexF64}(undef, klen(k)) for _ in 1:max(1, fdepth(k))])
 function applyplan!(p::RPlan, x)
-    proc_ip!(p.k, x, p.scr); x
+    proc_ip!(p.k, x, p.scrs, 1); x
 end
