@@ -10,5 +10,15 @@ Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 PureFFT = "4bd8a7c1-2372-4ecc-824d-9832c6b13f99"
 RustFFT = "b7f167ac-9de6-40dd-9818-ec636999de39"
 SIMD = "fdea26ae-647d-5447-a871-4b548cad5224"
+StrictMode = "0e98b4f4-d0e6-42ac-af0a-707c24852f32"
 TrimCheck = "f940d764-e397-4179-96e0-76ce55cfe39b"
 TypeContracts = "c7a3f1e2-84b5-4d69-9e0a-1f2b3c4d5e6f"
+
+# StrictMode is not registered — resolve from master (for bench/strictmode_audit.jl).
+[sources]
+StrictMode = {url = "https://github.com/el-oso/StrictMode.jl", rev = "master"}
+
+[preferences.StrictMode]
+checks_enabled = true
+analysis = "full"
+fail_mode = "error"

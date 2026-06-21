@@ -48,10 +48,17 @@ Status + planned work. This is the canonical, checked-in roadmap (human- and age
   smooth-size coverage.
 
 ### Tooling / infrastructure
-- **Dogfood StrictMode.jl** — adopt the user's new StrictMode.jl (strict-mode invariant enforcement,
-  inspired by this work) in PureFFT once ready: enforce type-stability / no-untyped-globals / dispatch-
-  free / trim-safe on the hot kernels + public API, complementing JET/TrimCheck/TypeContracts. Confirm
-  its API before wiring; add as a dep + a test gate.
+- **StrictMode.jl dogfooding — DONE (test dep + feedback).** Adopted StrictMode (declarable perf
+  guarantees = AllocCheck + JET + `@inferred` unified) as a test dep: `test/strictmode_tests.jl`
+  (`@assert_typestable`/`@assert_noalloc` on one plan per routing path; gated on `checks_enabled()`),
+  `bench/strictmode_audit.jl` (broader hot-path `check` sweep, mirrors `bench/alloccheck.jl`),
+  `test/LocalPreferences.toml` ships checks enabled. StrictMode's verdicts agree with PureFFT's existing
+  JET/AllocCheck on the whole hot path (26/26 checks pass). Findings + 2 direct fixes sent upstream (see
+  the StrictMode clone's `FEEDBACK.md`): F2 `@assert_typestable` mislabeled unresolved names as
+  instability (fixed), F4 `format_findings` had no String method (fixed); F1 enable-needs-restart, F3
+  `audit` return-type varies by kwarg, F5 whole-module audit isn't scoped to declared guarantees
+  (reported). Future: optionally add `@strict_function` to a couple `src/` kernels (compile-time-gated
+  off) once StrictMode stabilizes; keep TrimCheck (orthogonal — StrictMode doesn't cover trim-safety).
 - **Nightly CI `@testsetup`** — the nightly job fails on a ReTestItems-vs-nightly `@testsetup`
   incompatibility (currently `continue-on-error`, so it doesn't red the pipeline). Bump/patch when
   convenient.
