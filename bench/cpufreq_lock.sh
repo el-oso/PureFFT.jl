@@ -46,7 +46,10 @@ case "${1:-status}" in
         echo "Pinned to ${mhz} MHz (boost on, min=max):"; status ;;
     lock)
         for g in $GOV_GLOB; do echo performance > "$g"; done
-        [ -w "$BOOST" ] && echo 0 > "$BOOST"
+        [ -w "$BOOST" ] && echo 0 > "$BOOST"                 # boost off first → cpuinfo_max drops to base
+        BASE=$(cat /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq)   # = base clock now
+        for f in $MIN_GLOB; do echo "$HW_MIN" > "$f"; done   # reset floor (a prior `pin` may have raised it)
+        for f in $MAX_GLOB; do echo "$BASE"  > "$f"; done
         echo "Locked (performance governor, boost off → base clock):"; status ;;
     restore)
         [ -w "$BOOST" ] && echo 1 > "$BOOST"
