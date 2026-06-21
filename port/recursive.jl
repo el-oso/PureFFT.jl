@@ -27,7 +27,23 @@ end
     end
 end
 
-# ---- column-butterfly + transpose passes (R=4,5; even M; per-FFT at offset `o`) ----
+# ---- column-butterfly + transpose passes (R=3,4,5; even M; per-FFT at offset `o`) ----
+@inline function _colbf3!(buf, o, ::Val{M}, tw, bf3) where {M}
+    @inbounds for c in 0:(M ÷ 2 - 1)
+        ib = o + 2c
+        r = avx_column_butterfly3(avx_load_complex(buf, ib), avx_load_complex(buf, ib + M), avx_load_complex(buf, ib + 2M), bf3)
+        avx_store_complex!(buf, ib, r[1])
+        avx_store_complex!(buf, ib + M, avx_mul_complex(tw[c * 2 + 1], r[2]))
+        avx_store_complex!(buf, ib + 2M, avx_mul_complex(tw[c * 2 + 2], r[3]))
+    end
+end
+@inline function _trans3!(out, oo, buf, o, ::Val{M}) where {M}
+    @inbounds for c in 0:(M ÷ 2 - 1)
+        ib = o + 2c; ob = oo + 6c
+        t = avx_transpose3_packed(avx_load_complex(buf, ib), avx_load_complex(buf, ib + M), avx_load_complex(buf, ib + 2M))
+        avx_store_complex!(out, ob, t[1]); avx_store_complex!(out, ob + 2, t[2]); avx_store_complex!(out, ob + 4, t[3])
+    end
+end
 @inline function _colbf4!(buf, o, ::Val{M}, tw, rot) where {M}
     @inbounds for c in 0:(M ÷ 2 - 1)
         ib = o + 2c
@@ -67,6 +83,28 @@ end
 # mixedradix twiddles: make_mixedradix_twiddle_chunk(c*2, y, n) for c in 0:M/2-1, y in 1:R-1 → [c*(R-1)+y]
 function mr_twiddles(R, M, n, fwd)
     [avx_mixedradix_twiddle_chunk(c * 2, y, n, fwd) for c in 0:(M ÷ 2 - 1) for y in 1:(R - 1)]
+end
+
+# ---- MixedRadix3 (R=3) ----
+struct MR3{M, I <: Kernel} <: Kernel
+    inner::I; tw::Vector{V4f}; bf3::V4f
+end
+klen(::MR3{M}) where {M} = 3M
+function MR3(inner::Kernel, fwd::Bool)
+    M = klen(inner)
+    MR3{M, typeof(inner)}(inner, mr_twiddles(3, M, 3M, fwd), avx_broadcast_twiddle(1, 3, fwd))
+end
+@inline function proc_ip!(k::MR3{M}, buf, scr) where {M}
+    n = 3M; cnt = length(buf) ÷ n
+    @inbounds for f in 0:(cnt - 1); _colbf3!(buf, f * n, Val(M), k.tw, k.bf3); end
+    proc_oop!(k.inner, scr, buf, scr)
+    @inbounds for f in 0:(cnt - 1); _trans3!(buf, f * n, scr, f * n, Val(M)); end
+end
+@inline function proc_oop!(k::MR3{M}, out, inp, scr) where {M}
+    n = 3M; cnt = length(inp) ÷ n
+    @inbounds for f in 0:(cnt - 1); _colbf3!(inp, f * n, Val(M), k.tw, k.bf3); end
+    proc_ip!(k.inner, inp, scr)
+    @inbounds for f in 0:(cnt - 1); _trans3!(out, f * n, inp, f * n, Val(M)); end
 end
 
 # ---- MixedRadix4 (R=4) — M (len_per_row) is a TYPE PARAMETER so the passes const-fold ----

@@ -207,6 +207,9 @@ end
 
 # transpose5_packed (rust __m256d): note _mm256_blend_pd(a,b,0x03) = lanes 0,1 from b, 2,3 from a
 @inline _blend03(a::V4f, b::V4f) = shufflevector(a, b, Val((4, 5, 2, 3)))
+# transpose3_packed (rust __m256d): unpacklo(r0,r1), blend_pd(r0,r2,0x03), unpackhi(r1,r2)
+@inline avx_transpose3_packed(r0::V4f, r1::V4f, r2::V4f) =
+    (avx_unpacklo_complex(r0, r1), _blend03(r0, r2), avx_unpackhi_complex(r1, r2))
 @inline function avx_transpose5_packed(r1::V4f, r2::V4f, r3::V4f, r4::V4f, r5::V4f)
     (avx_unpacklo_complex(r1, r2), avx_unpacklo_complex(r3, r4), _blend03(r1, r5),
      avx_unpackhi_complex(r2, r3), avx_unpackhi_complex(r4, r5))
