@@ -157,6 +157,34 @@ end
     end
 end
 
+# ---- radix-12 passes (rust's preferred fast radix) ----
+@inline function _colbf12!(buf, o, ::Val{M}, tw, bf3, rot) where {M}
+    @inbounds for c in 0:(M ÷ 2 - 1)
+        ib = o + 2c
+        r = avx_column_butterfly12(avx_load_complex(buf, ib), avx_load_complex(buf, ib + M), avx_load_complex(buf, ib + 2M), avx_load_complex(buf, ib + 3M),
+                                   avx_load_complex(buf, ib + 4M), avx_load_complex(buf, ib + 5M), avx_load_complex(buf, ib + 6M), avx_load_complex(buf, ib + 7M),
+                                   avx_load_complex(buf, ib + 8M), avx_load_complex(buf, ib + 9M), avx_load_complex(buf, ib + 10M), avx_load_complex(buf, ib + 11M), bf3, rot)
+        avx_store_complex!(buf, ib, r[1])
+        avx_store_complex!(buf, ib + M, avx_mul_complex(tw[c * 11 + 1], r[2])); avx_store_complex!(buf, ib + 2M, avx_mul_complex(tw[c * 11 + 2], r[3]))
+        avx_store_complex!(buf, ib + 3M, avx_mul_complex(tw[c * 11 + 3], r[4])); avx_store_complex!(buf, ib + 4M, avx_mul_complex(tw[c * 11 + 4], r[5]))
+        avx_store_complex!(buf, ib + 5M, avx_mul_complex(tw[c * 11 + 5], r[6])); avx_store_complex!(buf, ib + 6M, avx_mul_complex(tw[c * 11 + 6], r[7]))
+        avx_store_complex!(buf, ib + 7M, avx_mul_complex(tw[c * 11 + 7], r[8])); avx_store_complex!(buf, ib + 8M, avx_mul_complex(tw[c * 11 + 8], r[9]))
+        avx_store_complex!(buf, ib + 9M, avx_mul_complex(tw[c * 11 + 9], r[10])); avx_store_complex!(buf, ib + 10M, avx_mul_complex(tw[c * 11 + 10], r[11]))
+        avx_store_complex!(buf, ib + 11M, avx_mul_complex(tw[c * 11 + 11], r[12]))
+    end
+end
+@inline function _trans12!(out, oo, buf, o, ::Val{M}) where {M}
+    @inbounds for c in 0:(M ÷ 2 - 1)
+        ib = o + 2c; ob = oo + 24c
+        t = avx_transpose12_packed(avx_load_complex(buf, ib), avx_load_complex(buf, ib + M), avx_load_complex(buf, ib + 2M), avx_load_complex(buf, ib + 3M),
+                                   avx_load_complex(buf, ib + 4M), avx_load_complex(buf, ib + 5M), avx_load_complex(buf, ib + 6M), avx_load_complex(buf, ib + 7M),
+                                   avx_load_complex(buf, ib + 8M), avx_load_complex(buf, ib + 9M), avx_load_complex(buf, ib + 10M), avx_load_complex(buf, ib + 11M))
+        avx_store_complex!(out, ob, t[1]); avx_store_complex!(out, ob + 2, t[2]); avx_store_complex!(out, ob + 4, t[3]); avx_store_complex!(out, ob + 6, t[4])
+        avx_store_complex!(out, ob + 8, t[5]); avx_store_complex!(out, ob + 10, t[6]); avx_store_complex!(out, ob + 12, t[7]); avx_store_complex!(out, ob + 14, t[8])
+        avx_store_complex!(out, ob + 16, t[9]); avx_store_complex!(out, ob + 18, t[10]); avx_store_complex!(out, ob + 20, t[11]); avx_store_complex!(out, ob + 22, t[12])
+    end
+end
+
 # mixedradix twiddles: make_mixedradix_twiddle_chunk(c*2, y, n) for c in 0:M/2-1, y in 1:R-1 → [c*(R-1)+y]
 function mr_twiddles(R, M, n, fwd)
     [avx_mixedradix_twiddle_chunk(c * 2, y, n, fwd) for c in 0:(M ÷ 2 - 1) for y in 1:(R - 1)]
@@ -226,6 +254,28 @@ end
     @inbounds for f in 0:(cnt - 1); _colbf9!(inp, f * n, Val(M), k.tw, k.tw1, k.tw2, k.tw3, k.bf3); end
     proc_ip!(k.inner, inp, scr)
     @inbounds for f in 0:(cnt - 1); _trans9!(out, f * n, inp, f * n, Val(M)); end
+end
+
+# ---- MixedRadix12 (R=12) — rust's preferred fast radix (good-thomas cb12) ----
+struct MR12{M, I <: Kernel} <: Kernel
+    inner::I; tw::Vector{V4f}; bf3::V4f; rot::V4f
+end
+klen(::MR12{M}) where {M} = 12M
+function MR12(inner::Kernel, fwd::Bool)
+    M = klen(inner)
+    MR12{M, typeof(inner)}(inner, mr_twiddles(12, M, 12M, fwd), avx_broadcast_twiddle(1, 3, fwd), fwd ? _ROT90_FWD : _ROT90_INV)
+end
+@inline function proc_ip!(k::MR12{M}, buf, scr) where {M}
+    n = 12M; cnt = length(buf) ÷ n
+    @inbounds for f in 0:(cnt - 1); _colbf12!(buf, f * n, Val(M), k.tw, k.bf3, k.rot); end
+    proc_oop!(k.inner, scr, buf, scr)
+    @inbounds for f in 0:(cnt - 1); _trans12!(buf, f * n, scr, f * n, Val(M)); end
+end
+@inline function proc_oop!(k::MR12{M}, out, inp, scr) where {M}
+    n = 12M; cnt = length(inp) ÷ n
+    @inbounds for f in 0:(cnt - 1); _colbf12!(inp, f * n, Val(M), k.tw, k.bf3, k.rot); end
+    proc_ip!(k.inner, inp, scr)
+    @inbounds for f in 0:(cnt - 1); _trans12!(out, f * n, inp, f * n, Val(M)); end
 end
 
 # ---- MixedRadix8 (R=8) — rust's preferred fast radix ----

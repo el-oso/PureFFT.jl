@@ -213,6 +213,22 @@ end
     (avx_unpacklo_complex(r0, r1), avx_unpacklo_complex(r2, r3), avx_unpacklo_complex(r4, r5), avx_unpacklo_complex(r6, r7),
      shufflevector(r8, r0, Val((0, 1, 6, 7))),
      avx_unpackhi_complex(r1, r2), avx_unpackhi_complex(r3, r4), avx_unpackhi_complex(r5, r6), avx_unpackhi_complex(r7, r8))
+# transpose12_packed (rust __m256d): three transpose4 + reorder
+@inline function avx_transpose12_packed(r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11)
+    a = avx_transpose4_packed(r0, r1, r2, r3); b = avx_transpose4_packed(r4, r5, r6, r7); c = avx_transpose4_packed(r8, r9, r10, r11)
+    (a[1], a[2], b[1], b[2], c[1], c[2], a[3], a[4], b[3], b[4], c[3], c[4])
+end
+# column_butterfly12 (rust 4x3 good-thomas — NO twiddles between); bf3 = bf3 twiddle, rot = rotation
+@inline function avx_column_butterfly12(r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, bf3, rot)
+    mid0 = avx_column_butterfly4(r0, r3, r6, r9, rot)
+    mid1 = avx_column_butterfly4(r4, r7, r10, r1, rot)
+    mid2 = avx_column_butterfly4(r8, r11, r2, r5, rot)
+    o0 = avx_column_butterfly3(mid0[1], mid1[1], mid2[1], bf3)
+    o1 = avx_column_butterfly3(mid0[2], mid1[2], mid2[2], bf3)
+    o2 = avx_column_butterfly3(mid0[3], mid1[3], mid2[3], bf3)
+    o3 = avx_column_butterfly3(mid0[4], mid1[4], mid2[4], bf3)
+    (o0[1], o1[2], o2[3], o3[1], o0[2], o1[3], o2[1], o3[2], o0[3], o1[1], o2[2], o3[3])
+end
 # column_butterfly9 (rust 3x3 mixed radix); tw1=W9^1, tw2=W9^2, tw3=W9^4 (broadcast complex); bf3=bf3 twiddle
 @inline function avx_column_butterfly9(r0, r1, r2, r3, r4, r5, r6, r7, r8, tw1, tw2, tw3, bf3)
     mid0 = avx_column_butterfly3(r0, r3, r6, bf3)
