@@ -90,6 +90,37 @@ end
     GC.@preserve x vstore(v, reinterpret(Ptr{Float64}, pointer(x)) + i * 16)
 end
 
+# ---- column butterflies (rust column_butterfly3 / column_butterfly6), width-generic ----
+@inline function avx_column_butterfly3(r0, r1, r2, tw)
+    mid1, mid2 = avx_butterfly2(r1, r2)
+    output0 = avx_add(r0, mid1)
+    twr, twi = avx_duplicate_complex(tw)
+    mid1 = avx_fmadd(mid1, twr, r0)
+    mid2_rot = avx_rotate90(mid2, _ROT90_INV)
+    output1 = avx_fmadd(mid2_rot, twi, mid1)
+    output2 = avx_fnmadd(mid2_rot, twi, mid1)
+    (output0, output1, output2)
+end
+@inline function avx_column_butterfly6(r::NTuple{6}, tw)   # 3x2 good-thomas
+    mid0 = avx_column_butterfly3(r[1], r[3], r[5], tw)     # rows 0,2,4
+    mid1 = avx_column_butterfly3(r[4], r[6], r[2], tw)     # rows 3,5,1
+    o0, o1 = avx_butterfly2(mid0[1], mid1[1])
+    o2, o3 = avx_butterfly2(mid0[2], mid1[2])
+    o4, o5 = avx_butterfly2(mid0[3], mid1[3])
+    (o0, o3, o4, o1, o2, o5)
+end
+
+# ---- mixed-radix twiddle chunk (rust make_mixedradix_twiddle_chunk: 2 complex per Vec{4}) ----
+@inline function avx_mixedradix_twiddle_chunk(x::Int, y::Int, len::Int, forward::Bool)
+    t0r, t0i = compute_twiddle(y * x, len, forward)
+    t1r, t1i = compute_twiddle(y * (x + 1), len, forward)
+    V4f((t0r, t0i, t1r, t1i))
+end
+@inline function avx_broadcast_twiddle(index::Int, len::Int, forward::Bool)
+    r, i = compute_twiddle(index, len, forward)
+    avx_broadcast_complex(r, i)
+end
+
 # ---- broadcast / twiddles (rust broadcast_complex_elements, twiddles::compute_twiddle) ----
 @inline avx_broadcast_complex(re::Float64, im::Float64) = V4f((re, im, re, im))
 # rust compute_twiddle: angle = -2π·index/len (Forward); Inverse negates the angle (conjugate).
