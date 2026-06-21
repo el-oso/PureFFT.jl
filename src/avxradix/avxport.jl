@@ -289,9 +289,20 @@ const _ROT90_INV8 = V8f((0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0, -0.0))
 @inline _rot90_inv(::V8f) = _ROT90_INV8
 const _HALF_ROOT2_8 = V8f(ntuple(_ -> sqrt(0.5), Val(8)))
 @inline _half_root2(::V8f) = _HALF_ROOT2_8
-const _SGN8 = V8f((-1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0))
+# 512-bit fmaddsub via the AVX-512 intrinsic (i32 4 = current rounding) — fused like the .256 path,
+# avoiding the muladd+sign-vector form that was measured 0.65× (extra mul + longer dependency chain).
+const _NT8 = NTuple{8, VecElement{Float64}}
+const _IR_MADDSUB8 = """
+declare <8 x double> @llvm.x86.avx512.vfmaddsub.pd.512(<8 x double>, <8 x double>, <8 x double>, i32)
+define <8 x double> @entry(<8 x double> %a, <8 x double> %b, <8 x double> %c) #0 {
+  %r = call <8 x double> @llvm.x86.avx512.vfmaddsub.pd.512(<8 x double> %a, <8 x double> %b, <8 x double> %c, i32 4)
+  ret <8 x double> %r
+}
+attributes #0 = { alwaysinline }"""
+@inline avx_fmaddsub(a::V8f, b::V8f, c::V8f) =
+    Vec(Base.llvmcall((_IR_MADDSUB8, "entry"), _NT8, Tuple{_NT8, _NT8, _NT8}, a.data, b.data, c.data))
 @inline avx_mul_complex(left::V8f, right::V8f) =
-    muladd(avx_dup_re(left), right, _SGN8 * (avx_dup_im(left) * avx_swap_complex(right)))
+    avx_fmaddsub(avx_dup_re(left), right, avx_mul(avx_dup_im(left), avx_swap_complex(right)))
 @inline avx_broadcast_complex8(re::Float64, im::Float64) = V8f((re, im, re, im, re, im, re, im))
 @inline function avx_broadcast_twiddle8(index::Int, len::Int, forward::Bool)
     r, i = compute_twiddle(index, len, forward); avx_broadcast_complex8(r, i)
