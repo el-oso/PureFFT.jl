@@ -4,6 +4,8 @@ These are project-specific REQUIREMENTS for anyone (human or agent) working on P
 hard-won — violating them has caused 100×+ regressions and multi-session dead ends. Full detail and
 measurements are in `docs/src/performance.md`; this file is the must-follow summary.
 
+**Roadmap / planned work: see [`ROADMAP.md`](ROADMAP.md)** (checked-in, the canonical status + next steps).
+
 ## Performance requirements (MUST follow)
 
 1. **Unroll fixed-count loops with `@generated`. NEVER index a tuple with a runtime variable.**

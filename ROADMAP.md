@@ -1,0 +1,65 @@
+# PureFFT.jl — Roadmap
+
+Status + planned work. This is the canonical, checked-in roadmap (human- and agent-readable). For the
+"why/how" of finished work see git history, `docs/src/performance.md`, and `docs/src/benchmarks.md`.
+
+## Where it stands today
+
+- **Power-of-two**: AVX-512 (`Vec{8,Float64}`) radix-4 engine, 40–48 GFLOP/s — matches/beats FFTW &
+  RustFFT across most of the range (`src/radix4_avx.jl`).
+- **Non-power-of-two**: a faithful mechanical port of RustFFT's AVX mixed-radix (`src/avxradix/`),
+  routed by `autoplan` (`src/autotune.jl`) and exposed as `AvxMixedRadixPlan`. radix-8-dominated smooth
+  sizes are at FFTW/RustFFT parity; the rest fall back to the existing codelet / four-step / recursive /
+  Rader / Bluestein paths. No size cliff.
+- **AVX-512 for non-pow2 (the differentiator — RustFFT is AVX2-only)**: width-generic compute layer +
+  W=8 kernels (`src/avxradix/width8.jl`, `AvxMixedRadixPlanW8`). `autoplan` times W=8 vs W=4 and keeps
+  it only where it wins — so it's a strict improvement. W=8 beats W=4 **and** RustFFT on small
+  compute-bound non-pow2 sizes (e.g. n=9216: ~43 vs ~37 GF/s).
+- Tooling: AbstractFFTs plan interface, JET dispatch-free + TrimCheck trim-safe hot path, ReTestItems
+  suite, relative perf-regression guards, σ-ribbon comparison plots.
+
+## Open / planned
+
+### AVX-512 (W=8) — extend the win beyond small compute-bound sizes
+- **Large / memory-bound regression** — W=8 regresses on large non-pow2 (memory-bandwidth-bound; 512-bit
+  helps compute, not bandwidth). Investigate whether it's fixable: cache-block the W=8 passes (the V8f
+  working set is 2× → blows L1/L2 sooner), and tune the W=8 keystone to the level of the production V4f
+  one (`@inline` depth, scratch reuse). It may be a fundamental floor — measure before investing.
+- **5-smooth coverage** — the main comparison plots use 5-smooth sizes, which W=8 doesn't cover yet
+  (needs `transpose5`/`transpose9` derived at W=8, like `transpose4/8/12` already are in
+  `src/avxradix/avxport.jl`). Doing this lets the *main* plots show W=8, not just the 2·3-smooth demo
+  (`docs/src/assets/avx512_nonpow2.png`).
+- **Proper AVX-512 CPU detection** — currently `_HAS_AVX512` is read from `/proc/cpuinfo` at precompile
+  (Linux). Replace with a portable feature query (e.g. HostCPUFeatures) so non-Linux + cross-machine
+  precompile are handled cleanly; also skip *building* W=8 plans entirely when unavailable (today
+  `_besttime` just never selects them).
+- **AVX-512-native shuffle reduction (research)** — the non-pow2 kernels are shuffle-bound (Zen5's
+  512-bit shuffle throughput doesn't double), so width alone gives only ~1.2× on the best radixes. A
+  native redesign using `vpermt2pd` to cut shuffle count could lift this materially. High-risk research.
+
+### Non-pow2 coverage / parity
+- **Packed bases + full planner** — port `Butterfly{18,24,27,32}` (the dual-width packed path) + the
+  `avx_planner` base-selection (`base_fn`) so PureFFT's decompositions match RustFFT's per size (today
+  the planner uses a Butterfly36 base only). Lifts the 3-heavy laggard sizes (~0.85–0.92×).
+- **radix-9/12 codegen floor** — radix-9/12 levels sit ~0.90× of rust (intrinsically ~3× more
+  shuffle/FMA-heavy than radix-8). Diffuse Julia-LLVM-vs-rustc scheduling; only worth chasing with the
+  measurement floor pinned (see `performance.md` §15: ±7% run-to-run on the ratio — pin CPU frequency).
+- **MR2 / MR16** — currently sizes needing a radix-2 or radix-16 step fall back; add them for fuller
+  smooth-size coverage.
+
+### Tooling / infrastructure
+- **Dogfood StrictMode.jl** — adopt the user's new StrictMode.jl (strict-mode invariant enforcement,
+  inspired by this work) in PureFFT once ready: enforce type-stability / no-untyped-globals / dispatch-
+  free / trim-safe on the hot kernels + public API, complementing JET/TrimCheck/TypeContracts. Confirm
+  its API before wiring; add as a dep + a test gate.
+- **Nightly CI `@testsetup`** — the nightly job fails on a ReTestItems-vs-nightly `@testsetup`
+  incompatibility (currently `continue-on-error`, so it doesn't red the pipeline). Bump/patch when
+  convenient.
+- **FixedSizeArrays** — tried, null result on the pointer-based hot path (not pursued); revisit only if
+  the scalar-indexed buffers become hot.
+
+## Done (for context)
+Pow2 radix-4 AVX-512 engine; non-pow2 codelet (Stage 9) / four-step (Stage 10) / recursive mixed-radix
+(Stage 12); Rader (Stage 11) + Bluestein (Stage 8); CPU-generic cache tuning (CPUSummary); AbstractFFTs
+integration; ReTestItems + perf-regression tests; the faithful RustFFT-AVX non-pow2 port + integration;
+the width-generic AVX-512 (W=8) compute layer, W=8 transposes, and targeted W=8 routing.
