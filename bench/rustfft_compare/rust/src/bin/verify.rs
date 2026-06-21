@@ -80,14 +80,14 @@ fn seeded(n: usize) -> Vec<Complex<f64>> {
 
 fn fft_level() {
     let mut planner = FftPlannerAvx::<f64>::new().expect("AVX required");
-    for &n in &[5usize, 7, 8, 9, 11, 12, 27, 35, 36, 315, 720, 5760, 11520, 23040, 92160] {
+    for &n in &[5usize, 7, 8, 9, 11, 12, 27, 35, 36, 144, 315, 720, 5760, 11520, 23040, 92160] {
         let fft = planner.plan_fft_forward(n);
         let src = seeded(n);
         let mut work = src.clone();
         let mut scratch = vec![Complex::new(0.0, 0.0); fft.get_inplace_scratch_len()];
         fft.process_with_scratch(&mut work, &mut scratch);
         // outputs (bits) only for small sizes (keep output readable); timing for all
-        if n <= 36 {
+        if n <= 144 {
             print!("F {} out", n);
             for z in &work { print!(" {:016x} {:016x}", z.re.to_bits(), z.im.to_bits()); }
             println!();

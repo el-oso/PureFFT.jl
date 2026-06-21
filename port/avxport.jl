@@ -167,6 +167,21 @@ end
     (output0, output1, output2, output3, output4)
 end
 
+# column_butterfly4 (rust): rotation = make_rotation90(FFT direction) — _ROT90_FWD for forward.
+@inline function avx_column_butterfly4(r1, r2, r3, r4, rotation)
+    mid0, mid2 = avx_butterfly2(r1, r3)
+    mid1, mid3 = avx_butterfly2(r2, r4)
+    mid3_rot = avx_rotate90(mid3, rotation)
+    o0, o1 = avx_butterfly2(mid0, mid1)
+    o2, o3 = avx_butterfly2(mid2, mid3_rot)
+    (o0, o2, o1, o3)
+end
+# transpose4_packed (rust __m256d): unpack_complex pairs → [lo01, lo23, hi01, hi23]
+@inline function avx_transpose4_packed(r1::V4f, r2::V4f, r3::V4f, r4::V4f)
+    (avx_unpacklo_complex(r1, r2), avx_unpacklo_complex(r3, r4),
+     avx_unpackhi_complex(r1, r2), avx_unpackhi_complex(r3, r4))
+end
+
 # transpose5_packed (rust __m256d): note _mm256_blend_pd(a,b,0x03) = lanes 0,1 from b, 2,3 from a
 @inline _blend03(a::V4f, b::V4f) = shufflevector(a, b, Val((4, 5, 2, 3)))
 @inline function avx_transpose5_packed(r1::V4f, r2::V4f, r3::V4f, r4::V4f, r5::V4f)
