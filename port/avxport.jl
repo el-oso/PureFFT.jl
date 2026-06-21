@@ -28,12 +28,12 @@ const _IR_SUBADD = replace(_IR_MADDSUB, "vfmaddsub" => "vfmsubadd")
     Vec(Base.llvmcall((_IR_SUBADD, "entry"), _NT4, Tuple{_NT4, _NT4, _NT4}, a.data, b.data, c.data))
 
 # ---- basic arithmetic (rust: _mm256_{add,sub,mul,xor}_pd, _mm256_{fmadd,fnmadd}_pd) ----
-@inline avx_add(a::V4f, b::V4f) = a + b
-@inline avx_sub(a::V4f, b::V4f) = a - b
-@inline avx_mul(a::V4f, b::V4f) = a * b
-@inline avx_neg(a::V4f) = -a
-@inline avx_fmadd(a::V4f, b::V4f, c::V4f) = muladd(a, b, c)        # rust fmadd:  a*b + c
-@inline avx_fnmadd(a::V4f, b::V4f, c::V4f) = muladd(-a, b, c)      # rust fnmadd: -(a*b) + c
+@inline avx_add(a, b) = a + b                                      # generic over vector width
+@inline avx_sub(a, b) = a - b
+@inline avx_mul(a, b) = a * b
+@inline avx_neg(a) = -a
+@inline avx_fmadd(a, b, c) = muladd(a, b, c)                       # rust fmadd:  a*b + c
+@inline avx_fnmadd(a, b, c) = muladd(-a, b, c)                     # rust fnmadd: -(a*b) + c
 @inline function avx_xor(a::V4f, b::V4f)
     reinterpret(V4f, reinterpret(Vec{4, UInt64}, a) ⊻ reinterpret(Vec{4, UInt64}, b))
 end
@@ -60,7 +60,35 @@ end
 # Inverse  → broadcast Complex(0.0, -0.0) → mask lanes [0,-0,0,-0]
 const _ROT90_FWD = V4f((-0.0, 0.0, -0.0, 0.0))
 const _ROT90_INV = V4f((0.0, -0.0, 0.0, -0.0))
-@inline avx_rotate90(s::V4f, mask::V4f) = avx_swap_complex(avx_xor(s, mask))
+@inline avx_rotate90(s, mask) = avx_swap_complex(avx_xor(s, mask))
+
+# ---- dual-width: __m128d ≅ Vec{2,Float64} = 1 complex (rust AvxVector for __m128d) ----
+const V2f = Vec{2, Float64}
+@inline avx_swap_complex(s::V2f) = shufflevector(s, Val((1, 0)))                # _mm_permute_pd 0x1
+@inline function avx_xor(a::V2f, b::V2f)
+    reinterpret(V2f, reinterpret(Vec{2, UInt64}, a) ⊻ reinterpret(Vec{2, UInt64}, b))
+end
+@inline avx_broadcast_complex2(re::Float64, im::Float64) = V2f((re, im))
+const _ROT90_FWD2 = V2f((-0.0, 0.0))
+const _ROT90_INV2 = V2f((0.0, -0.0))
+# column_butterfly2 (rust default impl): [a+b, a-b] — generic over width
+@inline avx_butterfly2(a, b) = (a + b, a - b)
+
+# lo/hi/merge (rust AvxVector256 lo/hi + AvxVector128 merge)
+@inline avx_lo(v::V4f) = shufflevector(v, Val((0, 1)))     # low 128 bits  = complex 0
+@inline avx_hi(v::V4f) = shufflevector(v, Val((2, 3)))     # high 128 bits = complex 1
+@inline avx_merge(lo::V2f, hi::V2f) = shufflevector(lo, hi, Val((0, 1, 2, 3)))
+
+# transpose_2x2_f64 (avx64_utils): [unpacklo, unpackhi]
+@inline avx_transpose_2x2(a::V4f, b::V4f) = (avx_unpacklo_complex(a, b), avx_unpackhi_complex(a, b))
+
+# partial (1-complex) load/store (rust load_partial1_complex / store_partial1_complex = _mm_loadu/storeu_pd)
+@inline function avx_load_partial1(x::AbstractVector{Complex{Float64}}, i::Int)
+    GC.@preserve x vload(V2f, reinterpret(Ptr{Float64}, pointer(x)) + i * 16)
+end
+@inline function avx_store_partial1!(x::AbstractVector{Complex{Float64}}, i::Int, v::V2f)
+    GC.@preserve x vstore(v, reinterpret(Ptr{Float64}, pointer(x)) + i * 16)
+end
 
 # ---- broadcast / twiddles (rust broadcast_complex_elements, twiddles::compute_twiddle) ----
 @inline avx_broadcast_complex(re::Float64, im::Float64) = V4f((re, im, re, im))
