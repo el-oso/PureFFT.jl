@@ -265,11 +265,14 @@ Confirming a kernel is ≥0.96× of a Rust reference is dominated by *measuremen
   subtracts `copy`; subtracting two similar noisy numbers gives ±15% swings at n≈36. Looping the
   in-place transform with no copy (data → NaN, but FP *throughput* is identical) + a DCE sink is far
   more stable.
-- **Pin a core (`taskset -c N`)**, warm up, take the **min over many blocks**. Reproducible to ~1%.
-  Allocation alignment still varies ~10-15% across runs — the noise floor; don't over-read one number.
+- **Pin a core (`taskset -c N`)**, warm up, and **compare MEDIAN times (not min)** with their sigmas.
+  Min rewards a lucky outlier — comparing julia-median to rust-*min* gave a false "0.93×"; rust's σ
+  showed its min was unrepresentative. On **median-to-median** the faithful port is at/above parity,
+  and Julia's σ (0.2–0.4%) is *tighter* than rust's (0.3–3.7%). Gate: `rust_median/julia_median ≥ 0.96`
+  with both distributions tight + comparable.
 
-With this, faithful-ported kernels measure at/near parity (B7≈1.02×, MixedRadix4xn-144≈0.96×; B36≈0.93×
-is codegen-limited — LLVM instruction scheduling/spilling vs rustc — not an algorithm gap).
+Measured (median, core-pinned): **Butterfly7 1.04×, Butterfly36 1.05×, MixedRadix4xn-144 0.98×** —
+all ≥0.96×. (The docs comparison plots in `bench/plot_compare.jl` likewise use median, not min.)
 
 ## Summary table
 

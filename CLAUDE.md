@@ -34,8 +34,10 @@ measurements are in `docs/src/performance.md`; this file is the must-follow summ
 6. **Benchmark tiny kernels correctly** (else the parity gate is unmeasurable): call via a `@noinline`
    concrete wrapper (`@noinline run!(w)=kernel!(w,CONST...)`), NOT a closure/lambda passed to a timer
    (closure indirection lands in the timed region). Use repeated **in-place** reps (no copy-subtract —
-   data → NaN but FP throughput is identical, far more stable) + `taskset -c N` core pinning + min over
-   many blocks + a DCE sink. Noise floor is ~few %; don't over-read one number near the gate.
+   data → NaN but FP throughput is identical, far more stable) + `taskset -c N` core pinning + a DCE
+   sink. **Compare MEDIAN times, not min** (min rewards lucky outliers — it gave a false "0.93×" vs
+   rust's unrepresentative min; on median the port is at/above parity). Report **σ** and require both
+   distributions tight + comparable (rel-σ within a few %). Parity gate = rust_median/julia_median ≥ 0.96.
 
 ## Faithful-port methodology (for the non-pow2 / RustFFT parity work)
 
