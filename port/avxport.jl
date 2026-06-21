@@ -121,6 +121,59 @@ end
     avx_broadcast_complex(r, i)
 end
 
+# ---- Vec{2} (__m128d) duplicate/mul_complex/fmaddsub for the partial-column path ----
+const _IR_MADDSUB2 = """
+declare <2 x double> @llvm.x86.fma.vfmaddsub.pd(<2 x double>, <2 x double>, <2 x double>)
+define <2 x double> @entry(<2 x double> %a, <2 x double> %b, <2 x double> %c) #0 {
+  %r = call <2 x double> @llvm.x86.fma.vfmaddsub.pd(<2 x double> %a, <2 x double> %b, <2 x double> %c)
+  ret <2 x double> %r
+}
+attributes #0 = { alwaysinline }
+"""
+const _NT2 = NTuple{2, VecElement{Float64}}
+@inline avx_fmaddsub(a::V2f, b::V2f, c::V2f) =
+    Vec(Base.llvmcall((_IR_MADDSUB2, "entry"), _NT2, Tuple{_NT2, _NT2, _NT2}, a.data, b.data, c.data))
+@inline avx_dup_re(s::V2f) = shufflevector(s, Val((0, 0)))
+@inline avx_dup_im(s::V2f) = shufflevector(s, Val((1, 1)))
+@inline avx_duplicate_complex(s::V2f) = (avx_dup_re(s), avx_dup_im(s))
+@inline function avx_mul_complex(left::V2f, right::V2f)
+    avx_fmaddsub(avx_dup_re(left), right, avx_mul(avx_dup_im(left), avx_swap_complex(right)))
+end
+
+# width-generic inverse-rotation mask (rust make_rotation90(Inverse) dispatches on vector type)
+@inline _rot90_inv(::V4f) = _ROT90_INV
+@inline _rot90_inv(::V2f) = _ROT90_INV2
+
+# ---- column_butterfly5 (rust), width-generic ----
+@inline function avx_column_butterfly5(r1, r2, r3, r4, r5, tw0, tw1)
+    sum1, diff4 = avx_butterfly2(r2, r5)
+    sum2, diff3 = avx_butterfly2(r3, r4)
+    rot = _rot90_inv(r1)
+    rotated4 = avx_rotate90(diff4, rot)
+    rotated3 = avx_rotate90(diff3, rot)
+    output0 = avx_add(r1, avx_add(sum1, sum2))
+    t0r, t0i = avx_duplicate_complex(tw0)
+    t1r, t1i = avx_duplicate_complex(tw1)
+    twiddled1_mid = avx_fmadd(t0r, sum1, r1)
+    twiddled2_mid = avx_fmadd(t1r, sum1, r1)
+    twiddled3_mid = avx_mul(t1i, rotated4)
+    twiddled4_mid = avx_mul(t0i, rotated4)
+    twiddled1 = avx_fmadd(t1r, sum2, twiddled1_mid)
+    twiddled2 = avx_fmadd(t0r, sum2, twiddled2_mid)
+    twiddled3 = avx_fnmadd(t0i, rotated3, twiddled3_mid)
+    twiddled4 = avx_fmadd(t1i, rotated3, twiddled4_mid)
+    output1, output4 = avx_butterfly2(twiddled1, twiddled4)
+    output2, output3 = avx_butterfly2(twiddled2, twiddled3)
+    (output0, output1, output2, output3, output4)
+end
+
+# transpose5_packed (rust __m256d): note _mm256_blend_pd(a,b,0x03) = lanes 0,1 from b, 2,3 from a
+@inline _blend03(a::V4f, b::V4f) = shufflevector(a, b, Val((4, 5, 2, 3)))
+@inline function avx_transpose5_packed(r1::V4f, r2::V4f, r3::V4f, r4::V4f, r5::V4f)
+    (avx_unpacklo_complex(r1, r2), avx_unpacklo_complex(r3, r4), _blend03(r1, r5),
+     avx_unpackhi_complex(r2, r3), avx_unpackhi_complex(r4, r5))
+end
+
 # ---- broadcast / twiddles (rust broadcast_complex_elements, twiddles::compute_twiddle) ----
 @inline avx_broadcast_complex(re::Float64, im::Float64) = V4f((re, im, re, im))
 # rust compute_twiddle: angle = -2π·index/len (Forward); Inverse negates the angle (conjugate).
