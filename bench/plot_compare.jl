@@ -40,7 +40,11 @@ function nonpow2_sizes()
     smooth = sort!(unique(Int[2^a * 3^b * 5^c for a in 0:18 for b in 0:11 for c in 0:7
                                  if 64 <= 2^a * 3^b * 5^c <= 262144]))
     smooth = filter(!ispow2, smooth)
-    return unique(smooth[argmin(abs.(log2.(smooth) .- e))] for e in 6.5:1.0:18.5)
+    base = [smooth[argmin(abs.(log2.(smooth) .- e))] for e in 6.5:1.0:18.5]
+    # also include a few W=8-clean (2·3-smooth, n=2^(6+3a+2b)·3^b) sizes so the AVX-512 (W=8) path,
+    # which autoplan routes for these, is visible in the plot (it covers 2·3-smooth, not 5-smooth).
+    w8clean = [768, 6144, 9216, 49152, 110592]
+    return sort!(unique(vcat(base, w8clean)))
 end
 
 function run_benchmarks(sizes)
