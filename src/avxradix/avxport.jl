@@ -187,8 +187,9 @@ end
 
 # ---- column_butterfly8 (4x2 mixed radix) + transpose8 + bf8 twiddle helpers ----
 const _HALF_ROOT2 = V4f((sqrt(0.5), sqrt(0.5), sqrt(0.5), sqrt(0.5)))
-@inline avx_bf8_tw1(x, rot) = avx_mul(_HALF_ROOT2, avx_add(avx_rotate90(x, rot), x))   # apply_butterfly8_twiddle1
-@inline avx_bf8_tw3(x, rot) = avx_mul(_HALF_ROOT2, avx_sub(avx_rotate90(x, rot), x))   # apply_butterfly8_twiddle3
+@inline _half_root2(::V4f) = _HALF_ROOT2                                                # width-dispatched (V8f added below)
+@inline avx_bf8_tw1(x, rot) = avx_mul(_half_root2(x), avx_add(avx_rotate90(x, rot), x))   # apply_butterfly8_twiddle1
+@inline avx_bf8_tw3(x, rot) = avx_mul(_half_root2(x), avx_sub(avx_rotate90(x, rot), x))   # apply_butterfly8_twiddle3
 @inline function avx_column_butterfly8(r1, r2, r3, r4, r5, r6, r7, r8, rot)
     m0 = avx_column_butterfly4(r1, r3, r5, r7, rot)
     m1 = avx_column_butterfly4(r2, r4, r6, r8, rot)
@@ -268,5 +269,42 @@ end
     GC.@preserve x vload(V4f, reinterpret(Ptr{Float64}, pointer(x)) + i * 16)
 end
 @inline function avx_store_complex!(x::AbstractVector{Complex{Float64}}, i::Int, v::V4f)
+    GC.@preserve x vstore(v, reinterpret(Ptr{Float64}, pointer(x)) + i * 16)
+end
+
+# ============================================================================================
+# AVX-512 width: Vec{8,Float64} = one 512-bit register = 4 interleaved complex (CPV=4). The
+# column butterflies (cb3/4/5/6/8/9/12) are width-generic — they only need these width-dispatched
+# primitives + constants (no rewrite). The differentiator vs RustFFT (AVX2-only). complex multiply
+# uses muladd+sign (cf. radix4_avx _vcmul), not a 512-bit fmaddsub intrinsic.
+# ============================================================================================
+const V8f = Vec{8, Float64}
+@inline avx_swap_complex(s::V8f) = shufflevector(s, Val((1, 0, 3, 2, 5, 4, 7, 6)))
+@inline avx_dup_re(s::V8f) = shufflevector(s, Val((0, 0, 2, 2, 4, 4, 6, 6)))
+@inline avx_dup_im(s::V8f) = shufflevector(s, Val((1, 1, 3, 3, 5, 5, 7, 7)))
+@inline avx_duplicate_complex(s::V8f) = (avx_dup_re(s), avx_dup_im(s))
+@inline avx_xor(a::V8f, b::V8f) = reinterpret(V8f, reinterpret(Vec{8, UInt64}, a) ⊻ reinterpret(Vec{8, UInt64}, b))
+const _ROT90_FWD8 = V8f((-0.0, 0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0))
+const _ROT90_INV8 = V8f((0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0, -0.0))
+@inline _rot90_inv(::V8f) = _ROT90_INV8
+const _HALF_ROOT2_8 = V8f(ntuple(_ -> sqrt(0.5), Val(8)))
+@inline _half_root2(::V8f) = _HALF_ROOT2_8
+const _SGN8 = V8f((-1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0))
+@inline avx_mul_complex(left::V8f, right::V8f) =
+    muladd(avx_dup_re(left), right, _SGN8 * (avx_dup_im(left) * avx_swap_complex(right)))
+@inline avx_broadcast_complex8(re::Float64, im::Float64) = V8f((re, im, re, im, re, im, re, im))
+@inline function avx_broadcast_twiddle8(index::Int, len::Int, forward::Bool)
+    r, i = compute_twiddle(index, len, forward); avx_broadcast_complex8(r, i)
+end
+# mixedradix twiddle chunk, 4 complex per V8f (vs 2 per V4f): columns x..x+3
+@inline function avx_mixedradix_twiddle_chunk8(x::Int, y::Int, len::Int, forward::Bool)
+    t0r, t0i = compute_twiddle(y * x, len, forward); t1r, t1i = compute_twiddle(y * (x + 1), len, forward)
+    t2r, t2i = compute_twiddle(y * (x + 2), len, forward); t3r, t3i = compute_twiddle(y * (x + 3), len, forward)
+    V8f((t0r, t0i, t1r, t1i, t2r, t2i, t3r, t3i))
+end
+@inline function avx_load_complex8(x::AbstractVector{Complex{Float64}}, i::Int)
+    GC.@preserve x vload(V8f, reinterpret(Ptr{Float64}, pointer(x)) + i * 16)
+end
+@inline function avx_store_complex8!(x::AbstractVector{Complex{Float64}}, i::Int, v::V8f)
     GC.@preserve x vstore(v, reinterpret(Ptr{Float64}, pointer(x)) + i * 16)
 end
