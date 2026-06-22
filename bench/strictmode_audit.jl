@@ -31,14 +31,12 @@ const COLD_HELPERS = (
     :_emit_sum!, :_halfcos, :_halfsin, :_primitive_root, :factorize,
 )
 
-# Whole-package sweep scoped to :typestable. The :noalloc sweep currently over-reports on this codebase
-# (StrictMode FEEDBACK F9: the :fast inference heuristic flags pointer/`vload`/`vstore` over preallocated
-# scratch as allocating, though runtime @allocated = 0). Allocation-freedom IS gated, per-plan, in
-# test/strictmode_tests.jl via @assert_noalloc (the ext path with ignore_throw=true, which is FP-free).
-# Re-add :noalloc here once F9 lands upstream.
-fs = audit(PureFFT; sweep = true, guarantees = (:typestable,), exempt = COLD_HELPERS, format = :text)
+# Whole-package sweep: type-stability + allocation-freedom over every compiled method. Cheap via :fast
+# (analysis="fast" in bench/Project.toml) — the heuristic is throw-path clean and no longer false-positives
+# on pointer/`vload`/`vstore` over preallocated scratch (StrictMode F8/F9, both fixed upstream).
+fs = audit(PureFFT; sweep = true, exempt = COLD_HELPERS, format = :text)   # default guarantees = (:typestable, :noalloc)
 nf = nfailures(fs)
-println("\nStrictMode whole-package typestable sweep: $(length(fs)) checks, $nf failure(s) ",
+println("\nStrictMode whole-package sweep: $(length(fs)) (method, guarantee) checks, $nf failure(s) ",
         "(exempt: $(length(COLD_HELPERS)) plan-time helpers).")
-nf == 0 || error("StrictMode found $nf typestable failure(s) on PureFFT's compiled surface.")
-println("Every compiled method is type-stable. ✓ (noalloc gated per-plan in test/strictmode_tests.jl)")
+nf == 0 || error("StrictMode found $nf failure(s) on PureFFT's compiled hot-path surface.")
+println("Every compiled hot-path method is type-stable and allocation-free. ✓")
