@@ -47,11 +47,25 @@ Status + planned work. This is the canonical, checked-in roadmap (human- and age
 - **Packed bases + full planner** — port `Butterfly{18,24,27,32}` (the dual-width packed path) + the
   `avx_planner` base-selection (`base_fn`) so PureFFT's decompositions match RustFFT's per size (today
   the planner uses a Butterfly36 base only). Lifts the 3-heavy laggard sizes (~0.85–0.92×).
-- **radix-9/12 codegen floor** — radix-9/12 levels sit ~0.90× of rust (intrinsically ~3× more
-  shuffle/FMA-heavy than radix-8). Diffuse Julia-LLVM-vs-rustc scheduling; only worth chasing with the
-  measurement floor pinned (see `performance.md` §15: ±7% run-to-run on the ratio — pin CPU frequency).
+- **radix-9/12 floor ~0.90× of rust — it's ALGORITHMIC, not a Julia compiler issue.** An MWE comparing a
+  matched radix-9 butterfly *and* a full radix-9 step (butterfly+twiddle+transpose) in Julia (SIMD.jl) vs
+  Rust (`core::arch`) — see the standalone `julia-sched-mwe/` reproducer — found Julia compiles to identical
+  asm and runs **at least as fast** at both levels (and LLVM 18/19/21 lower the same IR identically). So the
+  gap is **rustfft's implementation** being more optimized, not Julia/LLVM scheduling. To close it: diff
+  PureFFT's MR9/MR12 pass against rustfft's `Butterfly9`/mixed-radix source (decomposition, in-place /
+  transpose / memory strategy) and adopt what's better — a PureFFT optimization, not a compiler chase.
 - **MR2 / MR16** — currently sizes needing a radix-2 or radix-16 step fall back; add them for fuller
   smooth-size coverage.
+
+### Beat / match rustfft where Julia has a structural edge (grounded by the `julia-sched-mwe` MWEs)
+The MWEs proved there is **no compiler barrier**: identical-algorithm Julia compiles ≥ Rust. So aim to:
+- **Beat** where Julia has an edge rustfft lacks: **AVX-512 (W=8)** (rustfft is AVX2-only — already beats it
+  1.05–1.15× on W=8-clean non-pow2; extend coverage) and **runtime per-size codegen** (`@generated`/JIT
+  specialization vs rustfft's fixed shipped codelets — exploit for sizes rustfft handles less well).
+- **Parity** on rustfft's mature pow2 / radix-8 path (match the algorithm; no compiler reason it can't).
+- Caveat / not a goal: "uniformly faster than rustfft" — it's a well-tuned library; the realistic target is
+  *beat on the structural-edge regimes, parity elsewhere*. The MWE's "Julia ≥ matched Rust" is not "≥ the
+  hand-tuned rustfft library."
 
 ### Tooling / infrastructure
 - **StrictMode.jl dogfooding — DONE (test dep + feedback).** Adopted StrictMode (declarable perf

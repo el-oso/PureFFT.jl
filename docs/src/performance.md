@@ -284,8 +284,12 @@ Hard-won lessons from pushing the faithful port's non-power-of-two coverage to �
   instead plateaus at ~0.91× — that "depth-2 plateau" was a wrong-radix artifact, not a language limit.
 - **radix-8 is intrinsically cheap; radix-9/12 are not.** A size-8 column butterfly is adds + rotations
   with **no twiddle multiplies** (21 shuffles / 7 FMAs per pass); the size-9 (3×3) needs complex twiddle
-  mults (**36 shuffles / 24 FMAs** — ~3×). So radix-9/12-heavy (3-heavy) sizes sit at a genuine
-  **~0.85–0.92× floor**; radix-8-dominated sizes are at parity. This is fundamental, not a porting bug.
+  mults (**36 shuffles / 24 FMAs** — ~3×). So radix-9/12-heavy (3-heavy) sizes are intrinsically ~3× more
+  shuffle/FMA-heavy than radix-8 and sit at a **~0.85–0.92×** floor *vs rustfft*; radix-8-dominated sizes
+  are at parity. **Update:** that vs-rustfft gap is NOT a Julia codegen/scheduling limit — the
+  `julia-sched-mwe/` reproducer shows a matched radix-9 butterfly *and* full step compile identically and
+  run ≥ Rust in Julia. The gap is rustfft's *implementation* being more optimized than PureFFT's, i.e.
+  recoverable by matching its algorithm (decomposition / in-place / transpose), not a fundamental Julia floor.
 - **One scratch buffer, not per-level.** RustFFT's in-place/out-of-place alternation reuses a *single*
   size-n scratch at every recursion level (pass `scr`, not `buf`, as the inner's scratch). Allocating a
   distinct buffer per level (depth×n) blows the working set out of cache and makes the per-level gap
