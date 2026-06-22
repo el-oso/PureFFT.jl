@@ -31,12 +31,15 @@ const COLD_HELPERS = (
     :_emit_sum!, :_halfcos, :_halfsin, :_primitive_root, :factorize,
 )
 
-# Whole-package sweep: type-stability + allocation-freedom over every compiled method. Cheap via :fast
-# (analysis="fast" in bench/Project.toml) — the heuristic is throw-path clean and no longer false-positives
-# on pointer/`vload`/`vstore` over preallocated scratch (StrictMode F8/F9, both fixed upstream).
-fs = audit(PureFFT; sweep = true, exempt = COLD_HELPERS, format = :text)   # default guarantees = (:typestable, :noalloc)
+# Whole-package sweep: type-stability + allocation-freedom + trim-safety over every compiled method. Cheap
+# via :fast (analysis="fast" in bench/Project.toml) — the noalloc heuristic is throw-path clean and no
+# longer false-positives on pointer/`vload`/`vstore` over preallocated scratch (StrictMode F8/F9, both fixed
+# upstream); :trimsafe (TypeContracts, no backend) gives a cheap juliac --trim=safe-style scan across ALL
+# kernels, complementing the authoritative TrimCheck @validate on the hot path in test/purefft_tests.jl.
+fs = audit(PureFFT; sweep = true, guarantees = (:typestable, :noalloc, :trimsafe),
+           exempt = COLD_HELPERS, format = :text)
 nf = nfailures(fs)
 println("\nStrictMode whole-package sweep: $(length(fs)) (method, guarantee) checks, $nf failure(s) ",
         "(exempt: $(length(COLD_HELPERS)) plan-time helpers).")
 nf == 0 || error("StrictMode found $nf failure(s) on PureFFT's compiled hot-path surface.")
-println("Every compiled hot-path method is type-stable and allocation-free. ✓")
+println("Every compiled hot-path method is type-stable, allocation-free, and trim-safe. ✓")

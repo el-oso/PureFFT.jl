@@ -27,14 +27,17 @@
             (P.BluesteinPlan(ComplexF64, 97), 97),       # chirp-Z
             (P.RaderPlan(ComplexF64, 769), 769),         # prime via cyclic convolution
         ]
-        # @assert_typestable / @assert_noalloc throw StrictViolation on failure, so reaching the @test
-        # means the declared guarantee held for that kernel (qualified name — see the StrictMode F2 note).
+        # @assert_typestable / @assert_noalloc / @assert_trim_safe throw StrictViolation on failure, so
+        # reaching the @test means the declared guarantee held for that kernel (qualified name — see the
+        # StrictMode F2 note). :trimsafe (TypeContracts, no backend) is a cheap juliac --trim=safe-style
+        # scan; the authoritative deep TrimCheck @validate lives in the "TrimCheck trim-safety" testitem.
         # (The whole-module `audit`/`check_compiled` surface scan is slower; it lives in
         # bench/strictmode_audit.jl, mirroring how AllocCheck's static scan lives in bench/alloccheck.jl.)
         for (p, n) in plans
             x = randn(ComplexF64, n)
             @assert_typestable P.apply_unnormalized!(p, x)
             @assert_noalloc P.apply_unnormalized!(p, x)
+            @assert_trim_safe P.apply_unnormalized!(p, x)
             @test true
         end
     end
