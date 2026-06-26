@@ -70,10 +70,14 @@ measurements are in `docs/src/performance.md`; this file is the must-follow summ
 ## Standing rules
 
 - `isnothing(x)` / `!isnothing(x)` — never `=== nothing` / `!== nothing`.
-- **Reproducible bench pipeline (two steps):** `bench/run_compare.jl` re-runs the benchmarks ONCE and
-  saves every sample to `bench/results/compare.json`; `bench/plot_compare.jl` regenerates the plots
-  *from that JSON* (never by re-running — re-running is noisy). Regenerate the plots from the saved data
-  before every push (catches regressions). **Re-capture data** (re-run `run_compare.jl`) only for a
+- **Reproducible bench pipeline (two steps, per plot family):** a *runner* re-runs the benchmarks ONCE
+  and saves every sample to `bench/results/*.json`; a *plotter* regenerates the plots *from that JSON*
+  (never by re-running — re-running is noisy). Two families: the main comparison —
+  `bench/run_compare.jl` → `bench/results/compare.json` → `bench/plot_compare.jl` (FFTW/RustFFT/PureFFT,
+  `comparison*.png`); and the AVX-512 width study — `port/run_avx512.jl` → `bench/results/avx512.json`
+  → `port/plot_avx512.jl` (`avx512_nonpow2.png`). Each plot uses **median** centers + the robust
+  central-68% `(q84−q16)/2` spread. Regenerate the plots from the saved data before every push
+  (catches regressions). **Re-capture data** (re-run `run_compare.jl`) only for a
   genuinely fresh measurement; the relative-to-FFTW plots are clock-independent, so a cpufreq pin is
   optional, but for low-noise *absolute* numbers pin first: `sudo bench/cpufreq_lock.sh pin 4500` (the
   governor is already `performance`; the real noise source is opportunistic boost drifting under load —
