@@ -57,16 +57,23 @@ end
 _wrap(r::Int, k::Kernel, fwd::Bool) = r == 3 ? MR3(k, fwd) : r == 4 ? MR4(k, fwd) : r == 5 ? MR5(k, fwd) :
     r == 6 ? MR6(k, fwd) : r == 8 ? MR8(k, fwd) : r == 9 ? MR9(k, fwd) : r == 12 ? MR12(k, fwd) : error("radix $r")
 
+_build_tree(base::Kernel, radixes, fwd::Bool) = RPlan(foldl((k, r) -> _wrap(r, k, fwd), radixes; init = base))
+
 # build a kernel tree for n (or nothing if unsupported). fwd = forward.
 function plan_tree(n::Int, fwd::Bool=true)
     p2, p3, p5, rest = factor235(n)
     rest == 1 || return nothing
-    (p2 >= 2 && p3 >= 2) || return nothing            # base B36 = 2^2·3^2 (other bases TODO)
-    radixes = plan_radixes(p2 - 2, p3 - 2, p5)
-    isnothing(radixes) && return nothing
-    k::Kernel = B36(fwd)
-    for r in radixes                                  # innermost first
-        k = _wrap(r, k, fwd)
+    p3 >= 2 || return nothing                          # need 3^2 for a base (B36 or B18)
+    # Prefer base B36 = 2^2·3^2 when 2^2 is available (consumes two 2s + two 3s).
+    if p2 >= 2
+        rx = plan_radixes(p2 - 2, p3 - 2, p5)
+        isnothing(rx) || return _build_tree(B36(fwd), rx, fwd)
     end
-    RPlan(k)
+    # Base B18 = 2·3^2 (one 2 + two 3s) — covers 2^odd·3^2·5^c whose B36 leftover would need an unsupported
+    # radix-2 (e.g. 90 = B18·5, 360 = B18·4·5). Faithful port of rustfft Butterfly18Avx64.
+    if p2 >= 1
+        rx18 = plan_radixes(p2 - 1, p3 - 2, p5)
+        isnothing(rx18) || return _build_tree(B18(fwd), rx18, fwd)
+    end
+    return nothing
 end

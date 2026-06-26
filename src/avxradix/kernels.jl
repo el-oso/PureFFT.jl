@@ -101,3 +101,32 @@ function butterfly9!(out, inp, base::Int, tw::NTuple{2, V4f}, bf3::V4f, bf3lo::V
     avx_store_partial1!(out, base + 0, o0[1]); avx_store_partial1!(out, base + 3, o0[2]); avx_store_partial1!(out, base + 6, o0[3])
     avx_store_complex!(out, base + 1, o1[1]); avx_store_complex!(out, base + 4, o1[2]); avx_store_complex!(out, base + 7, o1[3])
 end
+
+# ===== Butterfly18: 3x6 (faithful port of rustfft Butterfly18Avx64) — col 0 partial V2f, cols 1-2 V4f =====
+# twiddles: gen_butterfly_twiddles_interleaved_columns!(6,3,1) = chunk(1, y, 18) for y in 1:5.
+bf18_twiddles(fwd) = ntuple(y -> avx_mixedradix_twiddle_chunk(1, y, 18, fwd), 5)
+# transpose_3x6_to_6x3_f64 (avx64_utils): partial col 0 merged pairwise, full cols 1-2 transposed 2x2.
+@inline function avx_transpose_3x6_to_6x3(r0::NTuple{6, V2f}, r1::NTuple{6, V4f})
+    t0 = avx_transpose_2x2(r1[1], r1[2]); t1 = avx_transpose_2x2(r1[3], r1[4]); t2 = avx_transpose_2x2(r1[5], r1[6])
+    ((avx_merge(r0[1], r0[2]), t0[1], t0[2]),
+     (avx_merge(r0[3], r0[4]), t1[1], t1[2]),
+     (avx_merge(r0[5], r0[6]), t2[1], t2[2]))
+end
+@inline butterfly18!(buf, base::Int, tw::NTuple{5, V4f}, bf3::V4f, bf3lo::V2f) = butterfly18!(buf, buf, base, tw, bf3, bf3lo)
+function butterfly18!(out, inp, base::Int, tw::NTuple{5, V4f}, bf3::V4f, bf3lo::V2f)  # out===inp ⇒ in-place
+    rows0 = ntuple(n -> avx_load_partial1(inp, base + (n - 1) * 3), 6)       # col 0 (1 complex each)
+    rows1 = ntuple(n -> avx_load_complex(inp, base + (n - 1) * 3 + 1), 6)    # cols 1,2 (2 complex each)
+    mid0 = avx_column_butterfly6(rows0, bf3lo)                               # butterfly6 down the 6 rows
+    mid1 = avx_column_butterfly6(rows1, bf3)
+    mid1 = (mid1[1], avx_mul_complex(mid1[2], tw[1]), avx_mul_complex(mid1[3], tw[2]),
+        avx_mul_complex(mid1[4], tw[3]), avx_mul_complex(mid1[5], tw[4]), avx_mul_complex(mid1[6], tw[5]))
+    t0, t1, t2 = avx_transpose_3x6_to_6x3(mid0, mid1)                        # 3x6 → 6x3
+    o0 = avx_column_butterfly3(t0[1], t0[2], t0[3], bf3)                     # butterfly3 down the 3 columns
+    o1 = avx_column_butterfly3(t1[1], t1[2], t1[3], bf3)
+    o2 = avx_column_butterfly3(t2[1], t2[2], t2[3], bf3)
+    @inbounds for r in 0:2
+        avx_store_complex!(out, base + 6r + 0, o0[r + 1])
+        avx_store_complex!(out, base + 6r + 2, o1[r + 1])
+        avx_store_complex!(out, base + 6r + 4, o2[r + 1])
+    end
+end

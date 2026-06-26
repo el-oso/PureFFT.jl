@@ -42,6 +42,18 @@ end
     @inbounds for f in 0:(length(inp) ÷ 9 - 1); butterfly9!(out, inp, 9f, k.tw, k.bf3, k.bf3lo); end
 end
 
+# ---- leaf: Butterfly18 (3x6, faithful rustfft port; col 0 partial V2f, cols 1-2 V4f; no scratch) ----
+struct B18 <: Kernel
+    n::Int; tw::NTuple{5, V4f}; bf3::V4f; bf3lo::V2f
+end
+B18(fwd::Bool) = (bf3 = avx_broadcast_twiddle(1, 3, fwd); B18(18, bf18_twiddles(fwd), bf3, avx_lo(bf3)))
+@inline function proc_ip!(k::B18, buf, scr)
+    @inbounds for f in 0:(length(buf) ÷ 18 - 1); butterfly18!(buf, buf, 18f, k.tw, k.bf3, k.bf3lo); end
+end
+@inline function proc_oop!(k::B18, out, inp, scr)
+    @inbounds for f in 0:(length(inp) ÷ 18 - 1); butterfly18!(out, inp, 18f, k.tw, k.bf3, k.bf3lo); end
+end
+
 # ---- leaf: Butterfly64 (8x8, two-phase; needs scratch ≥ its length) ----
 struct B64 <: Kernel
     n::Int; tw::Vector{V4f}; rot::V4f
