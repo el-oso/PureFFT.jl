@@ -165,6 +165,18 @@ end
         p = plan_pfft(x; variant = :codelet)
         @test_opt target_modules = (PureFFT,) PureFFT.apply_unnormalized!(p, x)
     end
+
+    @testset "autoplan boundary: abstract return ⇒ one dispatch/call by design (kernel stays concrete)" begin
+        # The dispatch-free/alloc-free guarantees above (and in strictmode_tests.jl) are asserted on the
+        # *concrete* plan types — that is the kernel surface. But `:fast`/`autoplan` SELECT the kernel at
+        # runtime, so the returned plan is `AbstractFFTPlan{T}`: applying it costs ONE dynamic dispatch
+        # per call, after which the concrete kernel runs. That boundary dispatch is intentional and benign
+        # (one indirect call per FFT, not per element). We pin it explicitly so the guarantee surface is
+        # honest — if autoplan ever returned a concrete (or leakier) type, this test would flag it, and a
+        # `@test_opt apply_unnormalized!(autoplan(n), x)` would (correctly) report that boundary dispatch.
+        @test Base.return_types(PureFFT.autoplan, (Type{ComplexF64}, Int))[1] === PureFFT.AbstractFFTPlan{Float64}
+        @test PureFFT.plan_pfft(ComplexF64, 1080; variant = :fast) isa PureFFT.AbstractFFTPlan{Float64}
+    end
 end
 
 @testitem "Stage 10: four-step batched-codelet executor" setup = [FFTUtil] begin
