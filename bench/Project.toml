@@ -5,6 +5,7 @@ CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
 Chairmarks = "0ca39b1e-fe0b-4e98-acfc-b1656634c4de"
 FFTW = "7a1cc6ca-52ef-59f5-83cd-3a7055c09341"
 JET = "c3a54625-cd67-489e-a8e7-0a5a0ff4e31b"
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 PureFFT = "4bd8a7c1-2372-4ecc-824d-9832c6b13f99"
@@ -14,11 +15,10 @@ StrictMode = "0e98b4f4-d0e6-42ac-af0a-707c24852f32"
 TrimCheck = "f940d764-e397-4179-96e0-76ce55cfe39b"
 TypeContracts = "c7a3f1e2-84b5-4d69-9e0a-1f2b3c4d5e6f"
 
-# StrictMode is not registered — resolve from master (for bench/strictmode_audit.jl).
 [sources]
-StrictMode = {url = "https://github.com/el-oso/StrictMode.jl", rev = "master"}
+StrictMode = {rev = "master", url = "https://github.com/el-oso/StrictMode.jl"}
 
 [preferences.StrictMode]
+analysis = "fast"
 checks_enabled = true
-analysis = "fast"   # whole-package sweep → fast (return-type + alloc); rigorous JET pass is per-kernel in test/
 fail_mode = "error"
