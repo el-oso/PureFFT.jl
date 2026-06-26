@@ -19,17 +19,20 @@ plan_length(p::AutoPlan)::Int = plan_length(p.inner)
 plan_inverse(p::AutoPlan)::Bool = plan_inverse(p.inner)
 apply_unnormalized!(p::AutoPlan, x::AbstractVector) = apply_unnormalized!(p.inner, x)
 
-# Best (minimum) per-call time for a candidate, applied repeatedly to a scratch buffer. Time-budgeted
-# (≥ a few ms total, ≥ 8 iters) so the minimum is robust enough to rank candidate factorizations —
-# 7 fixed iterations was too noisy and mis-ranked them.
+# Median (not min) per-call time for a candidate, applied repeatedly to a scratch buffer. Min rewards
+# lucky outliers and mis-ranks candidates (CLAUDE.md rule 6 / perf §15) — the median is robust. Time-
+# budgeted (≥ a few ms total, ≥ 8 iters); 7 fixed iterations was too noisy and mis-ranked them. Plan-time
+# only, so the sample Vector is fine (not the hot transform path). Inline median to avoid a Statistics dep.
 function _besttime(c::AbstractFFTPlan{T}, y::AbstractVector{Complex{T}}) where {T}
     apply_unnormalized!(c, y); apply_unnormalized!(c, y)   # warm up / force compile
-    best = Inf; elapsed = 0.0; iters = 0
-    while iters < 8 || (elapsed < 3.0e-3 && iters < 500)
+    ts = Float64[]; elapsed = 0.0
+    while length(ts) < 8 || (elapsed < 3.0e-3 && length(ts) < 500)
         t = @elapsed apply_unnormalized!(c, y)
-        best = min(best, t); elapsed += t; iters += 1
+        push!(ts, t); elapsed += t
     end
-    return best
+    sort!(ts)
+    m = length(ts)
+    return isodd(m) ? ts[(m + 1) ÷ 2] : (ts[m ÷ 2] + ts[m ÷ 2 + 1]) / 2
 end
 
 # Non-power-of-two routing. A dynamically-generated mixed-radix codelet wins for small "smooth"
