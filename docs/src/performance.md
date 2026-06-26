@@ -305,6 +305,18 @@ Hard-won lessons from pushing the faithful port's non-power-of-two coverage to �
   on identical code). **You cannot validate a ≤5% optimization against a 7% floor** — sub-noise per-radix
   tuning is not productive without first pinning CPU frequency (`cpupower`, needs root) or ~10× longer
   averaging. Know the floor before chasing small wins.
+- **Base coverage gaps oscillate the plot — add the base RustFFT uses, don't reinterpret.** The avx W=4
+  planner originally had only base `B36 = 2²·3²`, so `2^odd·3²·5^c` sizes (90 = 2·3²·5, 360 = 2³·3²·5)
+  had no valid tree (their `B36` leftover needs an unsupported radix-2) and fell to slow fallbacks —
+  90 ≈ 0.57×, 360 ≈ 0.51×, while the neighbours 180/720 (which *do* fit `B36`) sat at parity. That
+  size-to-size base availability *is* the non-pow2 oscillation, not autotuner noise (min vs median rank
+  the candidates identically — measured). Fix: port RustFFT's **`Butterfly18Avx64`** op-for-op as a new
+  base `B18 = 2·3²` (3×6 dual-width: `column_butterfly6` → twiddle → `transpose_3x6_to_6x3` →
+  `column_butterfly3` → packed 6×3 store). Then 90 = `B18·5`, 360 = `B18·4·5`; both reach the fast path
+  (90 → ~1.8×, 360 → ~1.0× of FFTW), bit-exact (n=18 rel 2e-16, 409-size sweep clean). Note `B9` (our
+  packed 3×3) is **not** a drop-in base — only standard-layout butterflies (`B36`/`B18`) compose under
+  MR-wrapping; reusing `B9` corrupted 8 sizes. The lesson: extend coverage by faithfully porting rust's
+  base for the gap, never by reinterpreting an existing kernel into a role it wasn't built for.
 
 ## 16. AVX-512 (Vec{8}) for non-pow2: a small, mostly-generic gain — not the ~2× one might hope (Phase 8)
 
