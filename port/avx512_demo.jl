@@ -12,8 +12,9 @@ P = PureFFT; AR = PureFFT.AvxRadix
 const LIB = joinpath(@__DIR__, "..", "bench", "rustfft_compare", "rust", "target", "release", "librustfft_bench.so")
 rpl(n) = ccall((:rfft_plan, LIB), Ptr{Cvoid}, (Csize_t,), n)
 rpr(h, d, n) = ccall((:rfft_process, LIB), Cvoid, (Ptr{Cvoid}, Ptr{ComplexF64}, Csize_t), h, d, n)
-# median + relative σ (std/median) so the plot can show σ ribbons like the main comparison plots
-medσ(f) = (for _ in 1:20; f(); end; ts = Float64[]; for _ in 1:151; t = time_ns(); for _ in 1:20; f(); end; push!(ts, (time_ns()-t)/20); end; (median(ts), std(ts) / median(ts)))
+# median + robust relative spread: the central-68% half-width (q84−q16)/2 normalized to the median
+# (outlier-insensitive — matches the main comparison plots, so the ribbons are consistent, not std-inflated).
+medσ(f) = (for _ in 1:20; f(); end; ts = Float64[]; for _ in 1:151; t = time_ns(); for _ in 1:20; f(); end; push!(ts, (time_ns()-t)/20); end; (median(ts), (quantile(ts, 0.84) - quantile(ts, 0.16)) / 2 / median(ts)))
 gf(n, t) = 5 * n * log2(n) / t
 w4tree(k) = (t = AR.B64(true); for _ in 1:k; t = AR.MR12(t, true); end; AR.RPlan(t))   # W=4 same decomposition
 
