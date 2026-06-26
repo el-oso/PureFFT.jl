@@ -66,6 +66,30 @@ end
     @inbounds for f in 0:(length(inp) ÷ 64 - 1); butterfly64!(out, inp, out, 64f, k.tw, k.rot); end  # out = workspace
 end
 
+# ---- leaf: Butterfly256 (32x8 two-phase, faithful rustfft port; needs scratch ≥ its length) ----
+struct B256 <: Kernel
+    n::Int; tw::Vector{V4f}; tw32::NTuple{6, V4f}; rot::V4f
+end
+B256(fwd::Bool) = B256(256, bf256_phase1_tw(fwd), bf256_bf32_tw(fwd), fwd ? _ROT90_FWD : _ROT90_INV)
+@inline function proc_ip!(k::B256, buf, scr)
+    @inbounds for f in 0:(length(buf) ÷ 256 - 1); butterfly256!(buf, buf, scr, 256f, k.tw, k.tw32, k.rot); end
+end
+@inline function proc_oop!(k::B256, out, inp, scr)
+    @inbounds for f in 0:(length(inp) ÷ 256 - 1); butterfly256!(out, inp, out, 256f, k.tw, k.tw32, k.rot); end  # out = workspace
+end
+
+# ---- leaf: Butterfly512 (32x16 two-phase, faithful rustfft port; needs scratch ≥ its length) ----
+struct B512 <: Kernel
+    n::Int; tw::Vector{V4f}; tw16::NTuple{2, V4f}; tw32::NTuple{6, V4f}; rot::V4f
+end
+B512(fwd::Bool) = B512(512, bf512_phase1_tw(fwd), bf512_bf16_tw(fwd), bf256_bf32_tw(fwd), fwd ? _ROT90_FWD : _ROT90_INV)
+@inline function proc_ip!(k::B512, buf, scr)
+    @inbounds for f in 0:(length(buf) ÷ 512 - 1); butterfly512!(buf, buf, scr, 512f, k.tw, k.tw16, k.tw32, k.rot); end
+end
+@inline function proc_oop!(k::B512, out, inp, scr)
+    @inbounds for f in 0:(length(inp) ÷ 512 - 1); butterfly512!(out, inp, out, 512f, k.tw, k.tw16, k.tw32, k.rot); end  # out = workspace
+end
+
 # ---- column-butterfly + transpose passes (R=3,4,5; even M; per-FFT at offset `o`) ----
 @inline function _colbf3!(buf, o, ::Val{M}, tw, bf3) where {M}
     @inbounds for c in 0:(M ÷ 2 - 1)

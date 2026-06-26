@@ -87,6 +87,55 @@ function butterfly64!(out, inp, scr, base::Int, tw::Vector{V4f}, rot::V4f)
     end
 end
 
+# ===== Butterfly256: 32x8 two-phase (faithful port of rustfft Butterfly256Avx64) =====
+# phase 1: col bf8 + twiddle + transpose8 (16 columnsets) → scr;  phase 2: col bf32 (4 columnsets) scr → out.
+bf256_phase1_tw(fwd) = [avx_mixedradix_twiddle_chunk(cs * 2, r, 256, fwd) for cs in 0:15 for r in 1:7]   # 112, index 7cs+r
+bf256_bf32_tw(fwd) = (avx_broadcast_twiddle(1, 32, fwd), avx_broadcast_twiddle(2, 32, fwd), avx_broadcast_twiddle(3, 32, fwd),
+    avx_broadcast_twiddle(5, 32, fwd), avx_broadcast_twiddle(6, 32, fwd), avx_broadcast_twiddle(7, 32, fwd))
+@inline _bf256_ld8(buf, b) = (avx_load_complex(buf, b), avx_load_complex(buf, b + 32), avx_load_complex(buf, b + 64), avx_load_complex(buf, b + 96),
+    avx_load_complex(buf, b + 128), avx_load_complex(buf, b + 160), avx_load_complex(buf, b + 192), avx_load_complex(buf, b + 224))
+function butterfly256!(out, inp, scr, base::Int, tw::Vector{V4f}, tw32::NTuple{6, V4f}, rot::V4f)
+    @inbounds for cs in 0:15                                 # phase 1: 32×8 col bf8 + twiddle + transpose → scr
+        b = base + cs * 2
+        m = avx_column_butterfly8(_bf256_ld8(inp, b)..., rot)
+        t = avx_transpose8_packed(m[1], avx_mul_complex(tw[7cs + 1], m[2]), avx_mul_complex(tw[7cs + 2], m[3]), avx_mul_complex(tw[7cs + 3], m[4]),
+            avx_mul_complex(tw[7cs + 4], m[5]), avx_mul_complex(tw[7cs + 5], m[6]), avx_mul_complex(tw[7cs + 6], m[7]), avx_mul_complex(tw[7cs + 7], m[8]))
+        ob = base + cs * 16
+        avx_store_complex!(scr, ob, t[1]); avx_store_complex!(scr, ob + 2, t[2]); avx_store_complex!(scr, ob + 4, t[3]); avx_store_complex!(scr, ob + 6, t[4])
+        avx_store_complex!(scr, ob + 8, t[5]); avx_store_complex!(scr, ob + 10, t[6]); avx_store_complex!(scr, ob + 12, t[7]); avx_store_complex!(scr, ob + 14, t[8])
+    end
+    @inbounds for cs in 0:3                                  # phase 2: col bf32 (scr → out)
+        b = base + cs * 2
+        avx_column_butterfly32(scr, b, 8, out, b, 8, tw32, rot)
+    end
+end
+
+# ===== Butterfly512: 32x16 two-phase (faithful port of rustfft Butterfly512Avx64) =====
+# phase 1: col bf16 + chunked twiddle + transpose4 (16 columnsets) → scr;  phase 2: col bf32 (8 columnsets) scr → out.
+bf512_phase1_tw(fwd) = [avx_mixedradix_twiddle_chunk(cs * 2, r, 512, fwd) for cs in 0:15 for r in 1:15]   # 240, chunks of 15
+bf512_bf16_tw(fwd) = (avx_broadcast_twiddle(1, 16, fwd), avx_broadcast_twiddle(3, 16, fwd))
+function butterfly512!(out, inp, scr, base::Int, tw::Vector{V4f}, tw16::NTuple{2, V4f}, tw32::NTuple{6, V4f}, rot::V4f)
+    @inbounds for cs in 0:15                                 # phase 1: 32×16 col bf16 + chunked twiddle + transpose4 → scr
+        b = base + cs * 2
+        mid = avx_column_butterfly16(inp, b, 32, tw16, rot)
+        tc = 15 * cs
+        for chunk in 0:3
+            j = 4 * chunk
+            t0 = chunk == 0 ? mid[1] : avx_mul_complex(mid[j + 1], tw[tc + j])
+            t1 = avx_mul_complex(mid[j + 2], tw[tc + j + 1])
+            t2 = avx_mul_complex(mid[j + 3], tw[tc + j + 2])
+            t3 = avx_mul_complex(mid[j + 4], tw[tc + j + 3])
+            tr = avx_transpose4_packed(t0, t1, t2, t3)
+            ob = base + cs * 32 + 4 * chunk
+            avx_store_complex!(scr, ob, tr[1]); avx_store_complex!(scr, ob + 2, tr[2]); avx_store_complex!(scr, ob + 16, tr[3]); avx_store_complex!(scr, ob + 18, tr[4])
+        end
+    end
+    @inbounds for cs in 0:7                                  # phase 2: col bf32 (scr → out)
+        b = base + cs * 2
+        avx_column_butterfly32(scr, b, 16, out, b, 16, tw32, rot)
+    end
+end
+
 # ===== Butterfly9: 3x3, dual-width packed (col 0 partial V2f, cols 1-2 V4f) =====
 bf9_twiddles(fwd) = (avx_mixedradix_twiddle_chunk(1, 1, 9, fwd), avx_mixedradix_twiddle_chunk(1, 2, 9, fwd))
 function butterfly9!(out, inp, base::Int, tw::NTuple{2, V4f}, bf3::V4f, bf3lo::V2f)

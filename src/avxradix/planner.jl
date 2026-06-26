@@ -63,6 +63,20 @@ _build_tree(base::Kernel, radixes, fwd::Bool) = RPlan(foldl((k, r) -> _wrap(r, k
 function plan_tree(n::Int, fwd::Bool=true)
     p2, p3, p5, rest = factor235(n)
     rest == 1 || return nothing
+    # Pure power of two ≥ 256: monolithic B256/B512 base + radix-8/4 chain (rustfft's "8xn" scheme — the
+    # base depends on 2^e mod 3 so the remaining factor is a clean product of 8s and at most one 4, no radix-2).
+    if p3 == 0 && p5 == 0
+        p2 >= 8 || return nothing
+        e = p2
+        base, m = e % 3 == 0 ? (B512(fwd), e - 9) : (B256(fwd), e - 8)
+        m % 3 == 1 && return nothing                   # never happens for this base choice, but stay safe
+        k::Kernel = base
+        for _ in 1:(m ÷ 3)
+            k = MR8(k, fwd)
+        end
+        m % 3 == 2 && (k = MR4(k, fwd))
+        return RPlan(k)
+    end
     p3 >= 2 || return nothing                          # need 3^2 for a base (B36 or B18)
     # Prefer base B36 = 2^2·3^2 when 2^2 is available (consumes two 2s + two 3s).
     if p2 >= 2

@@ -163,6 +163,10 @@ function autoplan(::Type{Complex{T}}, n::Integer; inverse::Bool = false) where {
         plan_pfft(Complex{T}, n; inverse, variant = :recursive),
     ]
     n >= 256 && push!(cands, FourStepPlan(Complex{T}, n; inverse))
+    if n >= 256                                           # monolithic B256/B512 + 8xn (rustfft scheme) — timed, kept only if it wins
+        amr = AvxMixedRadixPlan(Complex{T}, n; inverse)
+        isnothing(amr) || push!(cands, amr)
+    end
     y = randn(Complex{T}, Int(n))
     best = cands[1]
     bt = _besttime(best, y)
