@@ -317,6 +317,18 @@ Hard-won lessons from pushing the faithful port's non-power-of-two coverage to �
   packed 3×3) is **not** a drop-in base — only standard-layout butterflies (`B36`/`B18`) compose under
   MR-wrapping; reusing `B9` corrupted 8 sizes. The lesson: extend coverage by faithfully porting rust's
   base for the gap, never by reinterpreting an existing kernel into a role it wasn't built for.
+- **Power-of-two: monolithic big butterflies beat recursive radix-4 — and Julia matches rust on them.**
+  The pow2 path used only radix-4, which leaves an inefficient radix-2 stage at *odd* powers
+  (512 = 4⁴·2, 2048 = 4⁵·2) — 512/2048 sat at **0.88–0.90× FFTW** while RustFFT, using hardcoded
+  `Butterfly256/512` two-phase monoliths, was at/above parity (512 = 1.24×). Ported `Butterfly256Avx64`
+  (32×8) and `Butterfly512Avx64` (32×16) op-for-op, with new `column_butterfly16/32` (radix-4×4 / 4×8,
+  explicit buffer/base/stride — **not** load/store *closures*, which box). Wired into `plan_tree` via
+  rustfft's 8xn scheme (B512 for 2^{3k}, else B256 + radix-8/4 chain), timed in autoplan. Result:
+  **256 → 1.3–1.4×, 512 → 1.3× (=rust), 2048/4096 → ~1.05–1.1×**, all bit-exact, sweep clean. The big
+  learning vs the blake3 register-spill finding: **these 32-register two-phase kernels did NOT spill in
+  Julia** — lazy load-when-needed (explicit strides) reaches rust parity. The remaining gap was coverage
+  (radix-4 only), not codegen. Note: a small per-call alloc shows up at the `AbstractFFTPlan` dispatch
+  boundary (AllocCheck reports the kernels themselves as 0-alloc); tracked for the StrictMode hardening pass.
 
 ## 16. AVX-512 (Vec{8}) for non-pow2: a small, mostly-generic gain — not the ~2× one might hope (Phase 8)
 
