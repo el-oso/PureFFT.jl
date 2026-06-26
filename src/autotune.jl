@@ -124,17 +124,20 @@ both far faster than the allocating recursive mixed-radix.
 function autoplan(::Type{Complex{T}}, n::Integer; inverse::Bool = false) where {T}
     if !ispow2(n)
         ni = Int(n)
-        if ni <= CODELET_MAX_N && _max_prime_factor(ni) <= CODELET_MAX_PRIME
-            return CodeletPlan(Complex{T}, n; inverse)
-        end
-        # prime with smooth p-1 → Rader (length-(p-1) convolution beats Bluestein's larger pow2 M)
+        # prime with smooth p-1 → Rader (length-(p-1) convolution beats Bluestein's larger pow2 M). This
+        # is a distinct algorithm (a convolution), so it short-circuits rather than joining the timing below.
         if ni >= RADER_MIN_P && _max_prime_factor(ni) == ni && _max_prime_factor(ni - 1) <= RADER_MAX_PM1_PRIME
             return RaderPlan(Complex{T}, ni; inverse)
         end
-        # candidates: existing four-step/recursive, the faithful AVX2 (W=4) tree, and the AVX-512 (W=8)
-        # tree where it's W=8-clean. Time all available and keep the fastest — so W=8 is used only on the
-        # (small, compute-bound) sizes where it actually beats W=4; no regression elsewhere.
+        # Candidates (whichever apply): the small straight-line CodeletPlan (≤ CODELET_MAX_N, smooth), the
+        # four-step/recursive smooth plan, and the faithful AVX2 (W=4) / AVX-512 (W=8) mixed-radix trees.
+        # Time ALL available and keep the fastest — never return one untimed: a compact codelet can be ~2×
+        # slower than the four-step at the same size (e.g. n=90: codelet 6.4 vs four-step 13 GFLOP/s), and
+        # W=8 is kept only where it actually beats W=4. (min/median rank these identically here — measured.)
+        codelet = (ni <= CODELET_MAX_N && _max_prime_factor(ni) <= CODELET_MAX_PRIME) ?
+            CodeletPlan(Complex{T}, n; inverse) : nothing
         cands = AbstractFFTPlan{T}[c for c in (
+            codelet,
             _best_smooth_plan(Complex{T}, ni; inverse),
             AvxMixedRadixPlan(Complex{T}, ni; inverse),
             AvxMixedRadixPlanW8(Complex{T}, ni; inverse),
