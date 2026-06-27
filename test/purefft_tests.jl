@@ -36,7 +36,8 @@ end
     end
 
     @testset "errors on non-power-of-two" begin
-        @test_throws ArgumentError plan_pfft(Complex{Float64}, 6)
+        @test_throws ArgumentError plan_pfft(Complex{Float64}, 6; variant = :scalar)  # :scalar is pow2-only
+        @test plan_pfft(Complex{Float64}, 6) isa PureFFT.AbstractFFTPlan              # but the default :fast handles any n
     end
 end
 

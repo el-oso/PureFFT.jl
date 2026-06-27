@@ -27,10 +27,12 @@ const STAGED_VARIANTS = (:staged, :base)
 const POW2_VARIANTS = (STAGED_VARIANTS..., :recursive)
 
 """
-    plan_pfft(Complex{T}, n; inverse=false, variant=:scalar) -> PureFFTPlan
+    plan_pfft(Complex{T}, n; inverse=false, variant=:fast) -> PureFFTPlan
     plan_pfft(x; ...) -> PureFFTPlan
 
-Build a plan for length-`n` complex transforms. `variant` selects the kernel:
+Build a plan for length-`n` complex transforms. `variant` selects the kernel (default `:fast`, which
+autotunes and works for any `n`; the explicit variants below are reference/baseline kernels, several
+power-of-two-only):
 
   * `:scalar`     — Stage 1 radix-2 baseline (requires `n` a power of two).
   * `:mixedradix` — Stage 2 mixed-radix (any `n`, including primes).
@@ -46,7 +48,7 @@ Build a plan for length-`n` complex transforms. `variant` selects the kernel:
   * `:fast`       — autotuned: builds candidate plans, times them, keeps the fastest.
 """
 function plan_pfft(
-        ::Type{Complex{T}}, n::Integer; inverse::Bool = false, variant::Symbol = :scalar
+        ::Type{Complex{T}}, n::Integer; inverse::Bool = false, variant::Symbol = :fast
     ) where {T}
     nostage = Vector{Complex{T}}[]
     noscratch = Complex{T}[]
