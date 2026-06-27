@@ -88,3 +88,18 @@ end
     v = randn(ComplexF64, 8)
     @test maximum(abs.(PureFFT.pfft(v) .- fft(v)))/maximum(abs.(fft(v))) < 1e-12
 end
+
+@testitem "N-D c2c hot path: dispatch-free + zero-alloc" begin
+    using PureFFT, JET, LinearAlgebra
+    # NOTE: `plan_fft(x, region)` is intentionally NOT used here — with FFTW loaded its StridedArray
+    # method shadows PureFFT's AbstractArray method, so `plan_fft` returns an FFTW plan, not an NDPlan
+    # (verified; cf. the routing comment in src/ndim.jl). To gate PureFFT's own N-D hot path we build
+    # the NDPlan directly via `_pure_plan_fft_nd`, exactly as the other ndim testitems do.
+    for T in (Float64, Float32), (sz, region) in (((8,5),(1,2)), ((6,4,5),(1,3)))
+        x = randn(Complex{T}, sz...); y = similar(x)
+        p = PureFFT._pure_plan_fft_nd(x, region; inverse=false)
+        mul!(y, p, x)                                   # warmup
+        @test (@allocated mul!(y, p, x)) == 0
+        @test_opt target_modules=(PureFFT,) mul!(y, p, x)
+    end
+end

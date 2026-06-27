@@ -405,6 +405,11 @@ end
         PureFFT.apply_unnormalized!(PureFFT.CodeletPlan{Float64, 12}, Vector{ComplexF64}),
         PureFFT.apply_unnormalized!(PureFFT.FourStepCodeletPlan{Float64, 12, 12}, Vector{ComplexF64}),
         PureFFT.apply_unnormalized!(PureFFT.RecursiveMixedRadixPlan{Float64, (12, 12, 12)}, Vector{ComplexF64}),
+        # N-D c2c apply (Task 5): the @generated-over-D apply + per-dim transpose are trim-safe too. The
+        # concrete NDPlan type is autotune-dependent (the inner :fast plans), so derive it via `typeof` of
+        # a constructed plan (@validate Main.evals each arg) rather than hardcoding the fragile inner type.
+        PureFFT.apply_unnormalized!(typeof(PureFFT._pure_plan_fft_nd(Array{ComplexF64}(undef, 8, 5), (1, 2); inverse = false)), Array{ComplexF64, 2}),
+        PureFFT.apply_unnormalized!(typeof(PureFFT._pure_plan_fft_nd(Array{ComplexF32}(undef, 6, 4, 5), (1, 3); inverse = false)), Array{ComplexF32, 3}),
     )
 end
 

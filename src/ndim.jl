@@ -57,12 +57,16 @@ end
     inner = 1; @inbounds for i in 1:(d-1); inner *= sz[i]; end
     n_d = @inbounds sz[d]
     outer = 1; @inbounds for i in (d+1):length(sz); outer *= sz[i]; end
-    if inner == 1
-        # dim 1: each of `outer` runs of n_d is contiguous ⇒ apply in place on a unit-stride view.
-        @inbounds for o in 0:(outer-1)
-            apply_unnormalized!(plan, view(x, (o*n_d + 1):(o*n_d + n_d)))
+    if d == 1
+        # dim 1: each column `x[:, c]` is a unit-stride contiguous run ⇒ apply in place. Must use a
+        # CARTESIAN colon view (`view(x, :, c)`), NOT a linear `view(x, o*n_d+1:o*n_d+n_d)`: linear
+        # indexing into a multidim array reshapes the parent and ALLOCATES an array header (Task 5
+        # zero-alloc gate). The cartesian colon view is zero-alloc (verified). `inner==1` here.
+        @inbounds for c in CartesianIndices(Base.tail(axes(x)))
+            apply_unnormalized!(plan, view(x, :, c))
         end
     else
+        # d>1 (incl. the rare leading-singleton `inner==1`, handled as an identity copy).
         _apply_dim_transpose!(plan, x, inner, n_d, outer, scratch)   # Task 3
     end
     return x
