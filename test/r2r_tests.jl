@@ -38,3 +38,17 @@ end
         @test maximum(abs.(y .- ref)) / max(maximum(abs.(ref)), eps(T)) < tol(T)
     end
 end
+
+@testitem "DCT-III (REDFT01) bit-exact vs FFTW + II↔III round-trip" begin
+    using PureFFT, FFTW, ErrorTypes
+    tol(::Type{Float64}) = 1e-12; tol(::Type{Float32}) = 1f-4
+    for T in (Float64, Float32), n in (2, 4, 8, 16, 100, 256, 3, 5, 99)
+        x = randn(T, n)
+        y   = ErrorTypes.unwrap(PureFFT.tryr2r(x, REDFT01))
+        ref = FFTW.r2r(x, FFTW.REDFT01)
+        @test maximum(abs.(y .- ref)) / max(maximum(abs.(ref)), eps(T)) < tol(T)
+        # unnormalized round-trip: REDFT01 ∘ REDFT10 = 2N·identity
+        rt = ErrorTypes.unwrap(PureFFT.tryr2r(ErrorTypes.unwrap(PureFFT.tryr2r(x, REDFT10)), REDFT01))
+        @test maximum(abs.(rt ./ (2n) .- x)) / max(maximum(abs.(x)), eps(T)) < tol(T)
+    end
+end

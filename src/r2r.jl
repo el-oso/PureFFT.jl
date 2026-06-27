@@ -122,6 +122,66 @@ function _apply!(p::R2RPlan{REDFT10_T, T, P}, y::AbstractVector{T}, x::AbstractV
     return y
 end
 
+# ── DCT-III (REDFT01) — structural inverse of DCT-II ─────────────────────────
+# FFTW REDFT01 (unnormalized): y_k = x_0 + 2·Σ_{j=1}^{N-1} x_j·cos(πj(2k+1)/(2N)), k=0..N-1.
+# Inverse of REDFT10: build a (Hermitian) half/full spectrum V from x using conj(W_k) (W_k =
+# exp(-iπk/2N), reused via _dct_post_tw), inverse-FFT, then UNDO the Makhoul even/odd reorder.
+# Derivation (V = DFT of the reordered DCT-II input v): with A_k = W_k·V_k, REDFT10 gives
+#   x_k = Re(A_k)=2·Re(A_k)/2  and  x_{N-k} = -2·Im(A_k)  ⇒  V_k = conj(W_k)·(x_k - i·x_{N-k})/2,
+# V_0 = x_0/2. Scale: even-N apply_irfft! normalizes by 1/m (=2/N) → fold the unnormalized 2N
+# back in by ×N here (2N·(…/2)=N·…); odd-N unnormalized inverse FFT needs only ×2 (2·(…/2)).
+function _build_r2r(::REDFT01_T, ::Type{T}, n::Int) where {T}
+    n >= 1 || return Result{R2RPlan, R2RError}(Err(R2RError(ERR_SIZE_TOO_SMALL, "REDFT01 needs n≥1")))
+    if iseven(n)
+        inner = plan_pirfft(T, n)
+        pre   = _dct_post_tw(T, n)                     # W_k; III uses conj(W_k)
+        rbuf  = Vector{T}(undef, n)
+        cbuf  = Vector{Complex{T}}(undef, n ÷ 2 + 1)
+        plan  = R2RPlan{REDFT01_T, T, typeof(inner)}(n, inner, pre, Complex{T}[], rbuf, cbuf, one(T))
+        return Result{R2RPlan, R2RError}(Ok(plan))
+    else
+        inner = plan_pfft(Complex{T}, n; variant = :fast, inverse = true)
+        pre   = _dct_post_tw(T, n)
+        cbuf  = Vector{Complex{T}}(undef, n)           # full complex spectrum
+        plan  = R2RPlan{REDFT01_T, T, typeof(inner)}(n, inner, pre, Complex{T}[], T[], cbuf, one(T))
+        return Result{R2RPlan, R2RError}(Ok(plan))
+    end
+end
+
+# Apply (even N): inner is an inverse real-FFT plan (P<:RealIFFTPlan). Build the scaled half-
+# spectrum V[0..m] from x, apply_irfft! → reordered real v, then inverse-reorder into y.
+function _apply!(p::R2RPlan{REDFT01_T, T, P}, y::AbstractVector{T}, x::AbstractVector{<:Real}) where {T, P <: RealIFFTPlan}
+    n = p.n; m = n ÷ 2; W = p.pre; V = p.cbuf; v = p.rbuf
+    @inbounds V[1] = Complex{T}(T(n) * T(x[1]), zero(T))     # N·x_0  (= 2N·x_0/2)
+    @inbounds for k in 1:m
+        V[k + 1] = T(n) * conj(W[k + 1]) * Complex{T}(T(x[k + 1]), -T(x[n - k + 1]))
+    end
+    apply_irfft!(p.inner, V, v)                              # v = reordered time domain
+    @inbounds for j in 0:(m - 1)
+        y[2j + 1] = v[j + 1]                                 # even output samples up front
+        y[2j + 2] = v[n - j]                                 # odd output samples from the tail
+    end
+    return y
+end
+
+# Apply (odd N): inner is an inverse complex plan (P<:AbstractFFTPlan). Build the full scaled
+# spectrum V[0..N-1] (Hermitian), unnormalized inverse FFT, inverse-reorder into y.
+function _apply!(p::R2RPlan{REDFT01_T, T, P}, y::AbstractVector{T}, x::AbstractVector{<:Real}) where {T, P <: AbstractFFTPlan}
+    n = p.n; W = p.pre; V = p.cbuf
+    @inbounds V[1] = Complex{T}(T(x[1]), zero(T))            # x_0  (= 2·x_0/2)
+    @inbounds for k in 1:(n - 1)
+        V[k + 1] = conj(W[k + 1]) * Complex{T}(T(x[k + 1]), -T(x[n - k + 1]))
+    end
+    apply_unnormalized!(p.inner, V)
+    @inbounds for j in 0:((n - 1) ÷ 2)
+        y[2j + 1] = real(V[j + 1])
+    end
+    @inbounds for j in 0:(n ÷ 2 - 1)
+        y[2j + 2] = real(V[n - j])
+    end
+    return y
+end
+
 # Generic apply entry + tryr2r (per-kind _apply! dispatched on the plan's K).
 function tryr2r(x::AbstractVector{<:Real}, kind::R2RKind)
     r = tryplan_r2r(x, kind)
