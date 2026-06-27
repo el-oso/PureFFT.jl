@@ -9,3 +9,8 @@
     # error type constructs
     @test PureFFT.R2RError(PureFFT.ERR_UNSUPPORTED_KIND, "x") isa PureFFT.R2RError
 end
+
+@testitem "tryplan_r2r returns Err for unsupported kind" begin
+    using PureFFT, ErrorTypes
+    @test ErrorTypes.is_error(PureFFT.tryplan_r2r(randn(8), REDFT11))
+end

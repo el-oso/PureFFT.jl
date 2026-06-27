@@ -1,6 +1,7 @@
 [deps]
 AbstractFFTs = "621f4979-c628-5d54-868e-fcf4e3e8185c"
 AllocCheck = "9b6a8646-10ed-4001-bbdc-1d2f46dfbb1a"
+ErrorTypes = "7f495686-c6d2-4c77-9e8e-e4c865675f9d"
 Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 FFTW = "7a1cc6ca-52ef-59f5-83cd-3a7055c09341"

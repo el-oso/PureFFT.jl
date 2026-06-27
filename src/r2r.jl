@@ -23,3 +23,31 @@ struct R2RError
     msg::String
 end
 Base.show(io::IO, e::R2RError) = print(io, "R2RError(", e.kind, "): ", e.msg)
+
+# ---- plan struct ----
+# K = kind singleton type; T = Float64/Float32; P = inner plan type.
+# Preallocated buffers ⇒ zero-alloc apply. scale = 1 for r2r; ortho factor for dct.
+struct R2RPlan{K, T, P}
+    n::Int
+    inner::P
+    pre::Vector{Complex{T}}     # pre-twiddles (kind-specific; may be empty)
+    post::Vector{Complex{T}}    # post-twiddles
+    rbuf::Vector{T}             # real work buffer
+    cbuf::Vector{Complex{T}}    # half-spectrum / complex work buffer
+    scale::T
+end
+
+# natural inner-FFT size per kind (Phase 1: II/III use size n)
+_natural_size(::Union{REDFT10_T, REDFT01_T}, n::Int) = n
+
+# Phase-1 support set. Returns Ok(plan) or Err(R2RError). Per-kind builders arrive in Tasks 3–5;
+# this skeleton dispatches and returns Err for any unsupported kind.
+function tryplan_r2r(x::AbstractVector{<:Real}, kind::R2RKind)
+    T = float(eltype(x))
+    n = length(x)
+    return _build_r2r(kind, T, n)
+end
+
+# fallthrough: any kind without a concrete _build_r2r method is unsupported (Phase 1)
+_build_r2r(kind::R2RKind, ::Type{T}, n::Int) where {T} =
+    Result{R2RPlan, R2RError}(Err(R2RError(ERR_UNSUPPORTED_KIND, "kind $(kind) not implemented yet")))
