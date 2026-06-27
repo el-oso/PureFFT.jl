@@ -92,14 +92,50 @@ end
     return x
 end
 
-# Complex AoS block transpose N1×N2 → N2×N1 (cache-blocked). NOTE: blocked.jl's `_btranspose!` is SoA
-# (separate real/imag arrays) and CANNOT be reused for AoS `Complex` blocks — this is a new, AoS-complex
-# transpose. Correctness reference: dst[k2 + N2*k1] = src[k1 + N1*k2] for k1∈0:N1-1, k2∈0:N2-1.
+# Complex AoS block transpose N1×N2 → N2×N1. Correctness reference: dst[k2 + N2*k1] = src[k1 + N1*k2]
+# for k1∈0:N1-1, k2∈0:N2-1. NOTE: blocked.jl's `_btranspose!` is SoA (separate real/imag) — can't reuse.
+#
+# Hot path: cache-blocked loop over a register 2×2-complex micro-kernel. A Vec{4,T} holds 2 packed complex
+# [re0,im0,re1,im1]; the shuffles (0,1,4,5)/(2,3,6,7) are exactly a 2×2 complex transpose (same lane pattern
+# as avx_transpose_2x2 / avx_unpack{lo,hi}_complex in avxport.jl), so two vloads + two shuffles + two vstores
+# move a 2×2 complex block — 4× fewer scalar ops than the old element-at-a-time loop, and the small tile keeps
+# both buffers in L1 (the old blk=32 tile = 16 KB×2 thrashed L1 → ~5 ns/elem). Generic over T∈{Float32,Float64}
+# (Complex{T} = 2 T, so Vec{4,T} = 2 complex for both). Odd trailing row/col handled scalar.
 function _transpose_block!(dst::Ptr{Complex{T}}, src::Ptr{Complex{T}}, N1::Int, N2::Int) where {T}
-    blk = 32                                          # cache tile (cf. blocked.jl _BTRANSPOSE_BLK); tune later
-    @inbounds for j0 in 0:blk:(N2-1), i0 in 0:blk:(N1-1)
-        for j in j0:min(j0+blk, N2)-1, i in i0:min(i0+blk, N1)-1
-            unsafe_store!(dst, unsafe_load(src, i + N1*j + 1), j + N2*i + 1)
+    ps = reinterpret(Ptr{T}, src); pd = reinterpret(Ptr{T}, dst)
+    es = 2 * sizeof(T)                                # bytes per complex (Ptr{T} arithmetic is byte-wise)
+    N1e = N1 - (N1 & 1); N2e = N2 - (N2 & 1)          # even extents covered by the SIMD kernel
+    blk = 16                                          # complex per tile dim (16×16×16 B = 4 KB/buf, L1-resident); tuned
+    @inbounds for j0 in 0:blk:(N2e-1)
+        jhi = min(j0 + blk, N2e)
+        for i0 in 0:blk:(N1e-1)
+            ihi = min(i0 + blk, N1e)
+            j = j0
+            while j < jhi
+                i = i0
+                while i < ihi
+                    r0 = vload(Vec{4, T}, ps + (i + N1 * j) * es)
+                    r1 = vload(Vec{4, T}, ps + (i + N1 * (j + 1)) * es)
+                    vstore(shufflevector(r0, r1, Val((0, 1, 4, 5))), pd + (j + N2 * i) * es)
+                    vstore(shufflevector(r0, r1, Val((2, 3, 6, 7))), pd + (j + N2 * (i + 1)) * es)
+                    i += 2
+                end
+                j += 2
+            end
+        end
+    end
+    @inbounds begin                                   # odd trailing row (i=N1-1) and/or column (j=N2-1)
+        if isodd(N1)
+            i = N1 - 1
+            for j in 0:(N2 - 1)
+                unsafe_store!(dst, unsafe_load(src, i + N1 * j + 1), j + N2 * i + 1)
+            end
+        end
+        if isodd(N2)
+            j = N2 - 1
+            for i in 0:(N1 - 1)
+                unsafe_store!(dst, unsafe_load(src, i + N1 * j + 1), j + N2 * i + 1)
+            end
         end
     end
     return
