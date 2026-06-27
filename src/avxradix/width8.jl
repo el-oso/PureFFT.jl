@@ -85,6 +85,70 @@ B64W8(::Type{T}, fwd::Bool) where {T} = B64W8{T}(64, bf64_tw_w8(T, fwd), fwd ? _
 @inline proc_ip!(k::B64W8, buf, scr) = (@inbounds for f in 0:(length(buf) ÷ 64 - 1); butterfly64_w8!(buf, buf, scr, 64f, k.tw, k.rot); end)
 @inline proc_oop!(k::B64W8, out, inp, scr) = (@inbounds for f in 0:(length(inp) ÷ 64 - 1); butterfly64_w8!(out, inp, out, 64f, k.tw, k.rot); end)
 
+# Butterfly256 at W8 (faithful port of rustfft Butterfly256Avx<f32>, 4 complex/vec): 32×8 two-phase.
+# phase 1: 8 columnsets — col bf8 + twiddle + transpose8 → scr; phase 2: 2 columnsets — col bf32 → out.
+# (The V4f Butterfly256 (kernels.jl) is the same at 2 complex/vec — 16 columnsets, half strides.)
+bf256_tw_w8(::Type{T}, fwd) where {T} = Vec{8, T}[avx_mixedradix_twiddle_chunk8(T, cs * 4, r, 256, fwd) for cs in 0:7 for r in 1:7]   # 56, index 7cs+r
+bf256_bf32_tw_w8(::Type{T}, fwd) where {T} = (avx_broadcast_twiddle8(T, 1, 32, fwd), avx_broadcast_twiddle8(T, 2, 32, fwd), avx_broadcast_twiddle8(T, 3, 32, fwd),
+    avx_broadcast_twiddle8(T, 5, 32, fwd), avx_broadcast_twiddle8(T, 6, 32, fwd), avx_broadcast_twiddle8(T, 7, 32, fwd))
+@inline _bf256_ld8_w8(buf, b) = (_L8(buf, b), _L8(buf, b + 32), _L8(buf, b + 64), _L8(buf, b + 96), _L8(buf, b + 128), _L8(buf, b + 160), _L8(buf, b + 192), _L8(buf, b + 224))
+function butterfly256_w8!(out, inp, scr, base::Int, tw, tw32, rot)
+    @inbounds for cs in 0:7
+        b = base + cs * 4
+        m = avx_column_butterfly8(_bf256_ld8_w8(inp, b)..., rot)
+        t = avx_transpose8_packed(m[1], avx_mul_complex(tw[7cs + 1], m[2]), avx_mul_complex(tw[7cs + 2], m[3]), avx_mul_complex(tw[7cs + 3], m[4]),
+            avx_mul_complex(tw[7cs + 4], m[5]), avx_mul_complex(tw[7cs + 5], m[6]), avx_mul_complex(tw[7cs + 6], m[7]), avx_mul_complex(tw[7cs + 7], m[8]))
+        ob = base + cs * 32
+        _S8(scr, ob, t[1]); _S8(scr, ob + 4, t[2]); _S8(scr, ob + 8, t[3]); _S8(scr, ob + 12, t[4])
+        _S8(scr, ob + 16, t[5]); _S8(scr, ob + 20, t[6]); _S8(scr, ob + 24, t[7]); _S8(scr, ob + 28, t[8])
+    end
+    @inbounds for cs in 0:1
+        b = base + cs * 4
+        avx_column_butterfly32(scr, b, 8, out, b, 8, tw32, rot)
+    end
+end
+struct B256W8{T} <: Kernel
+    n::Int; tw::Vector{Vec{8, T}}; tw32::NTuple{6, Vec{8, T}}; rot::Vec{8, T}
+end
+keltype(::B256W8{T}) where {T} = T
+B256W8(fwd::Bool) = B256W8(Float64, fwd)
+B256W8(::Type{T}, fwd::Bool) where {T} = B256W8{T}(256, bf256_tw_w8(T, fwd), bf256_bf32_tw_w8(T, fwd), fwd ? _rot90_fwd8(T) : _rot90_inv8(T))
+@inline proc_ip!(k::B256W8, buf, scr) = (@inbounds for f in 0:(length(buf) ÷ 256 - 1); butterfly256_w8!(buf, buf, scr, 256f, k.tw, k.tw32, k.rot); end)
+@inline proc_oop!(k::B256W8, out, inp, scr) = (@inbounds for f in 0:(length(inp) ÷ 256 - 1); butterfly256_w8!(out, inp, out, 256f, k.tw, k.tw32, k.rot); end)
+
+# Butterfly512 at W8 (faithful port of rustfft Butterfly512Avx<f32>, 4 complex/vec): 32×16 two-phase.
+# phase 1: 8 columnsets — col bf16 + chunked twiddle + transpose4 → scr; phase 2: 4 columnsets — col bf32.
+bf512_tw_w8(::Type{T}, fwd) where {T} = Vec{8, T}[avx_mixedradix_twiddle_chunk8(T, cs * 4, r, 512, fwd) for cs in 0:7 for r in 1:15]   # 120, chunks of 15
+bf512_bf16_tw_w8(::Type{T}, fwd) where {T} = (avx_broadcast_twiddle8(T, 1, 16, fwd), avx_broadcast_twiddle8(T, 3, 16, fwd))
+function butterfly512_w8!(out, inp, scr, base::Int, tw, tw16, tw32, rot)
+    @inbounds for cs in 0:7
+        b = base + cs * 4
+        mid = avx_column_butterfly16(inp, b, 32, tw16, rot)
+        tc = 15 * cs; ob = base + cs * 64
+        # chunk 0 (t0 untwiddled), 1, 2, 3 — literal indices into mid (no runtime tuple index)
+        let tr = avx_transpose4_packed(mid[1], avx_mul_complex(mid[2], tw[tc+1]), avx_mul_complex(mid[3], tw[tc+2]), avx_mul_complex(mid[4], tw[tc+3]))
+            _S8(scr, ob, tr[1]); _S8(scr, ob+16, tr[2]); _S8(scr, ob+32, tr[3]); _S8(scr, ob+48, tr[4]); end
+        let tr = avx_transpose4_packed(avx_mul_complex(mid[5], tw[tc+4]), avx_mul_complex(mid[6], tw[tc+5]), avx_mul_complex(mid[7], tw[tc+6]), avx_mul_complex(mid[8], tw[tc+7]))
+            _S8(scr, ob+4, tr[1]); _S8(scr, ob+20, tr[2]); _S8(scr, ob+36, tr[3]); _S8(scr, ob+52, tr[4]); end
+        let tr = avx_transpose4_packed(avx_mul_complex(mid[9], tw[tc+8]), avx_mul_complex(mid[10], tw[tc+9]), avx_mul_complex(mid[11], tw[tc+10]), avx_mul_complex(mid[12], tw[tc+11]))
+            _S8(scr, ob+8, tr[1]); _S8(scr, ob+24, tr[2]); _S8(scr, ob+40, tr[3]); _S8(scr, ob+56, tr[4]); end
+        let tr = avx_transpose4_packed(avx_mul_complex(mid[13], tw[tc+12]), avx_mul_complex(mid[14], tw[tc+13]), avx_mul_complex(mid[15], tw[tc+14]), avx_mul_complex(mid[16], tw[tc+15]))
+            _S8(scr, ob+12, tr[1]); _S8(scr, ob+28, tr[2]); _S8(scr, ob+44, tr[3]); _S8(scr, ob+60, tr[4]); end
+    end
+    @inbounds for cs in 0:3
+        b = base + cs * 4
+        avx_column_butterfly32(scr, b, 16, out, b, 16, tw32, rot)
+    end
+end
+struct B512W8{T} <: Kernel
+    n::Int; tw::Vector{Vec{8, T}}; tw16::NTuple{2, Vec{8, T}}; tw32::NTuple{6, Vec{8, T}}; rot::Vec{8, T}
+end
+keltype(::B512W8{T}) where {T} = T
+B512W8(fwd::Bool) = B512W8(Float64, fwd)
+B512W8(::Type{T}, fwd::Bool) where {T} = B512W8{T}(512, bf512_tw_w8(T, fwd), bf512_bf16_tw_w8(T, fwd), bf256_bf32_tw_w8(T, fwd), fwd ? _rot90_fwd8(T) : _rot90_inv8(T))
+@inline proc_ip!(k::B512W8, buf, scr) = (@inbounds for f in 0:(length(buf) ÷ 512 - 1); butterfly512_w8!(buf, buf, scr, 512f, k.tw, k.tw16, k.tw32, k.rot); end)
+@inline proc_oop!(k::B512W8, out, inp, scr) = (@inbounds for f in 0:(length(inp) ÷ 512 - 1); butterfly512_w8!(out, inp, out, 512f, k.tw, k.tw16, k.tw32, k.rot); end)
+
 struct MR8W8{M, I <: Kernel, T} <: Kernel
     inner::I; tw::Vector{Vec{8, T}}; rot::Vec{8, T}
 end
