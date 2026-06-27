@@ -69,11 +69,12 @@ Status + planned work. This is the canonical, checked-in roadmap (human- and age
   (orthonormal, FFTW.jl drop-in), `plan_r2r \ x` (inverse). Bench harness:
   `bench/run_compare_r2r.jl` → `bench/results/compare_r2r.json` → `bench/plot_compare_r2r.jl`.
   Bench (no bounds checking): even-N PF/FFTW **1.45–2.71× for F64, 1.23–2.37× for F32**.
-  Parity gate is `@test_broken` in the test suite because `Pkg.test --check-bounds=yes`
-  overrides @inbounds in Julia loops (not in FFTW's C) — an artificial ~3× handicap.
-  The bench is the authoritative measurement; gate is kept to catch regressions.
+  Parity gate skips under `Pkg.test --check-bounds=yes` (overrides @inbounds in Julia loops
+  but not FFTW's C — an artificial ~3× handicap); asserts in a fair env (check_bounds==0).
+  The bench is the authoritative measurement; gate catches genuine regressions.
   Phases 2–4: DCT-IV, DST-II/III/IV, type-I pair — each adds `_pre!`/`_post!` per kind.
-  See the spec at `.superpowers/sdd/task-7-brief.md` §"Phases 2–4".
+  See `docs/superpowers/specs/2026-06-27-dct-dst-r2r-design.md` (design spec) and
+  `docs/superpowers/plans/2026-06-27-dct-dst-phase1.md` (Phase-1 plan; Phases 2–4 noted at its end).
 - **Float32 — DONE (at/above FFTW & RustFFT).** The AVX path is now `Float32`-capable by genericizing the
   4-complex kernels over `Vec{8,T}` (the element type follows from `T`; only the explicit FMA `llvmcall` is
   per-(N,T)): **non-pow2** routes through the `V8f32 = Vec{8,Float32}` (256-bit AVX2) W=8 tree — beats FFTW

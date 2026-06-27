@@ -90,11 +90,11 @@ end
 
 @testitem "DCT-II parity vs FFTW ≥ 0.96× (even N)" tags=[:perf] begin
     using PureFFT, FFTW, BenchmarkTools, Statistics, LinearAlgebra
-    # Marked @test_broken because `Pkg.test` runs with `--check-bounds=yes`, which overrides
-    # @inbounds in PureFFT's inner loops but not in FFTW's C library — giving a ~3× artificial
-    # handicap to PureFFT. In the bench (bench/run_compare_r2r.jl, no bounds checking), the gate
-    # passes: PF/FFTW is 1.45–2.71× for even N 256–65536 (F64+F32 both). Gate kept here so any
-    # regression from the current bench floor (~1.45×) flips @test_broken → test failure.
+    # `Pkg.test` runs with `--check-bounds=yes`, which overrides @inbounds in PureFFT's Julia
+    # loops but not in FFTW's C library — an artificial ~3× handicap to PureFFT in that env.
+    # The bench (bench/run_compare_r2r.jl, no forced bounds-checks) is the authoritative
+    # measurement: PF/FFTW is 1.45–2.71× for even N 256–65536 (F64+F32 both).
+    # Under forced bounds-checks the measurement is unfair, so we skip rather than assert.
     med(b) = median(b.times)
     for T in (Float64, Float32), n in (256, 1024, 4096)
         x = randn(T, n)
@@ -102,6 +102,10 @@ end
         pp = plan_r2r(x, REDFT10)
         tf = med(@benchmark $pf * y setup=(y=copy($x)))
         tp = med(@benchmark mul!(y, $pp, $x) setup=(y=similar($x)))
-        @test_broken tf/tp ≥ 0.96   # known gap: FFTW dedicated codelet vs FFT+twiddle
+        if Base.JLOptions().check_bounds == 0
+            @test tf/tp ≥ 0.96            # fair env: real parity gate, fails on a genuine regression
+        else
+            @test_skip tf/tp ≥ 0.96      # under forced bounds-checks (Pkg.test default) the measurement is unfair
+        end
     end
 end
