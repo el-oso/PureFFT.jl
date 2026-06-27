@@ -14,3 +14,16 @@ end
     using PureFFT, ErrorTypes
     @test ErrorTypes.is_error(PureFFT.tryplan_r2r(randn(8), REDFT11))
 end
+
+@testitem "DCT-II (REDFT10) bit-exact vs FFTW + naive (even N)" begin
+    using PureFFT, FFTW, ErrorTypes
+    tol(::Type{Float64}) = 1e-12; tol(::Type{Float32}) = 1f-4
+    naive(x) = [2*sum(x[j+1]*cos(pi*(2j+1)*k/(2length(x))) for j in 0:length(x)-1) for k in 0:length(x)-1]
+    for T in (Float64, Float32), n in (2, 4, 8, 16, 100, 256, 1000)
+        x = randn(T, n)
+        y = ErrorTypes.unwrap(PureFFT.tryr2r(x, REDFT10))
+        ref = FFTW.r2r(x, FFTW.REDFT10)
+        @test maximum(abs.(y .- ref)) / max(maximum(abs.(ref)), eps(T)) < tol(T)
+        @test maximum(abs.(y .- T.(naive(Float64.(x))))) / max(maximum(abs.(ref)), eps(T)) < tol(T)
+    end
+end
