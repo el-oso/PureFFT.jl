@@ -5,12 +5,16 @@ Status + planned work. This is the canonical, checked-in roadmap (human- and age
 
 ## Where it stands today
 
-- **Power-of-two**: AVX-512 (`Vec{8,Float64}`) radix-4 engine, 40–48 GFLOP/s — matches/beats FFTW &
-  RustFFT across most of the range (`src/radix4_avx.jl`).
+- **Power-of-two**: AVX-512 (`Vec{8,Float64}`) radix-4 engine for the bulk; the **odd-power gap** (512=4⁴·2,
+  2048=4⁵·2 sat ~0.88–0.90× of FFTW) is now **closed** by faithful **Butterfly256/512** monolith bases + an
+  8xn radix chain (rustfft's scheme), timed in `autoplan`. PureFFT now at/above FFTW & RustFFT across the
+  range (256/512 → ~1.3×, 2048/4096 → ~1.05×). `src/radix4_avx.jl`, `src/avxradix/{kernels,recursive,planner}.jl`.
 - **Non-power-of-two**: a faithful mechanical port of RustFFT's AVX mixed-radix (`src/avxradix/`),
-  routed by `autoplan` (`src/autotune.jl`) and exposed as `AvxMixedRadixPlan`. radix-8-dominated smooth
-  sizes are at FFTW/RustFFT parity; the rest fall back to the existing codelet / four-step / recursive /
-  Rader / Bluestein paths. No size cliff.
+  routed by `autoplan` (`src/autotune.jl`) and exposed as `AvxMixedRadixPlan`. Bases are now B36 (2²·3²)
+  **and B18 (2·3², a port of `Butterfly18Avx64`)** — B18 **closed the 2^odd·3²·5 oscillation** (90 → 2.0×,
+  360 → 1.1×). The rest fall back to codelet / four-step / recursive / Rader / Bluestein. `autoplan` ranks
+  candidates by **median** (was min — a lucky-outlier trap) and times them via a static **Tuple + `map`**
+  (no abstract-`eltype` `Vector` — the old dynamic-dispatch / trim-hostile container). No size cliff.
 - **AVX-512 for non-pow2 (the differentiator — RustFFT is AVX2-only)**: width-generic compute layer +
   W=8 kernels (`src/avxradix/width8.jl`, `AvxMixedRadixPlanW8`). `autoplan` times W=8 vs W=4 and keeps
   it only where it wins — so it's a strict improvement. W=8 beats W=4 **and** RustFFT on small
@@ -44,9 +48,10 @@ Status + planned work. This is the canonical, checked-in roadmap (human- and age
   native redesign using `vpermt2pd` to cut shuffle count could lift this materially. High-risk research.
 
 ### Non-pow2 coverage / parity
-- **Packed bases + full planner** — port `Butterfly{18,24,27,32}` (the dual-width packed path) + the
-  `avx_planner` base-selection (`base_fn`) so PureFFT's decompositions match RustFFT's per size (today
-  the planner uses a Butterfly36 base only). Lifts the 3-heavy laggard sizes (~0.85–0.92×).
+- **More packed bases** — `Butterfly18` **DONE** (B18 = 2·3², closed 2^odd·3²·5); pow2 `Butterfly256/512`
+  **DONE** (closed the odd-power gap). Still to port: `Butterfly{24,27,32}` (dual-width packed path) + the
+  `avx_planner` base-selection (`base_fn`) so PureFFT's decompositions match RustFFT's per size. Lifts the
+  remaining 3-heavy laggard sizes (~0.85–0.92×).
 - **radix-9/12 floor ~0.90× of rust — it's ALGORITHMIC, not a Julia compiler issue.** An MWE comparing a
   matched radix-9 butterfly *and* a full radix-9 step (butterfly+twiddle+transpose) in Julia (SIMD.jl) vs
   Rust (`core::arch`) — see the standalone `julia-sched-mwe/` reproducer — found Julia compiles to identical
@@ -56,6 +61,20 @@ Status + planned work. This is the canonical, checked-in roadmap (human- and age
   transpose / memory strategy) and adopt what's better — a PureFFT optimization, not a compiler chase.
 - **MR2 / MR16** — currently sizes needing a radix-2 or radix-16 step fall back; add them for fuller
   smooth-size coverage.
+
+### Breadth / type coverage (gaps for a *general* library vs the 1-D complex-`Float64` investigation)
+- **Float32** — the AVX kernels (B18/B36/B256/B512, the W4/W8 trees) are **Float64-only**; Float32 falls
+  back to the scalar codelet (correct, not fast). Float32 parity is the largest functional gap.
+- **N-dimensional (2-D/3-D) FFT** — none; 1-D only.
+- **Multi-threading** — single-thread only (deliberate for the kernel investigation; a real library wants
+  threads).
+- **`autoplan` returns a 7-member `Union`, not a concrete type** — runtime kernel selection (the
+  plan-constructor exception to "concrete returns"; one dispatch per `apply`, amortized over the transform).
+  The pow2 `AutoPlan{T, typeof(best)}` wrapper widens its `T`, putting a bare `AutoPlan` in the union —
+  dropping or concretely-parameterizing it makes the union fully `{Float64}`. (Found via StrictMode
+  dogfooding; StrictMode now flags abstract-`eltype` containers — F34 — and its empirical `@assert_noalloc`
+  `gc_num`-artifact false-fail was fixed — F33.)
+- **Registration** — `0.1.0`, not registered; needs a stable API + (at least) Float32 before General.
 
 ### Beat / match rustfft where Julia has a structural edge (grounded by the `julia-sched-mwe` MWEs)
 The MWEs proved there is **no compiler barrier**: identical-algorithm Julia compiles ≥ Rust. So aim to:
@@ -89,4 +108,7 @@ The MWEs proved there is **no compiler barrier**: identical-algorithm Julia comp
 Pow2 radix-4 AVX-512 engine; non-pow2 codelet (Stage 9) / four-step (Stage 10) / recursive mixed-radix
 (Stage 12); Rader (Stage 11) + Bluestein (Stage 8); CPU-generic cache tuning (CPUSummary); AbstractFFTs
 integration; ReTestItems + perf-regression tests; the faithful RustFFT-AVX non-pow2 port + integration;
-the width-generic AVX-512 (W=8) compute layer, W=8 transposes, and targeted W=8 routing.
+the width-generic AVX-512 (W=8) compute layer, W=8 transposes, and targeted W=8 routing; faithful
+**Butterfly18** (non-pow2 2^odd·3²·5 oscillation) + **Butterfly256/512** (pow2 odd-power gap) bases;
+`autoplan` **median** ranking (was min) + static-**Tuple/`map`** timing (replacing the abstract-`eltype`
+`Vector` dynamic-dispatch container).
