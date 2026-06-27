@@ -189,6 +189,48 @@ environment (`Base.JLOptions().check_bounds == 0`) it is a real `@test tf/tp ≥
 on a genuine regression. The bench above (run without forced bounds-checks) is the
 authoritative measurement.
 
+## N-dimensional FFT
+
+Comparison reference: FFTW only — RustFFT has no N-D transforms.
+Measured on znver5, single-thread, in-place, planning excluded, 400 samples.
+`gflops = 5·n·log₂(n)` with `n = prod(shape)`.
+
+![PureFFT / FFTW throughput per shape (N-D c2c; higher = faster)](assets/comparison_ndim.png)
+
+### ComplexF64
+
+| Shape | FFTW GFLOP/s | PureFFT GFLOP/s | PF/FFTW |
+|---|---:|---:|---:|
+| 128×128   | 39.0 |  10.1 | 0.259 |
+| 256×256   | 29.6 |   7.1 | 0.240 |
+| 512×512   | 24.8 |   7.6 | 0.304 |
+| 384×384   | 29.2 |  10.9 | 0.374 |
+| 512×384   | 24.4 |   9.0 | 0.369 |
+| 64×64×64  | 31.9 |   9.7 | 0.303 |
+| 96×96×96  | 21.2 |   6.9 | 0.323 |
+| 48×48×48  | 22.2 |   6.9 | 0.311 |
+
+### ComplexF32
+
+| Shape | FFTW GFLOP/s | PureFFT GFLOP/s | PF/FFTW |
+|---|---:|---:|---:|
+| 128×128   | 27.3 | 28.2 | 1.034 |
+| 256×256   | 37.9 | 17.1 | 0.451 |
+| 512×512   | 46.3 |  8.1 | 0.175 |
+| 384×384   | 46.3 | 23.3 | 0.504 |
+| 512×384   | 41.9 | 11.9 | 0.284 |
+| 64×64×64  | 49.1 | 10.1 | 0.206 |
+| 96×96×96  | 33.0 |  5.2 | 0.159 |
+| 48×48×48  | 30.6 | 10.2 | 0.332 |
+
+All shapes are below the 0.96× gate, with the sole exception of ComplexF32 128×128 (1.034×).
+The gap is structural: the current N-D path applies 1-D transforms along each dimension
+separated by a cache-blocked generic transpose, whereas FFTW plans a single optimized
+multi-dimensional pass. This is an **OPEN** performance item — see ROADMAP for next steps.
+
+*(Reproduced via `bench/run_compare_ndim.jl` → `bench/results/compare_ndim.json` →
+`bench/plot_compare_ndim.jl`.)*
+
 ## Methodology
 
 - **Timing**: BenchmarkTools `@belapsed` with `setup=(y=copy(x)) evals=1`, min over ≥400 samples.
