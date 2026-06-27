@@ -28,7 +28,7 @@ Base.show(io::IO, e::R2RError) = print(io, "R2RError(", e.kind, "): ", e.msg)
 
 # ---- plan struct ----
 # K = kind singleton type; T = Float64/Float32; P = inner plan type.
-# Preallocated buffers ⇒ zero-alloc apply. scale = 1 for r2r; ortho factor for dct.
+# Preallocated buffers ⇒ zero-alloc apply.
 struct R2RPlan{K, T, P}
     n::Int
     inner::P
@@ -36,11 +36,11 @@ struct R2RPlan{K, T, P}
     post::Vector{Complex{T}}    # post-twiddles
     rbuf::Vector{T}             # real work buffer
     cbuf::Vector{Complex{T}}    # half-spectrum / complex work buffer
-    scale::T
 end
 
-# natural inner-FFT size per kind (Phase 1: II/III use size n)
-_natural_size(::Union{REDFT10_T, REDFT01_T}, n::Int) = n
+# Guard: _apply! dispatch on P <: RealFFTPlan / RealIFFTPlan vs P <: AbstractFFTPlan requires the
+# real-FFT plans NOT to be <: AbstractFFTPlan (keeps the two method bodies disjoint at compile time).
+@assert !(RealFFTPlan <: AbstractFFTPlan) && !(RealIFFTPlan <: AbstractFFTPlan) "r2r route dispatch assumes the real-FFT plans are not <: AbstractFFTPlan"
 
 # Phase-1 support set. Returns Ok(plan) or Err(R2RError). Per-kind builders arrive in Tasks 3–5;
 # this skeleton dispatches and returns Err for any unsupported kind.
@@ -59,8 +59,6 @@ _build_r2r(kind::R2RKind, ::Type{T}, n::Int) where {T} =
 # DCT-II post-twiddle: W_k = exp(-iπk/2N), k = 0..n-1.
 _dct_post_tw(::Type{T}, n) where {T} = Complex{T}[cispi(-T(k) / (2n)) for k in 0:(n - 1)]
 
-# Naive cosine-sum reference (Float64 inside; for tests).
-_dct2_naive(x) = [2 * sum(x[j + 1] * cospi((2j + 1) * k / (2length(x))) for j in 0:length(x) - 1) for k in 0:length(x) - 1]
 
 function _build_r2r(::REDFT10_T, ::Type{T}, n::Int) where {T}
     n >= 1 || return Result{R2RPlan, R2RError}(Err(R2RError(ERR_SIZE_TOO_SMALL, "REDFT10 needs n≥1")))
@@ -69,7 +67,7 @@ function _build_r2r(::REDFT10_T, ::Type{T}, n::Int) where {T}
         post  = _dct_post_tw(T, n)
         rbuf  = Vector{T}(undef, n)
         cbuf  = Vector{Complex{T}}(undef, n ÷ 2 + 1)
-        plan  = R2RPlan{REDFT10_T, T, typeof(inner)}(n, inner, Complex{T}[], post, rbuf, cbuf, one(T))
+        plan  = R2RPlan{REDFT10_T, T, typeof(inner)}(n, inner, Complex{T}[], post, rbuf, cbuf)
         return Result{R2RPlan, R2RError}(Ok(plan))
     else
         return _build_r2r_dct2_odd(T, n)               # Task 4
@@ -86,7 +84,7 @@ function _build_r2r_dct2_odd(::Type{T}, n::Int) where {T}
     inner = plan_pfft(Complex{T}, n; variant = :fast, inverse = false)
     post  = _dct_post_tw(T, n)
     cbuf  = Vector{Complex{T}}(undef, n)               # full complex spectrum
-    plan  = R2RPlan{REDFT10_T, T, typeof(inner)}(n, inner, Complex{T}[], post, T[], cbuf, one(T))
+    plan  = R2RPlan{REDFT10_T, T, typeof(inner)}(n, inner, Complex{T}[], post, T[], cbuf)
     return Result{R2RPlan, R2RError}(Ok(plan))
 end
 
@@ -138,13 +136,13 @@ function _build_r2r(::REDFT01_T, ::Type{T}, n::Int) where {T}
         pre   = _dct_post_tw(T, n)                     # W_k; III uses conj(W_k)
         rbuf  = Vector{T}(undef, n)
         cbuf  = Vector{Complex{T}}(undef, n ÷ 2 + 1)
-        plan  = R2RPlan{REDFT01_T, T, typeof(inner)}(n, inner, pre, Complex{T}[], rbuf, cbuf, one(T))
+        plan  = R2RPlan{REDFT01_T, T, typeof(inner)}(n, inner, pre, Complex{T}[], rbuf, cbuf)
         return Result{R2RPlan, R2RError}(Ok(plan))
     else
         inner = plan_pfft(Complex{T}, n; variant = :fast, inverse = true)
         pre   = _dct_post_tw(T, n)
         cbuf  = Vector{Complex{T}}(undef, n)           # full complex spectrum
-        plan  = R2RPlan{REDFT01_T, T, typeof(inner)}(n, inner, pre, Complex{T}[], T[], cbuf, one(T))
+        plan  = R2RPlan{REDFT01_T, T, typeof(inner)}(n, inner, pre, Complex{T}[], T[], cbuf)
         return Result{R2RPlan, R2RError}(Ok(plan))
     end
 end
@@ -253,4 +251,4 @@ function Base.inv(p::R2RPlan{REDFT10_T, T}) where {T}
     ip = plan_r2r(Vector{T}(undef, p.n), REDFT01)
     return ScaledR2RPlan(ip, T(1) / (2 * p.n))
 end
-Base.:\(p::R2RPlan, x::AbstractVector) = inv(p) * x
+Base.:\(p::R2RPlan{REDFT10_T}, x::AbstractVector) = inv(p) * x
