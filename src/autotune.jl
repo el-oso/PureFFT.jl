@@ -116,6 +116,14 @@ function _best_smooth_plan(::Type{Complex{T}}, n::Int; inverse::Bool) where {T}
     return best
 end
 
+# Score a candidate for `autoplan`: its median per-call time (via `_besttime`), or `Inf` for an
+# inapplicable (`nothing`) candidate. Two concrete methods — NOT a runtime branch on the value — so timing
+# the candidates with `map(_score, plans::Tuple)` stays type-stable + dispatch-free (dispatch resolves
+# statically per tuple slot from the element's concrete type), unlike iterating an `AbstractFFTPlan[]`
+# vector, where `_besttime(c, y)` over the abstract element forces a dynamic dispatch (and is trim-hostile).
+@inline _score(::Nothing, y) = Inf
+@inline _score(p::AbstractFFTPlan, y) = _besttime(p, y)
+
 """
     autoplan(Complex{T}, n; inverse=false) -> AbstractFFTPlan
 
@@ -132,47 +140,35 @@ function autoplan(::Type{Complex{T}}, n::Integer; inverse::Bool = false) where {
         if ni >= RADER_MIN_P && _max_prime_factor(ni) == ni && _max_prime_factor(ni - 1) <= RADER_MAX_PM1_PRIME
             return RaderPlan(Complex{T}, ni; inverse)
         end
-        # Candidates (whichever apply): the small straight-line CodeletPlan (≤ CODELET_MAX_N, smooth), the
-        # four-step/recursive smooth plan, and the faithful AVX2 (W=4) / AVX-512 (W=8) mixed-radix trees.
-        # Time ALL available and keep the fastest — never return one untimed: a compact codelet can be ~2×
-        # slower than the four-step at the same size (e.g. n=90: codelet 6.4 vs four-step 13 GFLOP/s), and
-        # W=8 is kept only where it actually beats W=4. (min/median rank these identically here — measured.)
+        # Candidates as a STATIC TUPLE — not an `AbstractFFTPlan[]` vector. A tuple keeps each element's
+        # concrete type, so timing them with `map(_score, plans)` below is type-stable, dispatch-free, and
+        # trim-compatible. `nothing` marks an inapplicable candidate (scored `Inf`). All are timed and the
+        # fastest kept: a compact codelet can be ~2× slower than the four-step (n=90: 6.4 vs 13 GFLOP/s);
+        # W=8 wins only where it beats W=4. Construction is outside `_besttime`'s timed region.
         codelet = (ni <= CODELET_MAX_N && _max_prime_factor(ni) <= CODELET_MAX_PRIME) ?
             CodeletPlan(Complex{T}, n; inverse) : nothing
-        cands = AbstractFFTPlan{T}[c for c in (
+        plans = (
             codelet,
             _best_smooth_plan(Complex{T}, ni; inverse),
             AvxMixedRadixPlan(Complex{T}, ni; inverse),
             AvxMixedRadixPlanW8(Complex{T}, ni; inverse),
-        ) if !isnothing(c)]
-        if !isempty(cands)
-            length(cands) == 1 && return cands[1]
-            y = randn(Complex{T}, ni)
-            best = cands[1]; bt = _besttime(best, y)
-            for c in cands[2:end]
-                t = _besttime(c, y); t < bt && (bt = t; best = c)
-            end
-            return best
-        end
-        return BluesteinPlan(Complex{T}, n; inverse)          # large prime factor → chirp-Z
+        )
+        y = randn(Complex{T}, ni)
+        scores = map(p -> _score(p, y), plans)            # NTuple{4,Float64} — concrete, unrolled, no dispatch
+        all(isinf, scores) && return BluesteinPlan(Complex{T}, n; inverse)   # large prime factor → chirp-Z
+        return something(plans[argmin(scores)])
     end
-    # candidate kernels (all power-of-two); time each on a real buffer, keep the fastest.
-    cands = AbstractFFTPlan{T}[
+    # Power-of-two: same static-tuple timing. Radix4Avx / Radix4 / recursive always apply; FourStep and the
+    # monolithic B256/B512 + 8xn tree (rustfft scheme) only for n ≥ 256 (else `nothing`, scored `Inf`).
+    plans = (
         Radix4AvxPlan(Complex{T}, n; inverse),
         Radix4Plan(Complex{T}, n; inverse),
         plan_pfft(Complex{T}, n; inverse, variant = :recursive),
-    ]
-    n >= 256 && push!(cands, FourStepPlan(Complex{T}, n; inverse))
-    if n >= 256                                           # monolithic B256/B512 + 8xn (rustfft scheme) — timed, kept only if it wins
-        amr = AvxMixedRadixPlan(Complex{T}, n; inverse)
-        isnothing(amr) || push!(cands, amr)
-    end
+        n >= 256 ? FourStepPlan(Complex{T}, n; inverse) : nothing,
+        n >= 256 ? AvxMixedRadixPlan(Complex{T}, n; inverse) : nothing,
+    )
     y = randn(Complex{T}, Int(n))
-    best = cands[1]
-    bt = _besttime(best, y)
-    for c in cands[2:end]
-        t = _besttime(c, y)
-        t < bt && (bt = t; best = c)
-    end
+    scores = map(p -> _score(p, y), plans)
+    best = something(plans[argmin(scores)])
     return AutoPlan{T, typeof(best)}(best)
 end
