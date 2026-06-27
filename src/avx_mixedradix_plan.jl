@@ -7,7 +7,7 @@
 struct AvxMixedRadixPlan{T, K} <: AbstractFFTPlan{T}
     n::Int
     inverse::Bool
-    rp::AvxRadix.RPlan{K}
+    rp::AvxRadix.RPlan{K, T}
 end
 
 plan_length(p::AvxMixedRadixPlan)::Int = p.n
@@ -33,12 +33,14 @@ end
 """
     AvxMixedRadixPlanW8(Complex{T}, n; inverse=false) -> AvxMixedRadixPlan or nothing
 
-AVX-512 (Vec{8}) variant for W=8-clean sizes (n = 2^(6+3a+2b)·3^b). `nothing` otherwise. Only beats the
-W=4 path on small compute-bound sizes, so `autoplan` times it and keeps it only when it wins.
+Vec{8} 4-complex-per-register variant for W=8-clean sizes (n = 2^(6+3a+2b)·3^b·5^v5). `nothing`
+otherwise. Two instantiations: **Float64** = 512-bit AVX-512 (only beats W=4 on small compute-bound
+sizes, so `autoplan` times it and keeps it only when it wins); **Float32** = 256-bit AVX2 — the PRIMARY
+Float32 AVX path (no AVX-512 needed).
 """
 function AvxMixedRadixPlanW8(::Type{Complex{T}}, n::Integer; inverse::Bool = false) where {T}
-    T === Float64 || return nothing
-    tree = AvxRadix.plan_tree_w8(Int(n), !inverse)
+    (T === Float64 || T === Float32) || return nothing
+    tree = AvxRadix.plan_tree_w8(T, Int(n), !inverse)
     isnothing(tree) && return nothing
     return AvxMixedRadixPlan{T, typeof(tree.k)}(Int(n), inverse, tree)
 end

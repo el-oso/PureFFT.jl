@@ -8,6 +8,9 @@ using SIMD: Vec
 
 abstract type Kernel end
 klen(k::Kernel) = k.n::Int
+# Element type of the buffers a kernel processes (drives the RPlan scratch type). Float64 for the AVX2
+# W=4 kernels and the Float64 W=8 kernels; the parameterized W=8 kernels override it (width8.jl).
+keltype(::Kernel) = Float64
 
 # ---- leaf: Butterfly36 ----
 struct B36 <: Kernel
@@ -396,8 +399,8 @@ end
 end
 
 # ---- top-level: FFT(x) in place. ONE scratch buffer of size n (inplace_scratch_len). ----
-struct RPlan{K <: Kernel}; k::K; scr::Vector{ComplexF64}; end
-RPlan(k::Kernel) = RPlan(k, Vector{ComplexF64}(undef, klen(k)))
+struct RPlan{K <: Kernel, T}; k::K; scr::Vector{Complex{T}}; end
+RPlan(k::Kernel) = RPlan(k, Vector{Complex{keltype(k)}}(undef, klen(k)))
 function applyplan!(p::RPlan, x)
     proc_ip!(p.k, x, p.scr); x
 end

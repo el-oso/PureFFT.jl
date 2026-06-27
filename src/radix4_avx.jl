@@ -30,6 +30,15 @@ end
     sgn = Vec{16, Float32}(ntuple(k -> isodd(k) ? -1.0f0 : 1.0f0, Val(16)))
     return muladd(d, wr, sgn * (dd * wi))
 end
+# 4-complex Float32 (256-bit ymm) — same 8-lane pattern as the Vec{8,Float64} method; used by the
+# Float32 base-16/32 AVX codelet (the cross pass uses the wider Vec{16,Float32} method above).
+@inline function _vcmul(d::Vec{8, Float32}, w::Vec{8, Float32})
+    wr = shufflevector(w, Val((0, 0, 2, 2, 4, 4, 6, 6)))
+    wi = shufflevector(w, Val((1, 1, 3, 3, 5, 5, 7, 7)))
+    dd = shufflevector(d, Val((1, 0, 3, 2, 5, 4, 7, 6)))
+    sgn = Vec{8, Float32}((-1.0f0, 1.0f0, -1.0f0, 1.0f0, -1.0f0, 1.0f0, -1.0f0, 1.0f0))
+    return muladd(d, wr, sgn * (dd * wi))
+end
 
 # multiply interleaved vector by ∓i (radix-4 twist): forward S=-1 → ·(-i); inverse S=+1 → ·(+i)
 @inline function _vtwist(z::Vec{8, Float64}, ::Val{S}) where {S}
@@ -49,15 +58,18 @@ end
 # shuffle-free) → twiddle → 4×4 register transpose (the only shuffles) → DFT-4 down columns
 # again (shuffle-free) → contiguous store. Measured ~2.1× over the scalar codelet.
 
-@inline function _dft4reg(V0::Vec{8, Float64}, V1, V2, V3, ::Val{S}) where {S}
+# Generic over the element type T (Float64 = 4-complex 512-bit zmm, Float32 = 4-complex 256-bit ymm);
+# the 8-lane shuffle pattern is identical for both — same "genericize over Vec{8,T}" as avxport.
+@inline function _dft4reg(V0::Vec{8, T}, V1, V2, V3, ::Val{S}) where {T, S}
     t0 = V0 + V2; t1 = V0 - V2; t2 = V1 + V3
     e = shufflevector(V1 - V3, Val((1, 0, 3, 2, 5, 4, 7, 6)))   # swap re/im → ·(∓i) next
-    t3 = S == -1 ? e * Vec{8, Float64}((1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0)) :
-        e * Vec{8, Float64}((-1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0))
+    o, z = one(T), -one(T)
+    t3 = S == -1 ? e * Vec{8, T}((o, z, o, z, o, z, o, z)) : e * Vec{8, T}((z, o, z, o, z, o, z, o))
     return (t0 + t2, t1 + t3, t0 - t2, t1 - t3)
 end
 
-@inline function _transpose4(C0::Vec{8, Float64}, C1, C2, C3)
+# Pure 8-lane shuffles → element-type-agnostic (Vec{8,Float64} or Vec{8,Float32}).
+@inline function _transpose4(C0::Vec{8}, C1, C2, C3)
     P0 = shufflevector(C0, C1, Val((0, 1, 8, 9, 2, 3, 10, 11)))
     P1 = shufflevector(C0, C1, Val((4, 5, 12, 13, 6, 7, 14, 15)))
     P2 = shufflevector(C2, C3, Val((0, 1, 8, 9, 2, 3, 10, 11)))
@@ -70,8 +82,9 @@ end
     )
 end
 
-# size-16 W16^{n1·k1} twiddle register for column k1 ∈ {1,2,3}
-@inline _tw16(W, p) = Vec{8, Float64}((1.0, 0.0, real(W^p), imag(W^p), real(W^(2p)), imag(W^(2p)), real(W^(3p)), imag(W^(3p))))
+# size-16 W16^{n1·k1} twiddle register for column k1 ∈ {1,2,3}; element type T (Float64 default).
+@inline _tw16(::Type{T}, W, p) where {T} = Vec{8, T}((one(T), zero(T), T(real(W^p)), T(imag(W^p)), T(real(W^(2p))), T(imag(W^(2p))), T(real(W^(3p))), T(imag(W^(3p)))))
+@inline _tw16(W, p) = _tw16(Float64, W, p)
 
 # DFT-16 register core: 4 input registers (V_r = elem[4r:4r+3]) → 4 output registers in natural
 # order. Two shuffle-free DFT-4s with a 4×4 register transpose between.
@@ -82,8 +95,9 @@ end
     return _dft4reg(D0, D1, D2, D3, Val(S))
 end
 
-# size-32 W32^k combine twiddle register (k = o:o+3), used by the radix-2 step of DFT-32.
-@inline _tw32(W, o) = Vec{8, Float64}((real(W^o), imag(W^o), real(W^(o + 1)), imag(W^(o + 1)), real(W^(o + 2)), imag(W^(o + 2)), real(W^(o + 3)), imag(W^(o + 3))))
+# size-32 W32^k combine twiddle register (k = o:o+3), used by the radix-2 step of DFT-32; element type T.
+@inline _tw32(::Type{T}, W, o) where {T} = Vec{8, T}((T(real(W^o)), T(imag(W^o)), T(real(W^(o + 1))), T(imag(W^(o + 1))), T(real(W^(o + 2))), T(imag(W^(o + 2))), T(real(W^(o + 3))), T(imag(W^(o + 3)))))
+@inline _tw32(W, o) = _tw32(Float64, W, o)
 
 # DFT-32 register core (the Butterfly32): 8 input registers (V_r = elem[4r:4r+3]) → 8 output
 # registers in natural order. Even/odd decimation → two DFT-16 → radix-2 combine with W32 twiddles.
@@ -96,43 +110,47 @@ end
     return (Z0 + T0, Z1 + T1, Z2 + T2, Z3 + T3, Z0 - T0, Z1 - T1, Z2 - T2, Z3 - T3)
 end
 
-function _base16_avx!(dst, src, width::Int, k::Int, ::Val{S}) where {S}
+# Generic over T: 4-complex Vec{8,T} registers (F64 = 512-bit, F32 = 256-bit). Byte strides scale with
+# sizeof(T): a Vec{8,T} = 4 complex = 8·sizeof(T) bytes; a size-16 column = 32·sizeof(T) bytes.
+function _base16_avx!(dst::AbstractVector{Complex{T}}, src, width::Int, k::Int, ::Val{S}) where {T, S}
     W = S == -1 ? cispi(-2.0 / 16) : cispi(2.0 / 16)
-    tw1 = _tw16(W, 1); tw2 = _tw16(W, 2); tw3 = _tw16(W, 3)
+    tw1 = _tw16(T, W, 1); tw2 = _tw16(T, W, 2); tw3 = _tw16(T, W, 3)
+    rb = 8 * sizeof(T); colb = 32 * sizeof(T)
     GC.@preserve dst src begin
-        po = reinterpret(Ptr{Float64}, pointer(dst))
-        pin = reinterpret(Ptr{Float64}, pointer(src))
+        po = reinterpret(Ptr{T}, pointer(dst))
+        pin = reinterpret(Ptr{T}, pointer(src))
         @inbounds for xi in 0:(width - 1)
-            b = pin + _digitrev4(xi, k) * 256
-            V0 = vload(Vec{8, Float64}, b); V1 = vload(Vec{8, Float64}, b + 64)
-            V2 = vload(Vec{8, Float64}, b + 128); V3 = vload(Vec{8, Float64}, b + 192)
+            b = pin + _digitrev4(xi, k) * colb
+            V0 = vload(Vec{8, T}, b); V1 = vload(Vec{8, T}, b + rb)
+            V2 = vload(Vec{8, T}, b + 2rb); V3 = vload(Vec{8, T}, b + 3rb)
             Z0, Z1, Z2, Z3 = _dft16_regs(V0, V1, V2, V3, tw1, tw2, tw3, Val(S))
-            o = po + xi * 256
-            vstore(Z0, o); vstore(Z1, o + 64); vstore(Z2, o + 128); vstore(Z3, o + 192)
+            o = po + xi * colb
+            vstore(Z0, o); vstore(Z1, o + rb); vstore(Z2, o + 2rb); vstore(Z3, o + 3rb)
         end
     end
     return
 end
 
-# size-32 AVX codelet (the Butterfly32) = two DFT-16 (even/odd decimation) + radix-2 combine.
-function _base32_avx!(dst, src, width::Int, k::Int, ::Val{S}) where {S}
+# size-32 AVX codelet (the Butterfly32) = two DFT-16 (even/odd decimation) + radix-2 combine. Generic over T.
+function _base32_avx!(dst::AbstractVector{Complex{T}}, src, width::Int, k::Int, ::Val{S}) where {T, S}
     W16 = S == -1 ? cispi(-2.0 / 16) : cispi(2.0 / 16)
-    tw1 = _tw16(W16, 1); tw2 = _tw16(W16, 2); tw3 = _tw16(W16, 3)
+    tw1 = _tw16(T, W16, 1); tw2 = _tw16(T, W16, 2); tw3 = _tw16(T, W16, 3)
     W = S == -1 ? cispi(-2.0 / 32) : cispi(2.0 / 32)   # W32^k combine twiddles, k = 0:15
-    u0 = _tw32(W, 0); u1 = _tw32(W, 4); u2 = _tw32(W, 8); u3 = _tw32(W, 12)
+    u0 = _tw32(T, W, 0); u1 = _tw32(T, W, 4); u2 = _tw32(T, W, 8); u3 = _tw32(T, W, 12)
+    rb = 8 * sizeof(T); colb = 64 * sizeof(T)
     GC.@preserve dst src begin
-        po = reinterpret(Ptr{Float64}, pointer(dst))
-        pin = reinterpret(Ptr{Float64}, pointer(src))
+        po = reinterpret(Ptr{T}, pointer(dst))
+        pin = reinterpret(Ptr{T}, pointer(src))
         @inbounds for xi in 0:(width - 1)
-            b = pin + _digitrev4(xi, k) * 512
-            V0 = vload(Vec{8, Float64}, b); V1 = vload(Vec{8, Float64}, b + 64)
-            V2 = vload(Vec{8, Float64}, b + 128); V3 = vload(Vec{8, Float64}, b + 192)
-            V4 = vload(Vec{8, Float64}, b + 256); V5 = vload(Vec{8, Float64}, b + 320)
-            V6 = vload(Vec{8, Float64}, b + 384); V7 = vload(Vec{8, Float64}, b + 448)
+            b = pin + _digitrev4(xi, k) * colb
+            V0 = vload(Vec{8, T}, b); V1 = vload(Vec{8, T}, b + rb)
+            V2 = vload(Vec{8, T}, b + 2rb); V3 = vload(Vec{8, T}, b + 3rb)
+            V4 = vload(Vec{8, T}, b + 4rb); V5 = vload(Vec{8, T}, b + 5rb)
+            V6 = vload(Vec{8, T}, b + 6rb); V7 = vload(Vec{8, T}, b + 7rb)
             G0, G1, G2, G3, G4, G5, G6, G7 = _dft32_regs(V0, V1, V2, V3, V4, V5, V6, V7, tw1, tw2, tw3, u0, u1, u2, u3, Val(S))
-            o = po + xi * 512
-            vstore(G0, o); vstore(G1, o + 64); vstore(G2, o + 128); vstore(G3, o + 192)
-            vstore(G4, o + 256); vstore(G5, o + 320); vstore(G6, o + 384); vstore(G7, o + 448)
+            o = po + xi * colb
+            vstore(G0, o); vstore(G1, o + rb); vstore(G2, o + 2rb); vstore(G3, o + 3rb)
+            vstore(G4, o + 4rb); vstore(G5, o + 5rb); vstore(G6, o + 6rb); vstore(G7, o + 7rb)
         end
     end
     return
@@ -246,11 +264,11 @@ function _fft128_avx!(x::AbstractVector{Complex{Float64}}, ::Val{S}) where {S}
     return x
 end
 
-# AVX base butterflies where supported (Float64, base 16/32); scalar codelets otherwise.
+# AVX base butterflies where supported (Float64/Float32, base 16/32); scalar codelets otherwise.
 @inline function _base_butterflies_avx!(dst::AbstractVector{Complex{T}}, src, base, width, k, ::Val{S}) where {T, S}
-    if T === Float64 && base == 16
+    if (T === Float64 || T === Float32) && base == 16
         _base16_avx!(dst, src, width, k, Val(S))
-    elseif T === Float64 && base == 32
+    elseif (T === Float64 || T === Float32) && base == 32
         _base32_avx!(dst, src, width, k, Val(S))
     else
         _base_butterflies_dr!(dst, src, base, width, k, Val(S))
@@ -379,23 +397,25 @@ end
     return (t0 + t2, t1 + t3, t0 - t2, t1 - t3)
 end
 
-# Vectorized transpose (Float64): base×width → width×base via a grid of 4×4 register transposes
-# (`_transpose4`), replacing the scalar strided-store transpose. ~1.8× faster while the array fits
-# L1; above that the scattered stores thrash and the scalar cache-blocked transpose wins, so the
-# caller gates on size. Requires base and width both multiples of 4 (true for base 16/32, n≥256).
-function _radix4_transpose_avx!(dst::AbstractVector{Complex{Float64}}, x, base::Int, width::Int)
+# Vectorized transpose: base×width → width×base via a grid of 4×4 register transposes (`_transpose4`,
+# generic over Vec{8,T}), replacing the scalar strided-store transpose. ~1.8× faster while the array
+# fits L1; above that the scattered stores thrash and the scalar cache-blocked transpose wins, so the
+# caller gates on size. Requires base and width both multiples of 4 (true for base 16/32, n≥256). The
+# byte stride is 2·sizeof(T) per complex (16 for Float64, 8 for Float32).
+function _radix4_transpose_avx!(dst::AbstractVector{Complex{T}}, x, base::Int, width::Int) where {T}
+    es = 2 * sizeof(T)
     GC.@preserve dst x begin
-        px = reinterpret(Ptr{Float64}, pointer(x))
-        pd = reinterpret(Ptr{Float64}, pointer(dst))
+        px = reinterpret(Ptr{T}, pointer(x))
+        pd = reinterpret(Ptr{T}, pointer(dst))
         @inbounds for I in 0:(base ÷ 4 - 1), J in 0:(width ÷ 4 - 1)
             a, b, c, d = _transpose4(
-                vload(Vec{8, Float64}, px + ((4I + 0) * width + 4J) * 16),
-                vload(Vec{8, Float64}, px + ((4I + 1) * width + 4J) * 16),
-                vload(Vec{8, Float64}, px + ((4I + 2) * width + 4J) * 16),
-                vload(Vec{8, Float64}, px + ((4I + 3) * width + 4J) * 16),
+                vload(Vec{8, T}, px + ((4I + 0) * width + 4J) * es),
+                vload(Vec{8, T}, px + ((4I + 1) * width + 4J) * es),
+                vload(Vec{8, T}, px + ((4I + 2) * width + 4J) * es),
+                vload(Vec{8, T}, px + ((4I + 3) * width + 4J) * es),
             )
-            o = pd + ((4J) * base + 4I) * 16
-            vstore(a, o); vstore(b, o + base * 16); vstore(c, o + 2base * 16); vstore(d, o + 3base * 16)
+            o = pd + ((4J) * base + 4I) * es
+            vstore(a, o); vstore(b, o + base * es); vstore(c, o + 2base * es); vstore(d, o + 3base * es)
         end
     end
     return dst
@@ -465,22 +485,23 @@ plan_inverse(p::Radix4AvxPlan)::Bool = p.inverse
 function apply_unnormalized!(p::Radix4AvxPlan{T}, x::AbstractVector) where {T}
     n = p.n
     n <= 1 && return x
-    # Small-n fast paths (Float64): skip the ~70 ns scratch transpose that otherwise dominates.
-    # n=64 uses the fused in-register kernel; n=16/32 have width==1 (the transpose is an identity
-    # copy), so the base codelet runs straight on x in place (it loads all lanes before storing).
+    # Small-n fast paths: skip the ~70 ns scratch transpose that otherwise dominates. n=16/32 have
+    # width==1 (the transpose is an identity copy), so the base codelet runs straight on x in place
+    # (it loads all lanes before storing) — works for any T. n=64/128 use the fused in-register
+    # kernels, which are Float64-only for now.
+    if n == 16 || n == 32
+        _base_butterflies_avx!(x, x, p.base, 1, 0, p.inverse ? Val(1) : Val(-1))
+        return x
+    end
     if T === Float64
-        if n == 64
-            return _fft64_avx!(x, p.inverse ? Val(1) : Val(-1))
-        elseif n == 128
-            return _fft128_avx!(x, p.inverse ? Val(1) : Val(-1))
-        elseif n == 16 || n == 32
-            _base_butterflies_avx!(x, x, p.base, 1, 0, p.inverse ? Val(1) : Val(-1))
-            return x
-        end
+        n == 64 && return _fft64_avx!(x, p.inverse ? Val(1) : Val(-1))
+        n == 128 && return _fft128_avx!(x, p.inverse ? Val(1) : Val(-1))
     end
     scr = p.scratch
     width = n ÷ p.base
-    if T === Float64 && n <= _VTRANSPOSE_MAX && p.base % 4 == 0 && width % 4 == 0
+    # Vectorized transpose while the array fits L1 (`_VTRANSPOSE_MAX` is in complex elements for
+    # Float64; Float32 elements are half the size, so 2× as many fit — scale by 8÷sizeof(T)).
+    if (T === Float64 || T === Float32) && n <= _VTRANSPOSE_MAX * (8 ÷ sizeof(T)) && p.base % 4 == 0 && width % 4 == 0
         _radix4_transpose_avx!(scr, x, p.base, width)
     else
         _radix4_transpose!(scr, x, p.base, width)

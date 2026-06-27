@@ -7,8 +7,8 @@
 # ---- W=8 passes (load/store via V8f; transposes from avxport: avx_transpose8/12_packed(::V8f)) ----
 @inline _L8(b, i) = avx_load_complex8(b, i)
 @inline _S8(b, i, v) = avx_store_complex8!(b, i, v)
-bf64_tw_w8(fwd) = [avx_mixedradix_twiddle_chunk8(cs * 4, r, 64, fwd) for cs in 0:1 for r in 1:7]
-mr_twiddles_w8(R, M, n, fwd) = [avx_mixedradix_twiddle_chunk8(c * 4, y, n, fwd) for c in 0:(M ÷ 4 - 1) for y in 1:(R - 1)]
+bf64_tw_w8(::Type{T}, fwd) where {T} = Vec{8, T}[avx_mixedradix_twiddle_chunk8(T, cs * 4, r, 64, fwd) for cs in 0:1 for r in 1:7]
+mr_twiddles_w8(::Type{T}, R, M, n, fwd) where {T} = Vec{8, T}[avx_mixedradix_twiddle_chunk8(T, c * 4, y, n, fwd) for c in 0:(M ÷ 4 - 1) for y in 1:(R - 1)]
 
 # Butterfly64 at W=8 (out/inp/scr; out===inp ⇒ in-place via scr). Verified bit-exact vs V4f.
 function butterfly64_w8!(out, inp, scr, base::Int, tw, rot)
@@ -64,18 +64,21 @@ end
 end
 
 # ---- W=8 kernel types (reuse Kernel/RPlan/applyplan! + the proc_ip!/proc_oop! alternation) ----
-struct B64W8 <: Kernel
-    n::Int; tw::Vector{V8f}; rot::V8f
+struct B64W8{T} <: Kernel
+    n::Int; tw::Vector{Vec{8, T}}; rot::Vec{8, T}
 end
-B64W8(fwd::Bool) = B64W8(64, bf64_tw_w8(fwd), fwd ? _ROT90_FWD8 : _ROT90_INV8)
+keltype(::B64W8{T}) where {T} = T
+B64W8(fwd::Bool) = B64W8(Float64, fwd)
+B64W8(::Type{T}, fwd::Bool) where {T} = B64W8{T}(64, bf64_tw_w8(T, fwd), fwd ? _rot90_fwd8(T) : _rot90_inv8(T))
 @inline proc_ip!(k::B64W8, buf, scr) = (@inbounds for f in 0:(length(buf) ÷ 64 - 1); butterfly64_w8!(buf, buf, scr, 64f, k.tw, k.rot); end)
 @inline proc_oop!(k::B64W8, out, inp, scr) = (@inbounds for f in 0:(length(inp) ÷ 64 - 1); butterfly64_w8!(out, inp, out, 64f, k.tw, k.rot); end)
 
-struct MR8W8{M, I <: Kernel} <: Kernel
-    inner::I; tw::Vector{V8f}; rot::V8f
+struct MR8W8{M, I <: Kernel, T} <: Kernel
+    inner::I; tw::Vector{Vec{8, T}}; rot::Vec{8, T}
 end
 klen(::MR8W8{M}) where {M} = 8M
-MR8W8(inner::Kernel, fwd::Bool) = (M = klen(inner); MR8W8{M, typeof(inner)}(inner, mr_twiddles_w8(8, M, 8M, fwd), fwd ? _ROT90_FWD8 : _ROT90_INV8))
+keltype(::MR8W8{M, I, T}) where {M, I, T} = T
+MR8W8(inner::Kernel, fwd::Bool) = (T = keltype(inner); M = klen(inner); MR8W8{M, typeof(inner), T}(inner, mr_twiddles_w8(T, 8, M, 8M, fwd), fwd ? _rot90_fwd8(T) : _rot90_inv8(T)))
 @inline function proc_ip!(k::MR8W8{M}, buf, scr) where {M}
     n = 8M; cnt = length(buf) ÷ n
     @inbounds for f in 0:(cnt-1); _colbf8_w8!(buf, f*n, Val(M), k.tw, k.rot); end
@@ -89,11 +92,12 @@ end
     @inbounds for f in 0:(cnt-1); _trans8_w8!(out, f*n, inp, f*n, Val(M)); end
 end
 
-struct MR12W8{M, I <: Kernel} <: Kernel
-    inner::I; tw::Vector{V8f}; bf3::V8f; rot::V8f
+struct MR12W8{M, I <: Kernel, T} <: Kernel
+    inner::I; tw::Vector{Vec{8, T}}; bf3::Vec{8, T}; rot::Vec{8, T}
 end
 klen(::MR12W8{M}) where {M} = 12M
-MR12W8(inner::Kernel, fwd::Bool) = (M = klen(inner); MR12W8{M, typeof(inner)}(inner, mr_twiddles_w8(12, M, 12M, fwd), avx_broadcast_twiddle8(1, 3, fwd), fwd ? _ROT90_FWD8 : _ROT90_INV8))
+keltype(::MR12W8{M, I, T}) where {M, I, T} = T
+MR12W8(inner::Kernel, fwd::Bool) = (T = keltype(inner); M = klen(inner); MR12W8{M, typeof(inner), T}(inner, mr_twiddles_w8(T, 12, M, 12M, fwd), avx_broadcast_twiddle8(T, 1, 3, fwd), fwd ? _rot90_fwd8(T) : _rot90_inv8(T)))
 @inline function proc_ip!(k::MR12W8{M}, buf, scr) where {M}
     n = 12M; cnt = length(buf) ÷ n
     @inbounds for f in 0:(cnt-1); _colbf12_w8!(buf, f*n, Val(M), k.tw, k.bf3, k.rot); end
@@ -107,11 +111,12 @@ end
     @inbounds for f in 0:(cnt-1); _trans12_w8!(out, f*n, inp, f*n, Val(M)); end
 end
 
-struct MR9W8{M, I <: Kernel} <: Kernel
-    inner::I; tw::Vector{V8f}; tw1::V8f; tw2::V8f; tw3::V8f; bf3::V8f
+struct MR9W8{M, I <: Kernel, T} <: Kernel
+    inner::I; tw::Vector{Vec{8, T}}; tw1::Vec{8, T}; tw2::Vec{8, T}; tw3::Vec{8, T}; bf3::Vec{8, T}
 end
 klen(::MR9W8{M}) where {M} = 9M
-MR9W8(inner::Kernel, fwd::Bool) = (M = klen(inner); MR9W8{M, typeof(inner)}(inner, mr_twiddles_w8(9, M, 9M, fwd), avx_broadcast_twiddle8(1, 9, fwd), avx_broadcast_twiddle8(2, 9, fwd), avx_broadcast_twiddle8(4, 9, fwd), avx_broadcast_twiddle8(1, 3, fwd)))
+keltype(::MR9W8{M, I, T}) where {M, I, T} = T
+MR9W8(inner::Kernel, fwd::Bool) = (T = keltype(inner); M = klen(inner); MR9W8{M, typeof(inner), T}(inner, mr_twiddles_w8(T, 9, M, 9M, fwd), avx_broadcast_twiddle8(T, 1, 9, fwd), avx_broadcast_twiddle8(T, 2, 9, fwd), avx_broadcast_twiddle8(T, 4, 9, fwd), avx_broadcast_twiddle8(T, 1, 3, fwd)))
 @inline function proc_ip!(k::MR9W8{M}, buf, scr) where {M}
     n = 9M; cnt = length(buf) ÷ n
     @inbounds for f in 0:(cnt-1); _colbf9_w8!(buf, f*n, Val(M), k.tw, k.tw1, k.tw2, k.tw3, k.bf3); end
@@ -125,11 +130,12 @@ end
     @inbounds for f in 0:(cnt-1); _trans9_w8!(out, f*n, inp, f*n, Val(M)); end
 end
 
-struct MR5W8{M, I <: Kernel} <: Kernel
-    inner::I; tw::Vector{V8f}; t0::V8f; t1::V8f
+struct MR5W8{M, I <: Kernel, T} <: Kernel
+    inner::I; tw::Vector{Vec{8, T}}; t0::Vec{8, T}; t1::Vec{8, T}
 end
 klen(::MR5W8{M}) where {M} = 5M
-MR5W8(inner::Kernel, fwd::Bool) = (M = klen(inner); MR5W8{M, typeof(inner)}(inner, mr_twiddles_w8(5, M, 5M, fwd), avx_broadcast_twiddle8(1, 5, fwd), avx_broadcast_twiddle8(2, 5, fwd)))
+keltype(::MR5W8{M, I, T}) where {M, I, T} = T
+MR5W8(inner::Kernel, fwd::Bool) = (T = keltype(inner); M = klen(inner); MR5W8{M, typeof(inner), T}(inner, mr_twiddles_w8(T, 5, M, 5M, fwd), avx_broadcast_twiddle8(T, 1, 5, fwd), avx_broadcast_twiddle8(T, 2, 5, fwd)))
 @inline function proc_ip!(k::MR5W8{M}, buf, scr) where {M}
     n = 5M; cnt = length(buf) ÷ n
     @inbounds for f in 0:(cnt-1); _colbf5_w8!(buf, f*n, Val(M), k.tw, k.t0, k.t1); end
@@ -145,8 +151,11 @@ end
 
 # W=8-clean tree for n = 2^(6+3a+2b)·3^b·5^v5 = Butterfly64 · radix-8^a · radix-12^b · radix-9^b9 · radix-5^v5
 # (every len_per_row divisible by CPV=4). Returns nothing for any other size.
-function plan_tree_w8(n::Int, fwd::Bool = true)
-    _HAS_AVX512 || return nothing                           # no real AVX-512 ⇒ don't build/time a W=8 tree
+plan_tree_w8(n::Int, fwd::Bool = true) = plan_tree_w8(Float64, n, fwd)
+function plan_tree_w8(::Type{T}, n::Int, fwd::Bool = true) where {T}
+    # Float64 W=8 = Vec{8,Float64} = 512-bit ⇒ needs real AVX-512 (else don't build/time it). Float32 W=8
+    # = Vec{8,Float32} = 256-bit ⇒ plain AVX2, always buildable — so the gate is Float64-only.
+    T === Float64 && !_HAS_AVX512 && return nothing
     v2 = 0; t = n; while t % 2 == 0; t ÷= 2; v2 += 1; end
     v3 = 0; while t % 3 == 0; t ÷= 3; v3 += 1; end
     v5 = 0; while t % 5 == 0; t ÷= 5; v5 += 1; end
@@ -164,7 +173,7 @@ function plan_tree_w8(n::Int, fwd::Bool = true)
         end
     end
     b9 < 0 && return nothing
-    k::Kernel = B64W8(fwd)
+    k::Kernel = B64W8(T, fwd)
     for _ in 1:b9;  k = MR9W8(k, fwd);  end
     for _ in 1:b12; k = MR12W8(k, fwd); end
     for _ in 1:a;   k = MR8W8(k, fwd);  end

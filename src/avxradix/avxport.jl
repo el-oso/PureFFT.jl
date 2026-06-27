@@ -322,10 +322,11 @@ end
 # uses muladd+sign (cf. radix4_avx _vcmul), not a 512-bit fmaddsub intrinsic.
 # ============================================================================================
 const V8f = Vec{8, Float64}
-@inline avx_swap_complex(s::V8f) = shufflevector(s, Val((1, 0, 3, 2, 5, 4, 7, 6)))
-@inline avx_dup_re(s::V8f) = shufflevector(s, Val((0, 0, 2, 2, 4, 4, 6, 6)))
-@inline avx_dup_im(s::V8f) = shufflevector(s, Val((1, 1, 3, 3, 5, 5, 7, 7)))
-@inline avx_duplicate_complex(s::V8f) = (avx_dup_re(s), avx_dup_im(s))
+# Shuffles are element-type-agnostic ⇒ dispatch on ::Vec{8} so Vec{8,Float32} reuses them verbatim.
+@inline avx_swap_complex(s::Vec{8}) = shufflevector(s, Val((1, 0, 3, 2, 5, 4, 7, 6)))
+@inline avx_dup_re(s::Vec{8}) = shufflevector(s, Val((0, 0, 2, 2, 4, 4, 6, 6)))
+@inline avx_dup_im(s::Vec{8}) = shufflevector(s, Val((1, 1, 3, 3, 5, 5, 7, 7)))
+@inline avx_duplicate_complex(s::Vec{8}) = (avx_dup_re(s), avx_dup_im(s))
 @inline avx_xor(a::V8f, b::V8f) = reinterpret(V8f, reinterpret(Vec{8, UInt64}, a) ⊻ reinterpret(Vec{8, UInt64}, b))
 const _ROT90_FWD8 = V8f((-0.0, 0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0))
 const _ROT90_INV8 = V8f((0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0, -0.0))
@@ -360,16 +361,20 @@ attributes #0 = { alwaysinline }"""
 @inline _mulc8(l::V8f, r::V8f, ::Val{true}) = avx_fmaddsub(avx_dup_re(l), r, avx_mul(avx_dup_im(l), avx_swap_complex(r)))
 @inline _mulc8(l::V8f, r::V8f, ::Val{false}) = muladd(avx_dup_re(l), r, _SGN8 * (avx_dup_im(l) * avx_swap_complex(r)))
 @inline avx_mul_complex(left::V8f, right::V8f) = _mulc8(left, right, Val(_HAS_AVX512))
-@inline avx_broadcast_complex8(re::Float64, im::Float64) = V8f((re, im, re, im, re, im, re, im))
-@inline function avx_broadcast_twiddle8(index::Int, len::Int, forward::Bool)
-    r, i = compute_twiddle(index, len, forward); avx_broadcast_complex8(r, i)
+# Twiddle builders are parameterized on element type T (compute_twiddle returns Float64 → narrowed to
+# Vec{8,T}); T defaults to Float64 so the existing V8f callers are unchanged.
+@inline avx_broadcast_complex8(::Type{T}, re, im) where {T} = Vec{8, T}((re, im, re, im, re, im, re, im))
+@inline function avx_broadcast_twiddle8(::Type{T}, index::Int, len::Int, forward::Bool) where {T}
+    r, i = compute_twiddle(index, len, forward); avx_broadcast_complex8(T, r, i)
 end
-# mixedradix twiddle chunk, 4 complex per V8f (vs 2 per V4f): columns x..x+3
-@inline function avx_mixedradix_twiddle_chunk8(x::Int, y::Int, len::Int, forward::Bool)
+@inline avx_broadcast_twiddle8(index::Int, len::Int, forward::Bool) = avx_broadcast_twiddle8(Float64, index, len, forward)
+# mixedradix twiddle chunk, 4 complex per Vec{8} (vs 2 per V4f): columns x..x+3
+@inline function avx_mixedradix_twiddle_chunk8(::Type{T}, x::Int, y::Int, len::Int, forward::Bool) where {T}
     t0r, t0i = compute_twiddle(y * x, len, forward); t1r, t1i = compute_twiddle(y * (x + 1), len, forward)
     t2r, t2i = compute_twiddle(y * (x + 2), len, forward); t3r, t3i = compute_twiddle(y * (x + 3), len, forward)
-    V8f((t0r, t0i, t1r, t1i, t2r, t2i, t3r, t3i))
+    Vec{8, T}((t0r, t0i, t1r, t1i, t2r, t2i, t3r, t3i))
 end
+@inline avx_mixedradix_twiddle_chunk8(x::Int, y::Int, len::Int, forward::Bool) = avx_mixedradix_twiddle_chunk8(Float64, x, y, len, forward)
 @inline function avx_load_complex8(x::AbstractVector{Complex{Float64}}, i::Int)
     GC.@preserve x vload(V8f, reinterpret(Ptr{Float64}, pointer(x)) + i * 16)
 end
@@ -377,9 +382,51 @@ end
     GC.@preserve x vstore(v, reinterpret(Ptr{Float64}, pointer(x)) + i * 16)
 end
 
+# ============================================================================================
+# Float32 4-complex path: V8f32 = Vec{8,Float32} = one 256-bit register = 4 interleaved complex
+# (CPV=4). IDENTICAL 8-lane shuffle/transpose patterns as V8f — those are genericized to ::Vec{8}
+# above, so they're reused verbatim. Only the element-type-specific pieces differ. Crucially this is
+# **AVX2** (vfmaddsub.ps.256), NOT AVX-512 — so Float32's 4-complex path is its PRIMARY AVX path and
+# needs NO _HAS_AVX512 gate (the fmaddsub is always usable).
+# ============================================================================================
+const V8f32 = Vec{8, Float32}
+@inline avx_xor(a::V8f32, b::V8f32) = reinterpret(V8f32, reinterpret(Vec{8, UInt32}, a) ⊻ reinterpret(Vec{8, UInt32}, b))
+const _ROT90_FWD8_F32 = V8f32((-0f0, 0f0, -0f0, 0f0, -0f0, 0f0, -0f0, 0f0))
+const _ROT90_INV8_F32 = V8f32((0f0, -0f0, 0f0, -0f0, 0f0, -0f0, 0f0, -0f0))
+@inline _rot90_inv(::V8f32) = _ROT90_INV8_F32
+const _HALF_ROOT2_8_F32 = V8f32(ntuple(_ -> sqrt(0.5f0), Val(8)))
+@inline _half_root2(::V8f32) = _HALF_ROOT2_8_F32
+# 256-bit FMA-addsub via the AVX2 .ps.256 intrinsic (no rounding-mode arg — FMA3, not AVX-512).
+const _NT8f32 = NTuple{8, VecElement{Float32}}
+const _IR_MADDSUB8F32 = """
+declare <8 x float> @llvm.x86.fma.vfmaddsub.ps.256(<8 x float>, <8 x float>, <8 x float>)
+define <8 x float> @entry(<8 x float> %a, <8 x float> %b, <8 x float> %c) #0 {
+  %r = call <8 x float> @llvm.x86.fma.vfmaddsub.ps.256(<8 x float> %a, <8 x float> %b, <8 x float> %c)
+  ret <8 x float> %r
+}
+attributes #0 = { alwaysinline }"""
+@inline avx_fmaddsub(a::V8f32, b::V8f32, c::V8f32) =
+    Vec(Base.llvmcall((_IR_MADDSUB8F32, "entry"), _NT8f32, Tuple{_NT8f32, _NT8f32, _NT8f32}, a.data, b.data, c.data))
+# AVX2 is always present ⇒ fmaddsub unconditionally (no _HAS_AVX512 gate, unlike V8f).
+@inline avx_mul_complex(left::V8f32, right::V8f32) =
+    avx_fmaddsub(avx_dup_re(left), right, avx_mul(avx_dup_im(left), avx_swap_complex(right)))
+@inline function avx_load_complex8(x::AbstractVector{Complex{Float32}}, i::Int)
+    GC.@preserve x vload(V8f32, reinterpret(Ptr{Float32}, pointer(x)) + i * 8)   # ComplexF32 = 8 bytes
+end
+@inline function avx_store_complex8!(x::AbstractVector{Complex{Float32}}, i::Int, v::V8f32)
+    GC.@preserve x vstore(v, reinterpret(Ptr{Float32}, pointer(x)) + i * 8)
+end
+
+# rot90 masks keyed by element type (W=8 kernel constructors pick the right const from T; the
+# value-dispatched `_rot90_inv(::Vec{8})` stays for the hot-path column butterflies).
+@inline _rot90_fwd8(::Type{Float64}) = _ROT90_FWD8
+@inline _rot90_inv8(::Type{Float64}) = _ROT90_INV8
+@inline _rot90_fwd8(::Type{Float32}) = _ROT90_FWD8_F32
+@inline _rot90_inv8(::Type{Float32}) = _ROT90_INV8_F32
+
 # ---- W=8 packed transposes (verified end-to-end: B64 bit-exact, 768=MR12(B64) rel-err 2e-16) ----
 # 4×4 register transpose (the radix4_avx _transpose4 pattern): out[k] = column (k-1) of the 4 rows.
-@inline function avx_transpose4_packed(C0::V8f, C1::V8f, C2::V8f, C3::V8f)
+@inline function avx_transpose4_packed(C0::Vec{8}, C1::Vec{8}, C2::Vec{8}, C3::Vec{8})
     P0 = shufflevector(C0, C1, Val((0, 1, 8, 9, 2, 3, 10, 11))); P1 = shufflevector(C0, C1, Val((4, 5, 12, 13, 6, 7, 14, 15)))
     P2 = shufflevector(C2, C3, Val((0, 1, 8, 9, 2, 3, 10, 11))); P3 = shufflevector(C2, C3, Val((4, 5, 12, 13, 6, 7, 14, 15)))
     (shufflevector(P0, P2, Val((0, 1, 2, 3, 8, 9, 10, 11))), shufflevector(P0, P2, Val((4, 5, 6, 7, 12, 13, 14, 15))),
@@ -387,18 +434,18 @@ end
 end
 # transposeN at W=8: each column's N rows grouped contiguously (each column = N/4 V8f). Reorder differs
 # from the V4f (CPV=2) versions because the 4×4 register transpose yields 4-complex column vectors.
-@inline function avx_transpose8_packed(r1::V8f, r2::V8f, r3::V8f, r4::V8f, r5::V8f, r6::V8f, r7::V8f, r8::V8f)
+@inline function avx_transpose8_packed(r1::Vec{8}, r2::Vec{8}, r3::Vec{8}, r4::Vec{8}, r5::Vec{8}, r6::Vec{8}, r7::Vec{8}, r8::Vec{8})
     a = avx_transpose4_packed(r1, r2, r3, r4); b = avx_transpose4_packed(r5, r6, r7, r8)
     (a[1], b[1], a[2], b[2], a[3], b[3], a[4], b[4])
 end
-@inline function avx_transpose12_packed(r1::V8f, r2::V8f, r3::V8f, r4::V8f, r5::V8f, r6::V8f, r7::V8f, r8::V8f, r9::V8f, r10::V8f, r11::V8f, r12::V8f)
+@inline function avx_transpose12_packed(r1::Vec{8}, r2::Vec{8}, r3::Vec{8}, r4::Vec{8}, r5::Vec{8}, r6::Vec{8}, r7::Vec{8}, r8::Vec{8}, r9::Vec{8}, r10::Vec{8}, r11::Vec{8}, r12::Vec{8})
     a = avx_transpose4_packed(r1, r2, r3, r4); b = avx_transpose4_packed(r5, r6, r7, r8); c = avx_transpose4_packed(r9, r10, r11, r12)
     (a[1], b[1], c[1], a[2], b[2], c[2], a[3], b[3], c[3], a[4], b[4], c[4])
 end
 # transpose9 at W=8 (9×4 → 4×9): 9 is not a multiple of CPV=4, so it can't be whole transpose4 blocks —
 # two transpose4 (rows 0-3, 4-7) + row 8, with shuffles bridging the 9-not-÷4 boundaries. Verified
 # bit-exact against the V4f path. out[c·9+r] = in[r,c].
-@inline function avx_transpose9_packed(v0::V8f, v1::V8f, v2::V8f, v3::V8f, v4::V8f, v5::V8f, v6::V8f, v7::V8f, v8::V8f)
+@inline function avx_transpose9_packed(v0::Vec{8}, v1::Vec{8}, v2::Vec{8}, v3::Vec{8}, v4::Vec{8}, v5::Vec{8}, v6::Vec{8}, v7::Vec{8}, v8::Vec{8})
     a = avx_transpose4_packed(v0, v1, v2, v3); b = avx_transpose4_packed(v4, v5, v6, v7)
     (a[1], b[1],
      shufflevector(v8, a[2], Val((0, 1, 8, 9, 10, 11, 12, 13))),
@@ -410,7 +457,7 @@ end
      shufflevector(b[4], v8, Val((2, 3, 4, 5, 6, 7, 14, 15))))
 end
 # transpose5 at W=8 (5×4 → 4×5): one transpose4 (rows 0-3) + row 4 + bridging shuffles. Verified bit-exact.
-@inline function avx_transpose5_packed(v0::V8f, v1::V8f, v2::V8f, v3::V8f, v4::V8f)
+@inline function avx_transpose5_packed(v0::Vec{8}, v1::Vec{8}, v2::Vec{8}, v3::Vec{8}, v4::Vec{8})
     a = avx_transpose4_packed(v0, v1, v2, v3)
     (a[1],
      shufflevector(v4, a[2], Val((0, 1, 8, 9, 10, 11, 12, 13))),

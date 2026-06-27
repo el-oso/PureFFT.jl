@@ -232,8 +232,18 @@ end
     @testset "AVX-512 (W=8) path (AvxMixedRadixPlanW8)" begin
         @test isnothing(PureFFT.AvxMixedRadixPlanW8(ComplexF64, 1080))  # 2^3·3^3·5: too few 2s for the Butterfly64 base
         @test isnothing(PureFFT.AvxMixedRadixPlanW8(ComplexF64, 144))   # too small for the Butterfly64 base
-        @test isnothing(PureFFT.AvxMixedRadixPlanW8(ComplexF32, 768))   # Float64-only
-        # W=8 plans are gated on real AVX-512 (`plan_tree_w8` returns nothing without it), so the
+        # Float32 W=8 = Vec{8,Float32} = 256-bit AVX2 (NOT AVX-512) — the PRIMARY Float32 AVX path, so it
+        # is always buildable (no _HAS_AVX512 gate) and tested unconditionally, unlike the Float64 W=8 path.
+        let pf = PureFFT.AvxMixedRadixPlanW8(ComplexF32, 768)
+            @test pf isa PureFFT.AvxMixedRadixPlan
+            x = randn(ComplexF32, 768); y = copy(x); pfft!(y, pf)       # forward (unnormalized) = fft
+            @test relerr(y, fft(x)) < tol(Float32)
+            pii = PureFFT.AvxMixedRadixPlanW8(ComplexF32, 768; inverse = true)
+            pfft!(y, pii)                                               # normalized inverse → back to x
+            @test relerr(y, x) < tol(Float32)
+            @test_opt target_modules = (PureFFT,) PureFFT.apply_unnormalized!(pf, randn(ComplexF32, 768))
+        end
+        # The Float64 W=8 plans are gated on real AVX-512 (`plan_tree_w8` returns nothing without it), so the
         # hardware-specific correctness only runs where AVX-512 is present (skipped on a non-AVX-512 runner).
         if isnothing(PureFFT.AvxMixedRadixPlanW8(ComplexF64, 768))
             @info "AVX-512 not detected — W=8 plans gated off; skipping W=8 correctness"
