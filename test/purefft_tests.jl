@@ -175,8 +175,11 @@ end
         # The dispatch-free/alloc-free guarantees are asserted on the *concrete* plan types elsewhere; this
         # pins the boundary so a change in breadth (toward concrete, or back to bare-abstract) is visible.
         rt = Base.return_types(PureFFT.autoplan, (Type{ComplexF64}, Int))[1]
-        @test !isconcretetype(rt)                       # runtime selection ⇒ not one concrete type (yet)
-        @test rt <: PureFFT.AbstractFFTPlan{Float64}    # but bounded under the plan supertype
+        @test !isconcretetype(rt)              # runtime selection ⇒ not one concrete type (yet)
+        # Bounded under the (unparameterized) plan supertype. NB: not `AbstractFFTPlan{Float64}` — the
+        # pow2 branch's `AutoPlan{T, typeof(best)}` widens its T param (best is a Union), so the union
+        # contains bare `AutoPlan`, which is `<: AbstractFFTPlan` but not `<: AbstractFFTPlan{Float64}`.
+        @test rt <: PureFFT.AbstractFFTPlan
         @test PureFFT.plan_pfft(ComplexF64, 1080; variant = :fast) isa PureFFT.AbstractFFTPlan{Float64}
     end
 end
