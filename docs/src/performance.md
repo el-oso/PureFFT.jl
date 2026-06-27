@@ -370,6 +370,38 @@ routes 5-smooth sizes (2880/23040/46080) to W=8 too, each beating FFTW and appro
 radix-5/9 stay just under rust (the intrinsic shuffle-bound floor for radices that aren't a multiple of
 CPV=4); only the `vpermt2pd`-native redesign would close that.
 
+## 17. Float32 AVX parity: genericize the 4-complex kernels over `Vec{8,T}`, not a duplicated set
+
+The AVX path was `Float64`-only; `ComplexF32` fell to the scalar codelet (correct, not fast). The fix is
+**one generic 4-complex kernel set over `Vec{8,T}`** — the hardware register follows from `T`, and only the
+explicit FMA-addsub `llvmcall` is per-`(N,T)`:
+
+- `Vec{8,Float64}` = 512-bit ⇒ AVX-512 (the existing W=8 path).
+- `Vec{8,Float32}` = **256-bit** ⇒ plain **AVX2** — so Float32's 4-complex path is its *primary* AVX path
+  and needs no AVX-512 gate (what RustFFT uses).
+
+The 8-lane shuffle/transpose patterns are **identical** for both element types, so genericizing the
+primitives (`avx_swap_complex`/`dup`/`transpose{4,8,9,12}_packed` → dispatch on `::Vec{8}`) makes the
+column butterflies width-generic for free; the W=8 kernel structs/constructors then carry `T` (the `RPlan`
+scratch element type follows via a `keltype` trait). **Non-pow2** `ComplexF32` routes through this `V8f32`
+tree and lands **at/above FFTW & RustFFT** (PF/FFTW 0.99–1.41 across 768–23040).
+
+**Pow2 was subtler — the scratch transpose, not the base codelet, was the real gap.** The radix4-AVX
+cross-passes were already `T`-generic (they run as 512-bit `Vec{16,Float32}` for Float32); only the base-16/32
+codelet and the vectorized scratch transpose were `Float64`-gated. The instinct was to widen the base to a
+full 512-bit `Vec{16,Float32}` (8-complex) codelet — a real W=16 *block-diagonal* register-transpose
+derivation (each of the 2 packed columns transposed within its own 8 lanes; the 16-lane shuffle masks are the
+F64 8-lane masks mapped per-half). It is bit-exact — **and measures identical to the simple 256-bit
+`Vec{8,T}` base** (ratio 0.99–1.00). The two columns sit at different *digit-reversed* offsets, so packing
+them costs an interleave-load + deinterleave-store that exactly cancels the width gain. **A null result: it
+was reverted.** What actually closed the gap was genericizing the cheap things — the **vectorized scratch
+transpose** over `Vec{8,T}` (the dominant small/medium-`n` cost) plus enabling the n=16/32 small-`n` fast
+path for Float32 — lifting n=256/1024 from 0.69/0.74 → **0.99/1.06× FFTW**. Lesson (again, cf. §15): the
+register width is not the bottleneck you assume — re-measure in the full kernel, and the boring
+genericization beat the elaborate one. Float32 ends at **1.3–1.8× the Float64 GFLOP/s** (toward 2× at large
+`n`), at/near FFTW parity for L1-resident pow2 (≤2048: 0.87–1.06×) and oscillating 0.73–1.02× above L1 — the
+same cross-pass/transpose cache behaviour the Float64 radix4 engine shows, not a Float32-specific gap.
+
 ## Summary table
 
 | Trick | Effect | Notes |
@@ -390,3 +422,5 @@ CPV=4); only the `vpermt2pd`-native redesign would close that.
 | Match rust's radix (8/9/12/6 not 4/5) | plateau 0.91× → **0.97×** | radix-8 depth-2 parity; single scratch buffer |
 | radix-9/12 vs radix-8 cost | ~0.90× floor | 3× shuffles/FMAs (twiddle mults); fundamental |
 | Per-radix micro-opt below measurement floor | ≤5% vs **7%** noise | ratio drifts ±7% run-to-run; pin freq to chase |
+| Float32 via genericize-over-`Vec{8,T}` | scalar → **1.3–1.8× the F64 GFLOP/s** | `V8f32`=256-bit AVX2; non-pow2 ≥ FFTW/rust |
+| Float32 pow2: vectorize the *transpose* (not widen base) | n=1024 0.74 → **1.06× FFTW** (L1-resident) | 512-bit base = null (digit-rev gather/scatter cancels width) |

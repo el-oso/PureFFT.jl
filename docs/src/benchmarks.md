@@ -1,8 +1,8 @@
 # Benchmarks
 
 All benchmarks: AMD Zen 5 (znver5, AVX-512), single-thread, in-place, planning excluded.
-Input: `Vector{ComplexF64}`, power-of-two sizes. FFTW at `MEASURE` flag. RustFFT with
-`IgnoreArrayChecks`. PureFFT `:fast` (autotuned).
+Input: `Vector{ComplexF64}` (see the [Float32](#float32-complexf32) section for `ComplexF32`),
+power-of-two sizes. FFTW at `MEASURE` flag. RustFFT with `IgnoreArrayChecks`. PureFFT `:fast` (autotuned).
 
 ## GFLOP/s comparison
 
@@ -74,6 +74,43 @@ decomposing into ~3 small factors recovers most of the gap **at every size**:
 | smooth composite — recursive | 5760 / 23040 | **29 / 22** | sizes needing radix-2/16 fall back here |
 | large smooth (was Bluestein cliff) | 46080 / 92160 | **28 / 26** | ≈FFTW; was ~3–5 (Bluestein) before Stage 12 |
 | large prime / prime power — Bluestein | 181 / 5793 | ~5 | O(n log n), no cliff |
+
+## Float32 (`ComplexF32`)
+
+The AVX path is `Float32`-capable by genericizing the 4-complex kernels over `Vec{8,T}` — the hardware
+register *follows from `T`* (`Vec{8,Float64}` = 512-bit AVX-512; `Vec{8,Float32}` = 256-bit AVX2), so only
+the explicit FMA `llvmcall` is per-`(N,T)` (see `performance.md` §17). Float32 is **1.2–1.8× the Float64
+GFLOP/s** (toward the 2× half-precision ideal at large `n`):
+
+![PureFFT ComplexF32 vs ComplexF64 throughput (power-of-two; 2.0 = ideal half-precision)](assets/comparison_f32_vs_f64.png)
+
+**Non-power-of-two — beats FFTW & RustFFT.** `ComplexF32` routes through the 256-bit-AVX2 `V8f32 =
+Vec{8,Float32}` mixed-radix tree (the same faithful W=8 kernels, now `T`-generic):
+
+![ComplexF32 throughput relative to FFTW, non-power-of-two (higher = faster)](assets/comparison_f32_nonpow2.png)
+
+| n | FFTW | RustFFT | **PureFFT `:fast`** | PF/FFTW |
+|---:|---:|---:|---:|---:|
+| 768   | 73 | 76 | **75** | 1.02 |
+| 2880  | 48 | 48 | **61** | 1.29 |
+| 9216  | 49 | 49 | **69** | 1.43 |
+| 23040 | 44 | 49 | **59** | 1.35 |
+
+**Power-of-two — at/near parity for L1-resident sizes, oscillating above.** The radix4-AVX engine runs the
+cross-passes at the full 512-bit `Vec{16,Float32}` width and the base-16/32 codelet + scratch transpose at
+`Vec{8,Float32}`. PureFFT is at FFTW parity for L1-resident sizes (n=256/1024 ≈ 1.01×) but the relative ratio
+**oscillates 0.73–1.01× above L1** — the same cross-pass/transpose cache behaviour the Float64 engine shows,
+where RustFFT's Float32 stays consistently strong (≈1.0–1.13×). Closing this is shared radix4 work, not
+Float32-specific:
+
+![ComplexF32 throughput relative to FFTW, power-of-two (higher = faster)](assets/comparison_f32.png)
+
+A **null result** worth recording (`performance.md` §17): widening the base codelet to a full 512-bit
+`Vec{16,Float32}` (8-complex) — a bit-exact W=16 *block-diagonal* register-transpose — measured **identical**
+to the simple 256-bit base (0.99–1.00×), because the two packed columns sit at different *digit-reversed*
+offsets and the gather/scatter cancels the width gain. The actual pow2 win came from genericizing the cheap
+thing — the **vectorized scratch transpose** over `Vec{8,T}` — which lifted n=256/1024 from 0.69/0.74 →
+~1.01×. *(Reproduce: `bench/run_compare_f32.jl` → `bench/results/compare_f32.json` → `bench/plot_compare_f32.jl`.)*
 
 ## All variant progression
 

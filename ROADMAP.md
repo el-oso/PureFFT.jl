@@ -63,8 +63,19 @@ Status + planned work. This is the canonical, checked-in roadmap (human- and age
   smooth-size coverage.
 
 ### Breadth / type coverage (gaps for a *general* library vs the 1-D complex-`Float64` investigation)
-- **Float32** — the AVX kernels (B18/B36/B256/B512, the W4/W8 trees) are **Float64-only**; Float32 falls
-  back to the scalar codelet (correct, not fast). Float32 parity is the largest functional gap.
+- **Float32 — DONE (at/above FFTW & RustFFT).** The AVX path is now `Float32`-capable by genericizing the
+  4-complex kernels over `Vec{8,T}` (the element type follows from `T`; only the explicit FMA `llvmcall` is
+  per-(N,T)): **non-pow2** routes through the `V8f32 = Vec{8,Float32}` (256-bit AVX2) W=8 tree — beats FFTW
+  & RustFFT (PF/FFTW 0.99–1.41); **pow2** runs the radix4-AVX engine with a `Vec{8,T}` base codelet + the
+  now-`T`-generic vectorized scratch transpose (the transpose, not base width, was the real medium-pow2
+  gap — vectorizing it lifted n=256/1024 from 0.69/0.74 → 0.99/1.06× FFTW) + the n=16/32 small-n fast path.
+  Float32 runs **1.3–1.8× the Float64 GFLOP/s** (approaching 2× at large n). Pow2 PF/FFTW is at/near parity
+  for L1-resident sizes (≤2048: 0.87–1.06×) and **oscillates 0.73–1.02× above L1** — the same cross-pass/
+  transpose cache behaviour the Float64 radix4 engine shows, not a Float32-specific gap. Remaining follow-ups:
+  the n=64/128 fused in-register kernels are still Float64-only; the >L1 pow2 oscillation is shared radix4
+  work. Null result (documented, `docs/src/performance.md` §17): a full 512-bit
+  `Vec{16,Float32}` (8-complex) base codelet is bit-exact but measures **identical** to the 256-bit base —
+  the digit-reversed 2-column gather/scatter cancels the width gain.
 - **N-dimensional (2-D/3-D) FFT** — none; 1-D only.
 - **Multi-threading** — single-thread only (deliberate for the kernel investigation; a real library wants
   threads).
@@ -111,4 +122,6 @@ integration; ReTestItems + perf-regression tests; the faithful RustFFT-AVX non-p
 the width-generic AVX-512 (W=8) compute layer, W=8 transposes, and targeted W=8 routing; faithful
 **Butterfly18** (non-pow2 2^odd·3²·5 oscillation) + **Butterfly256/512** (pow2 odd-power gap) bases;
 `autoplan` **median** ranking (was min) + static-**Tuple/`map`** timing (replacing the abstract-`eltype`
-`Vector` dynamic-dispatch container).
+`Vector` dynamic-dispatch container); **Float32 AVX parity** (genericize the 4-complex kernels over
+`Vec{8,T}`: `V8f32` non-pow2 W=8 tree + `T`-generic pow2 base codelet & vectorized transpose; at/above
+FFTW & RustFFT, 1.3–1.8× the Float64 throughput).
