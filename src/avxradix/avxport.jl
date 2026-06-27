@@ -206,39 +206,39 @@ end
 # down the rows + twiddles, then 4 column_butterfly8 across. Loads from `li` at `lb + k·ls`, stores to `so`
 # at `sb + k·ss` (k 0-indexed) — explicit buffer/base/stride (NOT closures, which box) keeps the lazy
 # load-when-needed without allocating. tw = broadcast_twiddle (1,2,3,5,6,7)/32; rot = make_rotation90.
-@inline function avx_column_butterfly32(li, lb::Int, ls::Int, so, sb::Int, ss::Int, tw::NTuple{6, V4f}, rot)
-    m1 = avx_column_butterfly4(avx_load_complex(li, lb + ls), avx_load_complex(li, lb + 9ls), avx_load_complex(li, lb + 17ls), avx_load_complex(li, lb + 25ls), rot)
+@inline function avx_column_butterfly32(li, lb::Int, ls::Int, so, sb::Int, ss::Int, tw::NTuple{6, VT}, rot) where {VT}
+    m1 = avx_column_butterfly4(_loadc(VT, li, lb + ls), _loadc(VT, li, lb + 9ls), _loadc(VT, li, lb + 17ls), _loadc(VT, li, lb + 25ls), rot)
     m1 = (m1[1], avx_mul_complex(m1[2], tw[1]), avx_mul_complex(m1[3], tw[2]), avx_mul_complex(m1[4], tw[3]))
-    m2 = avx_column_butterfly4(avx_load_complex(li, lb + 2ls), avx_load_complex(li, lb + 10ls), avx_load_complex(li, lb + 18ls), avx_load_complex(li, lb + 26ls), rot)
+    m2 = avx_column_butterfly4(_loadc(VT, li, lb + 2ls), _loadc(VT, li, lb + 10ls), _loadc(VT, li, lb + 18ls), _loadc(VT, li, lb + 26ls), rot)
     m2 = (m2[1], avx_mul_complex(m2[2], tw[2]), avx_bf8_tw1(m2[3], rot), avx_mul_complex(m2[4], tw[5]))
-    m3 = avx_column_butterfly4(avx_load_complex(li, lb + 3ls), avx_load_complex(li, lb + 11ls), avx_load_complex(li, lb + 19ls), avx_load_complex(li, lb + 27ls), rot)
+    m3 = avx_column_butterfly4(_loadc(VT, li, lb + 3ls), _loadc(VT, li, lb + 11ls), _loadc(VT, li, lb + 19ls), _loadc(VT, li, lb + 27ls), rot)
     m3 = (m3[1], avx_mul_complex(m3[2], tw[3]), avx_mul_complex(m3[3], tw[5]), avx_mul_complex(m3[4], avx_rotate90(tw[1], rot)))
-    m4 = avx_column_butterfly4(avx_load_complex(li, lb + 4ls), avx_load_complex(li, lb + 12ls), avx_load_complex(li, lb + 20ls), avx_load_complex(li, lb + 28ls), rot)
+    m4 = avx_column_butterfly4(_loadc(VT, li, lb + 4ls), _loadc(VT, li, lb + 12ls), _loadc(VT, li, lb + 20ls), _loadc(VT, li, lb + 28ls), rot)
     m4 = (m4[1], avx_bf8_tw1(m4[2], rot), avx_rotate90(m4[3], rot), avx_bf8_tw3(m4[4], rot))
-    m5 = avx_column_butterfly4(avx_load_complex(li, lb + 5ls), avx_load_complex(li, lb + 13ls), avx_load_complex(li, lb + 21ls), avx_load_complex(li, lb + 29ls), rot)
+    m5 = avx_column_butterfly4(_loadc(VT, li, lb + 5ls), _loadc(VT, li, lb + 13ls), _loadc(VT, li, lb + 21ls), _loadc(VT, li, lb + 29ls), rot)
     m5 = (m5[1], avx_mul_complex(m5[2], tw[4]), avx_mul_complex(m5[3], avx_rotate90(tw[2], rot)), avx_mul_complex(m5[4], avx_rotate90(tw[6], rot)))
-    m6 = avx_column_butterfly4(avx_load_complex(li, lb + 6ls), avx_load_complex(li, lb + 14ls), avx_load_complex(li, lb + 22ls), avx_load_complex(li, lb + 30ls), rot)
+    m6 = avx_column_butterfly4(_loadc(VT, li, lb + 6ls), _loadc(VT, li, lb + 14ls), _loadc(VT, li, lb + 22ls), _loadc(VT, li, lb + 30ls), rot)
     m6 = (m6[1], avx_mul_complex(m6[2], tw[5]), avx_bf8_tw3(m6[3], rot), avx_mul_complex(m6[4], avx_neg(tw[2])))
-    m7 = avx_column_butterfly4(avx_load_complex(li, lb + 7ls), avx_load_complex(li, lb + 15ls), avx_load_complex(li, lb + 23ls), avx_load_complex(li, lb + 31ls), rot)
+    m7 = avx_column_butterfly4(_loadc(VT, li, lb + 7ls), _loadc(VT, li, lb + 15ls), _loadc(VT, li, lb + 23ls), _loadc(VT, li, lb + 31ls), rot)
     m7 = (m7[1], avx_mul_complex(m7[2], tw[6]), avx_mul_complex(m7[3], avx_rotate90(tw[5], rot)), avx_mul_complex(m7[4], avx_neg(tw[4])))
-    m0 = avx_column_butterfly4(avx_load_complex(li, lb), avx_load_complex(li, lb + 8ls), avx_load_complex(li, lb + 16ls), avx_load_complex(li, lb + 24ls), rot)
+    m0 = avx_column_butterfly4(_loadc(VT, li, lb), _loadc(VT, li, lb + 8ls), _loadc(VT, li, lb + 16ls), _loadc(VT, li, lb + 24ls), rot)
     for i in 1:4
         o = avx_column_butterfly8(m0[i], m1[i], m2[i], m3[i], m4[i], m5[i], m6[i], m7[i], rot)
-        avx_store_complex!(so, sb + (i - 1) * ss, o[1]); avx_store_complex!(so, sb + (i + 3) * ss, o[2]); avx_store_complex!(so, sb + (i + 7) * ss, o[3]); avx_store_complex!(so, sb + (i + 11) * ss, o[4])
-        avx_store_complex!(so, sb + (i + 15) * ss, o[5]); avx_store_complex!(so, sb + (i + 19) * ss, o[6]); avx_store_complex!(so, sb + (i + 23) * ss, o[7]); avx_store_complex!(so, sb + (i + 27) * ss, o[8])
+        _storec!(VT, so, sb + (i - 1) * ss, o[1]); _storec!(VT, so, sb + (i + 3) * ss, o[2]); _storec!(VT, so, sb + (i + 7) * ss, o[3]); _storec!(VT, so, sb + (i + 11) * ss, o[4])
+        _storec!(VT, so, sb + (i + 15) * ss, o[5]); _storec!(VT, so, sb + (i + 19) * ss, o[6]); _storec!(VT, so, sb + (i + 23) * ss, o[7]); _storec!(VT, so, sb + (i + 27) * ss, o[8])
     end
 end
 # column_butterfly16 (radix 4×4, faithful port of rustfft column_butterfly16_loadfn!): 4 column_butterfly4
 # + twiddles, then 4 column_butterfly4 across. load(k) 0-indexed; returns the 16 outputs as an NTuple
 # in store order (out idx i-1+4(k-1)). tw = broadcast_twiddle (1,3)/16; rot = make_rotation90.
-@inline function avx_column_butterfly16(li, lb::Int, ls::Int, tw::NTuple{2, V4f}, rot)
-    m1 = avx_column_butterfly4(avx_load_complex(li, lb + ls), avx_load_complex(li, lb + 5ls), avx_load_complex(li, lb + 9ls), avx_load_complex(li, lb + 13ls), rot)
+@inline function avx_column_butterfly16(li, lb::Int, ls::Int, tw::NTuple{2, VT}, rot) where {VT}
+    m1 = avx_column_butterfly4(_loadc(VT, li, lb + ls), _loadc(VT, li, lb + 5ls), _loadc(VT, li, lb + 9ls), _loadc(VT, li, lb + 13ls), rot)
     m1 = (m1[1], avx_mul_complex(m1[2], tw[1]), avx_bf8_tw1(m1[3], rot), avx_mul_complex(m1[4], tw[2]))
-    m2 = avx_column_butterfly4(avx_load_complex(li, lb + 2ls), avx_load_complex(li, lb + 6ls), avx_load_complex(li, lb + 10ls), avx_load_complex(li, lb + 14ls), rot)
+    m2 = avx_column_butterfly4(_loadc(VT, li, lb + 2ls), _loadc(VT, li, lb + 6ls), _loadc(VT, li, lb + 10ls), _loadc(VT, li, lb + 14ls), rot)
     m2 = (m2[1], avx_bf8_tw1(m2[2], rot), avx_rotate90(m2[3], rot), avx_bf8_tw3(m2[4], rot))
-    m3 = avx_column_butterfly4(avx_load_complex(li, lb + 3ls), avx_load_complex(li, lb + 7ls), avx_load_complex(li, lb + 11ls), avx_load_complex(li, lb + 15ls), rot)
+    m3 = avx_column_butterfly4(_loadc(VT, li, lb + 3ls), _loadc(VT, li, lb + 7ls), _loadc(VT, li, lb + 11ls), _loadc(VT, li, lb + 15ls), rot)
     m3 = (m3[1], avx_mul_complex(m3[2], tw[2]), avx_bf8_tw3(m3[3], rot), avx_mul_complex(m3[4], avx_neg(tw[1])))
-    m0 = avx_column_butterfly4(avx_load_complex(li, lb), avx_load_complex(li, lb + 4ls), avx_load_complex(li, lb + 8ls), avx_load_complex(li, lb + 12ls), rot)
+    m0 = avx_column_butterfly4(_loadc(VT, li, lb), _loadc(VT, li, lb + 4ls), _loadc(VT, li, lb + 8ls), _loadc(VT, li, lb + 12ls), rot)
     c1 = avx_column_butterfly4(m0[1], m1[1], m2[1], m3[1], rot)
     c2 = avx_column_butterfly4(m0[2], m1[2], m2[2], m3[2], rot)
     c3 = avx_column_butterfly4(m0[3], m1[3], m2[3], m3[3], rot)
@@ -314,6 +314,14 @@ end
 @inline function avx_store_complex!(x::AbstractVector{Complex{Float64}}, i::Int, v::V4f)
     GC.@preserve x vstore(v, reinterpret(Ptr{Float64}, pointer(x)) + i * 16)
 end
+
+# Width-dispatched complex load/store — the ONLY width-specific piece of column_butterfly16/32 (their op
+# structure is generic). Lets those faithful ports run at V4f (2 complex) OR Vec{8} (4 complex, V8f/V8f32)
+# from the SAME code, by selecting the load/store function from the (inferred) vector type. See [[AvxCVec]].
+@inline _loadc(::Type{V4f}, li, i::Int) = avx_load_complex(li, i)
+@inline _loadc(::Type{<:Vec{8}}, li, i::Int) = avx_load_complex8(li, i)
+@inline _storec!(::Type{V4f}, so, i::Int, v) = avx_store_complex!(so, i, v)
+@inline _storec!(::Type{<:Vec{8}}, so, i::Int, v) = avx_store_complex8!(so, i, v)
 
 # ============================================================================================
 # AVX-512 width: Vec{8,Float64} = one 512-bit register = 4 interleaved complex (CPV=4). The
