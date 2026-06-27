@@ -103,8 +103,6 @@ end
 
 # AbstractFFTs surface for N-D arrays.
 # AbstractVector methods in abstractfft.jl are more specific → a Vector still routes 1-D (no shadowing).
-import LinearAlgebra
-
 AbstractFFTs.plan_fft(x::AbstractArray{<:Complex}, region; kws...)  = _pure_plan_fft_nd(x, region; inverse=false)
 AbstractFFTs.plan_fft!(x::AbstractArray{<:Complex}, region; kws...) = _pure_plan_fft_nd(x, region; inverse=false)
 AbstractFFTs.plan_bfft(x::AbstractArray{<:Complex}, region; kws...) = _pure_plan_fft_nd(x, region; inverse=true)
@@ -114,7 +112,11 @@ Base.size(p::NDPlan) = p.sz
 AbstractFFTs.fftdims(p::NDPlan) = p.dims
 
 Base.:*(p::NDPlan, x::AbstractArray) = apply_unnormalized!(p, copy(x))
-LinearAlgebra.mul!(y::AbstractArray, p::NDPlan, x::AbstractArray) = apply_unnormalized!(p, copyto!(y, x))
+function LinearAlgebra.mul!(y::AbstractArray, p::NDPlan, x::AbstractArray)
+    size(y) == p.sz && size(x) == p.sz ||
+        throw(DimensionMismatch("NDPlan size $(p.sz) ≠ arrays $(size(y)) / $(size(x))"))
+    apply_unnormalized!(p, copyto!(y, x))
+end
 
 # NDPlan is not <: AbstractFFTs.Plan, so ScaledPlan(::NDPlan,...) would fail (constructor requires Plan{T}).
 # ponytail: minimal scaled-plan wrapper — add AbstractFFTs.Plan inheritance to NDPlan if ecosystem compat needed.
@@ -132,4 +134,4 @@ end
 Base.inv(p::NDPlan) = AbstractFFTs.plan_inv(p)
 
 # N-D prefixed entry point; 1-D vector still routes to pfft(::AbstractVector) in plan.jl.
-pfft(x::AbstractArray{<:Complex}, dims=1:ndims(x)) = plan_fft(x, dims) * x
+pfft(x::AbstractArray{<:Complex}, dims=1:ndims(x)) = AbstractFFTs.plan_fft(x, dims) * x

@@ -37,20 +37,16 @@ end
     end
 end
 
-@testitem "N-D public API: fft/ifft/bfft/mul!/inv vs FFTW" begin
+@testitem "N-D public API: mul!/dispatch/column-tiling (PureFFT path)" begin
     using PureFFT, FFTW, LinearAlgebra
     tol(::Type{Float64})=1e-12; tol(::Type{Float32})=1f-4
     for T in (Float64, Float32), (sz, region) in (((8,5), :), ((6,4,5), (1,3)))
         x = randn(Complex{T}, sz...)
-        @test maximum(abs.(fft(x, region===(:) ? (1:ndims(x)) : region) .- (region===(:) ? fft(x) : fft(x, region)))) < tol(T)*max(1,maximum(abs.(x)))
-        @test maximum(abs.(ifft(fft(x)) .- x)) < tol(T)
-        p = plan_fft(x); @test maximum(abs.((p*x) .- fft(x))) < tol(T)*max(1,maximum(abs.(x)))
-        # FFTW's StridedArray method is more specific than AbstractArray{<:Complex} for plan_fft!,
-        # so force PureFFT's NDPlan directly to test mul! semantics (same pattern as other ndim tests).
+        # Force PureFFT's NDPlan directly — FFTW's StridedArray method is more specific than
+        # AbstractArray{<:Complex}, so plan_fft(::Matrix) routes to FFTW when FFTW is loaded.
         dims = region === (:) ? (1:ndims(x)) : region
         pin = PureFFT._pure_plan_fft_nd(x, dims; inverse=false)
         y = similar(x); mul!(y, pin, x); @test maximum(abs.(y .- fft(x, dims))) < tol(T)*max(1,maximum(abs.(x)))
-        @test maximum(abs.((inv(plan_fft(x)) * (plan_fft(x)*x)) .- x)) < tol(T)
     end
     # rank-1 vector: AbstractVector is more specific than AbstractArray → PureFFT wrapper wins over NDPlan
     v = randn(ComplexF64, 8)
@@ -58,4 +54,37 @@ end
     # column-tiling branch: dim 2, n_d=40 > 32, inner=3 (exercises _transpose_block! with n_d > blk)
     x = randn(ComplexF64, 3, 40); p = PureFFT._pure_plan_fft_nd(x, 2; inverse=false)
     @test maximum(abs.((p*x) .- fft(x, 2)))/maximum(abs.(fft(x,2))) < 1e-12
+end
+
+@testitem "N-D inv/plan_inv round-trip (PureFFT path)" begin
+    using PureFFT, FFTW
+    tol(::Type{Float64})=1e-12; tol(::Type{Float32})=1f-4
+    for T in (Float64, Float32), (sz, region) in (((8,5), (1,2)), ((6,4,5), (1,3)))
+        x = randn(Complex{T}, sz...)
+        pf = PureFFT._pure_plan_fft_nd(x, region; inverse=false)
+        # inv(pf) returns _NDScaledPlan wrapping inverse NDPlan scaled by 1/∏sz[region]
+        @test maximum(abs.(inv(pf) * (pf * x) .- x)) < tol(T)
+    end
+end
+
+@testitem "N-D mul! DimensionMismatch guard" begin
+    using PureFFT, LinearAlgebra
+    x = randn(ComplexF64, 4, 6)
+    p = PureFFT._pure_plan_fft_nd(x, (1,2); inverse=false)
+    y_bad = similar(x, 3, 6)   # wrong first dim
+    @test_throws DimensionMismatch mul!(y_bad, p, x)
+    x_bad = similar(x, 4, 5)   # wrong second dim
+    @test_throws DimensionMismatch mul!(similar(x), p, x_bad)
+end
+
+@testitem "pfft(::AbstractArray, dims) correctness" begin
+    using PureFFT, FFTW
+    # pfft(::Matrix) routes through FFTW's plan_fft when FFTW is loaded (FFTW's StridedArray
+    # method is more specific); correctness is still testable — both sides use the same AbstractFFTs path.
+    x = randn(ComplexF64, 8, 5)
+    @test maximum(abs.(PureFFT.pfft(x, (1,2)) .- fft(x, (1,2))))/maximum(abs.(fft(x,(1,2)))) < 1e-12
+    @test maximum(abs.(PureFFT.pfft(x, 1) .- fft(x, 1)))/maximum(abs.(fft(x,1))) < 1e-12
+    # 1-D vector routes to PureFFT (AbstractVector more specific than AbstractArray)
+    v = randn(ComplexF64, 8)
+    @test maximum(abs.(PureFFT.pfft(v) .- fft(v)))/maximum(abs.(fft(v))) < 1e-12
 end
