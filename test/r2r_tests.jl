@@ -52,3 +52,27 @@ end
         @test maximum(abs.(rt ./ (2n) .- x)) / max(maximum(abs.(x)), eps(T)) < tol(T)
     end
 end
+
+@testitem "r2r/dct throwing API + orthonormal dct/idct + inv/\\" begin
+    using PureFFT, FFTW, LinearAlgebra
+    # FFTW also exports `dct`/`idct`/`dct!`/`plan_dct` (owned by FFTW, not AbstractFFTs), so under
+    # `using PureFFT, FFTW` those bare names are an ambiguous-binding conflict — qualify PureFFT's.
+    const PD = PureFFT
+    tol(::Type{Float64}) = 1e-12; tol(::Type{Float32}) = 1f-4
+    for T in (Float64, Float32), n in (4, 8, 16, 100, 7)
+        x = randn(T, n)
+        @test maximum(abs.(r2r(x, REDFT10) .- FFTW.r2r(x, FFTW.REDFT10))) < tol(T)*max(1, maximum(abs.(x))*n)
+        @test maximum(abs.(PD.dct(x) .- FFTW.dct(x))) < tol(T)         # orthonormal, matches FFTW.jl
+        @test maximum(abs.(PD.idct(x) .- FFTW.idct(x))) < tol(T)       # ortho DCT-III matches FFTW.jl
+        @test maximum(abs.(PD.idct(PD.dct(x)) .- x)) < tol(T)          # ortho round-trip
+        p = plan_r2r(x, REDFT10); @test maximum(abs.((p*x) .- r2r(x, REDFT10))) < tol(T)*max(1, maximum(abs.(x))*n)
+        # mul! into preallocated output
+        y = similar(x); mul!(y, p, x); @test maximum(abs.(y .- r2r(x, REDFT10))) < tol(T)*max(1, maximum(abs.(x))*n)
+        # inv / \ : unnormalized inverse of REDFT10 (REDFT01 with 1/2N scale) recovers x
+        @test maximum(abs.((p \ (p*x)) .- x)) < tol(T)*max(1, maximum(abs.(x))*n)
+        # dct! / idct! mutate in place
+        xc = copy(x); PD.dct!(xc); @test maximum(abs.(xc .- PD.dct(x))) < tol(T)
+    end
+    @test_throws ArgumentError plan_r2r(randn(8), REDFT11)            # unsupported in Phase 1 → throws
+    @test_throws ArgumentError r2r(randn(8), REDFT11)
+end

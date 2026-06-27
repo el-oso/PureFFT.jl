@@ -10,6 +10,8 @@ module PureFFT
 export plan_pfft, pfft, pfft!, ipfft, ipfft!
 export plan_prfft, plan_pirfft, prfft, pirfft
 export REDFT00, REDFT01, REDFT10, REDFT11, RODFT00, RODFT01, RODFT10, RODFT11
+export r2r, r2r!, plan_r2r, dct, dct!, idct, idct!, plan_dct, plan_idct
+export tryr2r, tryplan_r2r
 
 using MLStyle: @match
 import AbstractFFTs

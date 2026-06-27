@@ -2,7 +2,8 @@
 # (same-size real FFT + pre/post twiddle for II/III/IV; 2(N∓1) extension for I), implemented with
 # Julia specialization (kind as a type parameter ⇒ concrete/dispatch-free plans).
 import ErrorTypes
-import ErrorTypes: Result, Ok, Err, @unwrap_or
+import ErrorTypes: Result, Ok, Err, @unwrap_or, unwrap_error
+import LinearAlgebra
 
 # ---- kind singletons (exact FFTW names) ----
 abstract type R2RKind end
@@ -192,3 +193,64 @@ function tryr2r(x::AbstractVector{<:Real}, kind::R2RKind)
     _apply!(p, y, x)
     return Result{Vector, R2RError}(Ok(y))
 end
+
+# ── User-facing throwing layer (FFTW drop-in) ────────────────────────────────
+# ErrorTypes `@unwrap_or expr exec` runs `exec` (a plain expression, NOT a lambda) on Err; we
+# pull the error out with `unwrap_error(r)` to build the ArgumentError message (FFTW-style).
+function plan_r2r(x::AbstractVector{<:Real}, kind::R2RKind)
+    r = tryplan_r2r(x, kind)
+    return @unwrap_or r throw(ArgumentError(string(unwrap_error(r))))
+end
+function r2r(x::AbstractVector{<:Real}, kind::R2RKind)
+    r = tryr2r(x, kind)
+    return @unwrap_or r throw(ArgumentError(string(unwrap_error(r))))
+end
+r2r!(x::AbstractVector{<:Real}, kind::R2RKind) = copyto!(x, r2r(x, kind))
+
+# plan application: p*x (fresh output) and mul!(y, p, x) (preallocated)
+Base.:*(p::R2RPlan{K, T}, x::AbstractVector) where {K, T} = _apply!(p, Vector{T}(undef, p.n), x)
+LinearAlgebra.mul!(y::AbstractVector, p::R2RPlan, x::AbstractVector) = _apply!(p, y, x)
+
+# ── Orthonormal DCT-II / DCT-III (scipy norm="ortho" / FFTW.jl `dct`/`idct`) ──
+# Built by scaling the UNNORMALIZED r2r. FFTW REDFT10 gives y_k = 2·Σ x_j cos(…); the ortho
+# DCT-II is f_k·Σ x_j cos(…) with f_0=√(1/N), f_k=√(2/N) ⇒ scale = f_k/2: s0=√(1/4N), s=√(1/2N).
+# idct is the inverse (transpose) of the orthogonal dct: idct = (1/2N)·R01·D⁻¹ since R01·R10=2N·I.
+_dct_ortho_scales(::Type{T}, n) where {T} = (sqrt(T(1) / (4n)), sqrt(T(1) / (2n)))
+
+function dct(x::AbstractVector{<:Real})
+    T = float(eltype(x)); n = length(x)
+    y = r2r(x, REDFT10)
+    s0, s = _dct_ortho_scales(T, n)
+    @inbounds y[1] *= s0
+    @inbounds for k in 2:n; y[k] *= s; end
+    return y
+end
+function idct(x::AbstractVector{<:Real})
+    T = float(eltype(x)); n = length(x)
+    s0, s = _dct_ortho_scales(T, n)
+    x2 = Vector{T}(undef, n)
+    @inbounds x2[1] = T(x[1]) / s0
+    @inbounds for k in 2:n; x2[k] = T(x[k]) / s; end
+    y = r2r(x2, REDFT01)
+    inv2n = T(1) / (2n)
+    @inbounds for k in 1:n; y[k] *= inv2n; end
+    return y
+end
+dct!(x::AbstractVector{<:Real})  = copyto!(x, dct(x))
+idct!(x::AbstractVector{<:Real}) = copyto!(x, idct(x))
+plan_dct(x::AbstractVector{<:Real})  = plan_r2r(x, REDFT10)   # plan only; dct() applies the ortho scale
+plan_idct(x::AbstractVector{<:Real}) = plan_r2r(x, REDFT01)
+
+# ── inv / \ : unnormalized inverse of a REDFT10 plan (REDFT01 with the 1/2N scale) ───────────
+# REDFT01·REDFT10 = 2N·I, so inv(REDFT10) = (1/2N)·REDFT01. Wrapped in a tiny scaled-plan so `*`
+# and `\` compose cleanly.
+struct ScaledR2RPlan{P, T}
+    plan::P
+    scale::T
+end
+Base.:*(sp::ScaledR2RPlan, x::AbstractVector) = (y = sp.plan * x; y .*= sp.scale; y)
+function Base.inv(p::R2RPlan{REDFT10_T, T}) where {T}
+    ip = plan_r2r(Vector{T}(undef, p.n), REDFT01)
+    return ScaledR2RPlan(ip, T(1) / (2 * p.n))
+end
+Base.:\(p::R2RPlan, x::AbstractVector) = inv(p) * x
