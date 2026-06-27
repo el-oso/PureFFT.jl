@@ -499,9 +499,14 @@ function apply_unnormalized!(p::Radix4AvxPlan{T}, x::AbstractVector) where {T}
     end
     scr = p.scratch
     width = n ÷ p.base
-    # Vectorized transpose while the array fits L1 (`_VTRANSPOSE_MAX` is in complex elements for
-    # Float64; Float32 elements are half the size, so 2× as many fit — scale by 8÷sizeof(T)).
-    if (T === Float64 || T === Float32) && n <= _VTRANSPOSE_MAX * (8 ÷ sizeof(T)) && p.base % 4 == 0 && width % 4 == 0
+    # Vectorized transpose vs the scalar cache-blocked one. For Float64 it's gated to ~L1 (above that the
+    # scattered stores were tuned to lose). For Float32 the vectorized 4×4 register transpose wins at EVERY
+    # size end-to-end (measured: it kept the pow2 F32 path below the 0.96× FFTW/Rust gate when forced to the
+    # scalar transpose at n>2048) — the half-width data keeps the scattered stores cache-friendly — so it is
+    # used whenever the shape allows, with no upper size cap.
+    use_vtranspose = p.base % 4 == 0 && width % 4 == 0 &&
+        (T === Float32 || (T === Float64 && n <= _VTRANSPOSE_MAX))
+    if use_vtranspose
         _radix4_transpose_avx!(scr, x, p.base, width)
     else
         _radix4_transpose!(scr, x, p.base, width)

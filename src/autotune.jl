@@ -159,13 +159,17 @@ function autoplan(::Type{Complex{T}}, n::Integer; inverse::Bool = false) where {
         return something(plans[argmin(scores)])
     end
     # Power-of-two: same static-tuple timing. Radix4Avx / Radix4 / recursive always apply; FourStep and the
-    # monolithic B256/B512 + 8xn tree (rustfft scheme) only for n ≥ 256 (else `nothing`, scored `Inf`).
+    # monolithic B256/B512 + 8xn tree (rustfft scheme) only for n ≥ 256 (else `nothing`, scored `Inf`). The
+    # W=8 tree (`AvxMixedRadixPlanW8`) is the *only* monolith path available for `ComplexF32` (the W=4
+    # `AvxMixedRadixPlan` is Float64-only) — it covers the W=8-clean pow2 sizes (2^(6+3a)) and is timed here
+    # so odd-power F32 sizes that the Radix4Avx 256-bit base-32 handles below the 0.96× gate can route to it.
     plans = (
         Radix4AvxPlan(Complex{T}, n; inverse),
         Radix4Plan(Complex{T}, n; inverse),
         plan_pfft(Complex{T}, n; inverse, variant = :recursive),
         n >= 256 ? FourStepPlan(Complex{T}, n; inverse) : nothing,
         n >= 256 ? AvxMixedRadixPlan(Complex{T}, n; inverse) : nothing,
+        n >= 256 ? AvxMixedRadixPlanW8(Complex{T}, n; inverse) : nothing,
     )
     y = randn(Complex{T}, Int(n))
     scores = map(p -> _score(p, y), plans)

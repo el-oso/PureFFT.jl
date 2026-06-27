@@ -62,6 +62,18 @@ end
         t = avx_transpose5_packed(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), _L8(buf,ib+3M), _L8(buf,ib+4M))
         Base.Cartesian.@nexprs 5 k -> _S8(out, ob + 4(k-1), t[k]); end
 end
+# radix-4 (covers the leftover 2s that radix-8/12 can't, so the W=8 tree spans ALL pow2 — needed for the
+# F32 pow2 path, where the W4 monolith is unavailable). 3 twiddles/column; transpose4 = one 4×4 reg block.
+@inline function _colbf4_w8!(buf, o, ::Val{M}, tw, rot) where {M}
+    @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c
+        r = avx_column_butterfly4(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), _L8(buf,ib+3M), rot)
+        _S8(buf, ib, r[1]); Base.Cartesian.@nexprs 3 j -> _S8(buf, ib + j*M, avx_mul_complex(tw[c*3+j], r[j+1])); end
+end
+@inline function _trans4_w8!(out, oo, buf, o, ::Val{M}) where {M}
+    @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c; ob = oo + 16c
+        t = avx_transpose4_packed(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), _L8(buf,ib+3M))
+        Base.Cartesian.@nexprs 4 k -> _S8(out, ob + 4(k-1), t[k]); end
+end
 
 # ---- W=8 kernel types (reuse Kernel/RPlan/applyplan! + the proc_ip!/proc_oop! alternation) ----
 struct B64W8{T} <: Kernel
@@ -90,6 +102,25 @@ end
     @inbounds for f in 0:(cnt-1); _colbf8_w8!(inp, f*n, Val(M), k.tw, k.rot); end
     proc_ip!(k.inner, inp, scr)
     @inbounds for f in 0:(cnt-1); _trans8_w8!(out, f*n, inp, f*n, Val(M)); end
+end
+
+struct MR4W8{M, I <: Kernel, T} <: Kernel
+    inner::I; tw::Vector{Vec{8, T}}; rot::Vec{8, T}
+end
+klen(::MR4W8{M}) where {M} = 4M
+keltype(::MR4W8{M, I, T}) where {M, I, T} = T
+MR4W8(inner::Kernel, fwd::Bool) = (T = keltype(inner); M = klen(inner); MR4W8{M, typeof(inner), T}(inner, mr_twiddles_w8(T, 4, M, 4M, fwd), fwd ? _rot90_fwd8(T) : _rot90_inv8(T)))
+@inline function proc_ip!(k::MR4W8{M}, buf, scr) where {M}
+    n = 4M; cnt = length(buf) ÷ n
+    @inbounds for f in 0:(cnt-1); _colbf4_w8!(buf, f*n, Val(M), k.tw, k.rot); end
+    proc_oop!(k.inner, scr, buf, scr)
+    @inbounds for f in 0:(cnt-1); _trans4_w8!(buf, f*n, scr, f*n, Val(M)); end
+end
+@inline function proc_oop!(k::MR4W8{M}, out, inp, scr) where {M}
+    n = 4M; cnt = length(inp) ÷ n
+    @inbounds for f in 0:(cnt-1); _colbf4_w8!(inp, f*n, Val(M), k.tw, k.rot); end
+    proc_ip!(k.inner, inp, scr)
+    @inbounds for f in 0:(cnt-1); _trans4_w8!(out, f*n, inp, f*n, Val(M)); end
 end
 
 struct MR12W8{M, I <: Kernel, T} <: Kernel
@@ -160,23 +191,33 @@ function plan_tree_w8(::Type{T}, n::Int, fwd::Bool = true) where {T}
     v3 = 0; while t % 3 == 0; t ÷= 3; v3 += 1; end
     v5 = 0; while t % 5 == 0; t ÷= 5; v5 += 1; end
     t == 1 || return nothing                                # not 2·3·5-smooth
-    # Consume the 3s with b9 radix-9 (3² each, no 2s) + b12 radix-12 (3·2² each), the leftover 2s with `a`
-    # radix-8 (2³) over the Butterfly64 base (2⁶), and the 5s with radix-5 (no 2s/3s):  2·b9 + b12 = v3,
-    # 6 + 2·b12 + 3·a = v2.  Prefer MORE radix-9 (gains most from 512-bit), falling back to radix-12 for the
-    # 2-count — so every size the old radix-12-only planner handled still resolves (with b9 = 0).
-    b9 = -1; b12 = 0; a = 0
+    # Consume the 3s with b9 radix-9 (3² each, no 2s) + b12 radix-12 (3·2² each), the 5s with radix-5, and
+    # the leftover 2s over the Butterfly64 base (2⁶) with `a` radix-8 (2³ each) + `c4` radix-4 (2² each):
+    #   2·b9 + b12 = v3,   6 + 2·b12 + 3·a + 2·c4 = v2.
+    # Prefer MORE radix-9 (gains most from 512-bit), then MORE radix-8, using radix-4 only for the leftover
+    # rem2 = 3a + 2·c4 (c4 ∈ {0,1,2}). This spans ALL pow2 (rem2 ≠ 1; 2^(6+1) alone would need a radix-2).
+    b9 = -1; b12 = 0; a = 0; c4 = 0
     for cand9 in (v3 ÷ 2):-1:0
         c12 = v3 - 2cand9
         rem2 = v2 - 6 - 2c12
-        if rem2 >= 0 && rem2 % 3 == 0
-            b9 = cand9; b12 = c12; a = rem2 ÷ 3; break
+        rem2 < 0 && continue
+        r3 = rem2 % 3
+        if r3 == 0
+            aa, cc = rem2 ÷ 3, 0
+        elseif r3 == 2
+            aa, cc = (rem2 - 2) ÷ 3, 1
+        else                                # r3 == 1: 3a+2·2 = rem2 needs rem2 ≥ 4 (rem2 == 1 ⇒ radix-2)
+            rem2 < 4 && continue
+            aa, cc = (rem2 - 4) ÷ 3, 2
         end
+        b9 = cand9; b12 = c12; a = aa; c4 = cc; break
     end
     b9 < 0 && return nothing
     k::Kernel = B64W8(T, fwd)
     for _ in 1:b9;  k = MR9W8(k, fwd);  end
     for _ in 1:b12; k = MR12W8(k, fwd); end
     for _ in 1:a;   k = MR8W8(k, fwd);  end
+    for _ in 1:c4;  k = MR4W8(k, fwd);  end
     for _ in 1:v5;  k = MR5W8(k, fwd);  end
     RPlan(k)
 end
