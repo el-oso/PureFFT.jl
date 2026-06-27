@@ -96,21 +96,25 @@ Vec{8,Float32}` mixed-radix tree (the same faithful W=8 kernels, now `T`-generic
 | 9216  | 49 | 49 | **69** | 1.43 |
 | 23040 | 44 | 49 | **59** | 1.35 |
 
-**Power-of-two — at/near parity for L1-resident sizes, oscillating above.** The radix4-AVX engine runs the
-cross-passes at the full 512-bit `Vec{16,Float32}` width and the base-16/32 codelet + scratch transpose at
-`Vec{8,Float32}`. PureFFT is at FFTW parity for L1-resident sizes (n=256/1024 ≈ 1.01×) but the relative ratio
-**oscillates 0.73–1.01× above L1** — the same cross-pass/transpose cache behaviour the Float64 engine shows,
-where RustFFT's Float32 stays consistently strong (≈1.0–1.13×). Closing this is shared radix4 work, not
-Float32-specific:
+**Power-of-two — beats FFTW & RustFFT at every size.** ComplexF32 pow2 clears the 0.96× gate vs **both**
+references across 256→65536 (PF/FFTW & PF/Rust **1.00–1.49×**), strongest at the small sizes (256:
+1.41/1.20, 512: 1.35/1.30):
 
 ![ComplexF32 throughput relative to FFTW, power-of-two (higher = faster)](assets/comparison_f32.png)
 
-A **null result** worth recording (`performance.md` §17): widening the base codelet to a full 512-bit
-`Vec{16,Float32}` (8-complex) — a bit-exact W=16 *block-diagonal* register-transpose — measured **identical**
-to the simple 256-bit base (0.99–1.00×), because the two packed columns sit at different *digit-reversed*
-offsets and the gather/scatter cancels the width gain. The actual pow2 win came from genericizing the cheap
-thing — the **vectorized scratch transpose** over `Vec{8,T}` — which lifted n=256/1024 from 0.69/0.74 →
-~1.01×. *(Reproduce: `bench/run_compare_f32.jl` → `bench/results/compare_f32.json` → `bench/plot_compare_f32.jl`.)*
+This took three layered fixes. (1) The **vectorized scratch transpose** was disabled for F32 above n=2048 on
+a Float64-tuned "scattered stores thrash above L1" premise that is *false* for half-width F32 data — using it
+for all sizes closed the even powers. (2) A **radix-4 W8 kernel** (`MR4W8`) extended the `V8f32` tree to all
+pow2. (3) The decisive one: **`B256W8`/`B512W8`**, faithful generic-`Vec{8,T}` ports of RustFFT's *f32*
+`Butterfly256Avx`/`Butterfly512Avx` (4-complex) — the F32 equivalent of the `V4f` monoliths that close the
+Float64 odd-power gap, used as the pow2 base via the 8xn scheme. That lifted the laggards (8192: 0.83→1.02;
+32768: 0.84→1.06).
+
+A **null result** worth keeping (`performance.md` §17): widening the *base codelet* to a 512-bit
+`Vec{16,Float32}` (8-complex, block-diagonal register-transpose) is bit-exact but measures **identical** to
+the 256-bit base — the two packed columns sit at *digit-reversed* offsets and the gather/scatter cancels the
+width gain. The monolith **port** (Rust's own kernel), not a wider base, was the answer.
+*(Reproduce: `bench/run_compare_f32.jl` → `bench/results/compare_f32.json` → `bench/plot_compare_f32.jl`.)*
 
 ## All variant progression
 

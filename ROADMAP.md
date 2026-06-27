@@ -75,19 +75,25 @@ Status + planned work. This is the canonical, checked-in roadmap (human- and age
   Phases 2–4: DCT-IV, DST-II/III/IV, type-I pair — each adds `_pre!`/`_post!` per kind.
   See `docs/superpowers/specs/2026-06-27-dct-dst-r2r-design.md` (design spec) and
   `docs/superpowers/plans/2026-06-27-dct-dst-phase1.md` (Phase-1 plan; Phases 2–4 noted at its end).
-- **Float32 — DONE (at/above FFTW & RustFFT).** The AVX path is now `Float32`-capable by genericizing the
-  4-complex kernels over `Vec{8,T}` (the element type follows from `T`; only the explicit FMA `llvmcall` is
-  per-(N,T)): **non-pow2** routes through the `V8f32 = Vec{8,Float32}` (256-bit AVX2) W=8 tree — beats FFTW
-  & RustFFT (PF/FFTW 0.99–1.41); **pow2** runs the radix4-AVX engine with a `Vec{8,T}` base codelet + the
-  now-`T`-generic vectorized scratch transpose (the transpose, not base width, was the real medium-pow2
-  gap — vectorizing it lifted n=256/1024 from 0.69/0.74 → 0.99/1.06× FFTW) + the n=16/32 small-n fast path.
-  Float32 runs **1.3–1.8× the Float64 GFLOP/s** (approaching 2× at large n). Pow2 PF/FFTW is at/near parity
-  for L1-resident sizes (≤2048: 0.87–1.06×) and **oscillates 0.73–1.02× above L1** — the same cross-pass/
-  transpose cache behaviour the Float64 radix4 engine shows, not a Float32-specific gap. Remaining follow-ups:
-  the n=64/128 fused in-register kernels are still Float64-only; the >L1 pow2 oscillation is shared radix4
-  work. Null result (documented, `docs/src/performance.md` §17): a full 512-bit
-  `Vec{16,Float32}` (8-complex) base codelet is bit-exact but measures **identical** to the 256-bit base —
-  the digit-reversed 2-column gather/scatter cancels the width gain.
+- **Float32 — DONE (≥ 0.96× of FFTW AND RustFFT at every benchmarked size).** The AVX path is `Float32`-
+  capable by genericizing the 4-complex kernels over `Vec{8,T}` (the hardware register follows from `T`;
+  only the explicit FMA `llvmcall` is per-(N,T)). **Non-pow2** routes through the `V8f32 = Vec{8,Float32}`
+  (256-bit AVX2) W=8 tree — beats FFTW & RustFFT (PF/FFTW 0.99–1.41). **Pow2** clears the gate at every size
+  (256→65536: PF/FFTW & PF/Rust **1.00–1.49×**; F32 ≈ **1.3–1.8× the F64 GFLOP/s**), via three fixes layered
+  in this order:
+  1. **vectorized scratch transpose for all F32 sizes** (the n≤2048 cap was a Float64-tuned false premise;
+     half-width data stays cache-friendly) → closed the even-power sizes;
+  2. **radix-4 W8 kernel** (`MR4W8`) so the W=8 tree spans all pow2;
+  3. **the decisive one — `B256W8`/`B512W8`**, faithful generic-`Vec{8,T}` ports of RustFFT's *f32*
+     `Butterfly256Avx`/`Butterfly512Avx` (4-complex), the F32 equivalent of the `V4f` `B256`/`B512` monoliths
+     that close the F64 odd-power gap. `plan_tree_w8` uses them as the pow2 base (rustfft's 8xn scheme);
+     `autoplan` times the W=8 plan in the pow2 branch. This lifted the laggards (256: 0.99/0.88→1.37/1.20;
+     512: 0.86/0.80→1.33/1.27; 8192: 0.83→1.02; 32768: 0.84→1.06) and F64 improved too (no regression).
+  Bit-exact end-to-end (≤1.2e-8 F32). Null result kept for the record (`docs/src/performance.md` §17): a
+  512-bit `Vec{16,Float32}` (8-complex) *base codelet* is bit-exact but measures identical to the 256-bit
+  one (digit-reversed gather/scatter cancels the width gain) — the monolith port, not a wider base, was the
+  answer. Minor follow-up: the n=64/128 fused in-register kernels are still Float64-only (those F32 sizes
+  already clear the gate via the W=8 tree / radix4-AVX).
 - **N-dimensional (2-D/3-D) FFT** — none; 1-D only.
 - **Multi-threading** — single-thread only (deliberate for the kernel investigation; a real library wants
   threads).

@@ -398,9 +398,19 @@ was reverted.** What actually closed the gap was genericizing the cheap things �
 transpose** over `Vec{8,T}` (the dominant small/medium-`n` cost) plus enabling the n=16/32 small-`n` fast
 path for Float32 — lifting n=256/1024 from 0.69/0.74 → **0.99/1.06× FFTW**. Lesson (again, cf. §15): the
 register width is not the bottleneck you assume — re-measure in the full kernel, and the boring
-genericization beat the elaborate one. Float32 ends at **1.3–1.8× the Float64 GFLOP/s** (toward 2× at large
-`n`), at/near FFTW parity for L1-resident pow2 (≤2048: 0.87–1.06×) and oscillating 0.73–1.02× above L1 — the
-same cross-pass/transpose cache behaviour the Float64 radix4 engine shows, not a Float32-specific gap.
+genericization beat the elaborate one for the *transpose*. Float32 runs **1.3–1.9× the Float64 GFLOP/s**.
+
+The transpose fix closed the even-power pow2 sizes, but the odd-power/small ones (256/512/2048/8192/32768)
+stayed 0.83–0.90× — and that part was **not** the boring lever. Root cause: Float64 clears those via the
+`V4f` `B256`/`B512` monolith bases (faithful ports of RustFFT's *f64* `Butterfly256/512`), which are
+`T===Float64`-gated; F32 fell back to the slower base-32. The fix is the F32 analogue: **`B256W8`/`B512W8`**,
+faithful generic-`Vec{8,T}` ports of RustFFT's *f32* `Butterfly256Avx`/`Butterfly512Avx` (which pack 4 complex
+per `__m256`, mapping onto PureFFT's `Vec{8}` W=8 layout). Done *mechanically* (op-for-op, the existing
+`column_butterfly16/32` made width-generic by inferring the vector type from the twiddle tuple — not
+reinterpreted) and verified bit-exact per layer. Routed as the pow2 base (rustfft's 8xn scheme), this lifted
+**every** ComplexF32 pow2 size to ≥0.96× of FFTW *and* RustFFT (256→65536: 1.00–1.49×). Lesson: the
+faithful-port discipline (§13) is what reaches parity where genericization-of-the-existing-engine plateaus —
+the wider *base* was a null result; Rust's actual *kernel* was the answer.
 
 ## Summary table
 
