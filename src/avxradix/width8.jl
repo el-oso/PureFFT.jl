@@ -255,6 +255,22 @@ function plan_tree_w8(::Type{T}, n::Int, fwd::Bool = true) where {T}
     v3 = 0; while t % 3 == 0; t ÷= 3; v3 += 1; end
     v5 = 0; while t % 5 == 0; t ÷= 5; v5 += 1; end
     t == 1 || return nothing                                # not 2·3·5-smooth
+    # Pure power-of-two ≥ 256: a B256/B512 monolith base + radix-8/4 chain (rustfft's "8xn" scheme — the F32
+    # equivalent of the F64 B256/B512 path in avxradix/planner.jl). Gives F32 the monolith bases that close
+    # the odd-power gap. Base exp 9 (B512) or 8 (B256) chosen so the leftover rem = 3a + 2·c4 is never 1.
+    if v3 == 0 && v5 == 0 && v2 >= 8
+        if v2 - 9 >= 0 && v2 - 9 != 1
+            kb::Kernel = B512W8(T, fwd); rem = v2 - 9
+        else
+            kb = B256W8(T, fwd); rem = v2 - 8
+        end
+        r3 = rem % 3
+        aa = r3 == 0 ? rem ÷ 3 : (r3 == 2 ? (rem - 2) ÷ 3 : (rem - 4) ÷ 3)
+        cc = r3 == 0 ? 0 : (r3 == 2 ? 1 : 2)
+        for _ in 1:aa; kb = MR8W8(kb, fwd); end
+        for _ in 1:cc; kb = MR4W8(kb, fwd); end
+        return RPlan(kb)
+    end
     # Consume the 3s with b9 radix-9 (3² each, no 2s) + b12 radix-12 (3·2² each), the 5s with radix-5, and
     # the leftover 2s over the Butterfly64 base (2⁶) with `a` radix-8 (2³ each) + `c4` radix-4 (2² each):
     #   2·b9 + b12 = v3,   6 + 2·b12 + 3·a + 2·c4 = v2.
