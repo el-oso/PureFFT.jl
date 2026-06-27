@@ -95,7 +95,12 @@ end
     # method shadows PureFFT's AbstractArray method, so `plan_fft` returns an FFTW plan, not an NDPlan
     # (verified; cf. the routing comment in src/ndim.jl). To gate PureFFT's own N-D hot path we build
     # the NDPlan directly via `_pure_plan_fft_nd`, exactly as the other ndim testitems do.
-    for T in (Float64, Float32), (sz, region) in (((8,5),(1,2)), ((6,4,5),(1,3)))
+    # Cover BOTH routings: transpose-routed (non-pow2 d>1) AND batched-routed (pow2 d>1) plans.
+    cases = (((8,5),(1,2)),       # dim2 n_d=5 non-pow2 → TransposeDim
+             ((6,4,5),(1,3)),     # dim3 n_d=5 non-pow2 → TransposeDim
+             ((8,16),(1,2)),      # dim2 n_d=16 pow2  → BatchedDim
+             ((4,8,16),(2,3)))    # dim2 n_d=8, dim3 n_d=16 pow2 → BatchedDim (both d>1)
+    for T in (Float64, Float32), (sz, region) in cases
         x = randn(Complex{T}, sz...); y = similar(x)
         p = PureFFT._pure_plan_fft_nd(x, region; inverse=false)
         mul!(y, p, x)                                   # warmup

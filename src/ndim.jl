@@ -13,6 +13,25 @@ end
 plan_length(p::NDPlan) = prod(p.sz)
 plan_inverse(p::NDPlan) = p.inverse
 
+# Per-dim descriptors. Each transformed dim is routed to ONE of these CONCRETE types; the apply loop
+# dispatches on the descriptor type (multiple methods of `_apply_dim!`), so the hot path never branches
+# on a non-concrete field (CLAUDE.md rule 5). They form a heterogeneous NTuple in `plans` and are only
+# ever indexed with LITERAL indices inside the @generated apply (rule 1).
+#   Dim1Plan     — dim 1: each column is a unit-stride contiguous run, apply the 1-D plan in place.
+#   BatchedDim   — pow2 dim d>1: batched radix-8 column kernel, NO transpose (ndim_batched.jl).
+#   TransposeDim — non-pow2 dim d>1: transpose → 1-D plan → transpose-back (the fallback).
+struct Dim1Plan{P}
+    plan::P
+end
+struct BatchedDim{T}
+    d::Int
+    bp::BatchPlan8{T}
+end
+struct TransposeDim{P}
+    d::Int
+    plan::P
+end
+
 # canonicalize a region (Int / tuple / range / Colon) over an N-d array → sorted, deduped
 # NTuple{D,Int}, validated ⊆ 1:N.
 _canon_region(::Colon, N::Int) = ntuple(identity, N)
@@ -24,18 +43,31 @@ function _canon_region(r, N::Int)
     return t
 end
 
+# Route one transformed dim to its descriptor: dim-1 → Dim1Plan; pow2 d>1 → BatchedDim (no transpose);
+# else → TransposeDim. Each branch returns a distinct CONCRETE type (the heterogeneous tuple's element
+# types stay concrete ⇒ the @generated apply specializes fully).
+function _mk_dim(::Type{Complex{T}}, d::Int, sz; inverse::Bool) where {T}
+    if d == 1
+        Dim1Plan(plan_pfft(Complex{T}, sz[1]; inverse, variant=:fast))
+    elseif ispow2(sz[d])
+        BatchedDim(d, BatchPlan8(T, sz[d]; forward=!inverse))
+    else
+        TransposeDim(d, plan_pfft(Complex{T}, sz[d]; inverse, variant=:fast))
+    end
+end
+
 function _pure_plan_fft_nd(x::AbstractArray{Complex{T}, N}, region; inverse::Bool) where {T, N}
     dims = _canon_region(region, N)
     sz = size(x)
-    # ponytail: map over dims builds a heterogeneous NTuple — each plan is specialized to its dim size
-    plans = map(d -> plan_pfft(Complex{T}, sz[d]; inverse, variant=:fast), dims)
+    # ponytail: map over dims builds a heterogeneous NTuple of per-dim descriptors (concrete per dim)
+    plans = map(d -> _mk_dim(Complex{T}, d, sz; inverse), dims)
     D = length(dims)
-    # Scratch must hold the largest transpose block used by the dim>1 path: inner*n_d = (∏sz[1:d-1])*sz[d].
-    # Size at construction so the hot path never allocates (Task 5 gates zero-alloc apply). The dim-1 path
-    # only needs one n_d run, covered by maximum(sz[d]); take the max of both.
+    # Shared scratch holds the largest TRANSPOSE block (inner*n_d) used by the non-pow2 d>1 path. Batched
+    # dims own their tiles inside BatchPlan8; dim-1 needs none. Size at construction so the hot path never
+    # allocates (Task 5 gate). `maximum(sz[d])` floors it so the buffer is never empty.
     nscratch = maximum(sz[d] for d in dims)
     for d in dims
-        d == 1 && continue
+        (d == 1 || ispow2(sz[d])) && continue
         nscratch = max(nscratch, prod(sz[1:d-1]) * sz[d])
     end
     NDPlan{T, D, typeof(plans), N}(dims, plans, sz, Vector{Complex{T}}(undef, nscratch), inverse)
@@ -46,29 +78,44 @@ end
 @generated function apply_unnormalized!(p::NDPlan{T, D, P, N}, x::AbstractArray) where {T, D, P, N}
     body = Expr(:block)
     for i in 1:D
-        push!(body.args, :(_apply_dim!(p.plans[$i], x, p.dims[$i], p.sz, p.scratch)))
+        push!(body.args, :(_apply_dim!(p.plans[$i], x, p.sz, p.scratch)))
     end
     push!(body.args, :(return x))
     body
 end
 
-# Apply the 1-D `plan` along dim `d`. Flat layout: inner = ∏size[1:d-1], n_d = size[d], outer = ∏size[d+1:N].
-@inline function _apply_dim!(plan, x::AbstractArray{Complex{T}}, d::Int, sz, scratch) where {T}
+# Flat layout along dim `d`: inner = ∏size[1:d-1], n_d = size[d], outer = ∏size[d+1:N].
+@inline function _dim_extents(d::Int, sz)
     inner = 1; @inbounds for i in 1:(d-1); inner *= sz[i]; end
-    n_d = @inbounds sz[d]
     outer = 1; @inbounds for i in (d+1):length(sz); outer *= sz[i]; end
-    if d == 1
-        # dim 1: each column `x[:, c]` is a unit-stride contiguous run ⇒ apply in place. Must use a
-        # CARTESIAN colon view (`view(x, :, c)`), NOT a linear `view(x, o*n_d+1:o*n_d+n_d)`: linear
-        # indexing into a multidim array reshapes the parent and ALLOCATES an array header (Task 5
-        # zero-alloc gate). The cartesian colon view is zero-alloc (verified). `inner==1` here.
-        @inbounds for c in CartesianIndices(Base.tail(axes(x)))
-            apply_unnormalized!(plan, view(x, :, c))
-        end
-    else
-        # d>1 (incl. the rare leading-singleton `inner==1`, handled as an identity copy).
-        _apply_dim_transpose!(plan, x, inner, n_d, outer, scratch)   # Task 3
+    return inner, (@inbounds sz[d]), outer
+end
+
+# dim 1: each column `x[:, c]` is a unit-stride contiguous run ⇒ apply in place. Must use a CARTESIAN
+# colon view (`view(x, :, c)`), NOT a linear `view(x, o*n_d+1:…)`: linear indexing into a multidim array
+# reshapes the parent and ALLOCATES an array header (Task 5 zero-alloc gate). Cartesian colon view is
+# zero-alloc (verified).
+@inline function _apply_dim!(pd::Dim1Plan, x::AbstractArray{Complex{T}}, sz, scratch) where {T}
+    @inbounds for c in CartesianIndices(Base.tail(axes(x)))
+        apply_unnormalized!(pd.plan, view(x, :, c))
     end
+    return x
+end
+
+# pow2 d>1: batched radix-8 column kernel, no transpose. Pointer-based + GC.@preserve, zero-alloc.
+@inline function _apply_dim!(pd::BatchedDim{T}, x::AbstractArray{Complex{T}}, sz, scratch) where {T}
+    inner, n_d, outer = _dim_extents(pd.d, sz)
+    GC.@preserve x begin
+        pc = reinterpret(Ptr{Complex{T}}, pointer(x))
+        batched_fft8!(pd.bp, pc, 0, inner, outer)
+    end
+    return x
+end
+
+# non-pow2 d>1 (incl. the rare leading-singleton inner==1, handled as an identity copy): transpose path.
+@inline function _apply_dim!(pd::TransposeDim, x::AbstractArray{Complex{T}}, sz, scratch) where {T}
+    inner, n_d, outer = _dim_extents(pd.d, sz)
+    _apply_dim_transpose!(pd.plan, x, inner, n_d, outer, scratch)
     return x
 end
 
