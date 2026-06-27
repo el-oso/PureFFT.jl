@@ -40,5 +40,6 @@ include("autotune.jl")
 include("rfft.jl")
 include("r2r.jl")
 include("abstractfft.jl")
+include("ndim.jl")
 
 end # module
