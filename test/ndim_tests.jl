@@ -23,3 +23,16 @@ end
         end
     end
 end
+
+@testitem "N-D c2c full generality bit-exact vs FFTW" begin
+    using PureFFT, FFTW
+    tol(::Type{Float64})=1e-12; tol(::Type{Float32})=1f-4
+    cases = (((8,5), 2), ((8,5), (1,2)), ((6,4,5), 3), ((6,4,5), (1,3)), ((6,4,5), (1,2,3)), ((4,4,4,4), (2,4)))
+    for T in (Float64, Float32), (sz, region) in cases
+        x = randn(Complex{T}, sz...)
+        p = PureFFT._pure_plan_fft_nd(x, region; inverse=false)
+        y = copy(x); PureFFT.apply_unnormalized!(p, y)
+        ref = fft(x, region)
+        @test maximum(abs.(y .- ref))/maximum(abs.(ref)) < tol(T)
+    end
+end
