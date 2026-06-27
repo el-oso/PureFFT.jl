@@ -9,6 +9,7 @@ module PureFFT
 
 export plan_pfft, pfft, pfft!, ipfft, ipfft!
 export plan_prfft, plan_pirfft, prfft, pirfft
+export REDFT00, REDFT01, REDFT10, REDFT11, RODFT00, RODFT01, RODFT10, RODFT11
 
 using MLStyle: @match
 import AbstractFFTs
@@ -35,6 +36,7 @@ include("plan.jl")
 include("rader.jl")
 include("autotune.jl")
 include("rfft.jl")
+include("r2r.jl")
 include("abstractfft.jl")
 
 end # module
