@@ -1,6 +1,7 @@
 [deps]
 AbstractFFTs = "621f4979-c628-5d54-868e-fcf4e3e8185c"
 AllocCheck = "9b6a8646-10ed-4001-bbdc-1d2f46dfbb1a"
+Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 FFTW = "7a1cc6ca-52ef-59f5-83cd-3a7055c09341"
 JET = "c3a54625-cd67-489e-a8e7-0a5a0ff4e31b"
@@ -10,14 +11,10 @@ StrictMode = "0e98b4f4-d0e6-42ac-af0a-707c24852f32"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 TrimCheck = "f940d764-e397-4179-96e0-76ce55cfe39b"
 
-# StrictMode is not registered — resolve it from its master branch (CI regenerates the gitignored
-# Manifest, so the source must live here).
 [sources]
-StrictMode = {url = "https://github.com/el-oso/StrictMode.jl", rev = "master"}
+StrictMode = {rev = "master", url = "https://github.com/el-oso/StrictMode.jl"}
 
-# Enable StrictMode's checks for the test suite (committed here rather than in a separate
-# LocalPreferences.toml so it travels with the project / CI runs them for real).
 [preferences.StrictMode]
-checks_enabled = true
 analysis = "full"
+checks_enabled = true
 fail_mode = "error"

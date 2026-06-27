@@ -101,12 +101,30 @@ end
 
 _execute!(x, p::PureFFTPlan, ::Val{V}) where {V} = error("unknown PureFFT variant :$V")
 
+# The AVX kernels load via `pointer(x)` + contiguous SIMD reads, so non-unit-stride input (a strided
+# `SubArray`) would silently read the wrong memory. A plain `Vector` is statically contiguous (the branch
+# below folds away — zero overhead); a non-contiguous view is transformed on a contiguous copy and written
+# back, so `pfft!` is correct for any strided input rather than corrupting it.
+@inline _iscontiguous(::Vector) = true
+@inline _iscontiguous(x::AbstractVector) = x isa StridedVector && stride(x, 1) == 1
+
 function _pfft_run!(x::AbstractVector{Complex{T}}, p) where {T}
     n = plan_length(p)::Int
     length(x) == n || throw(DimensionMismatch("plan length $n ≠ input $(length(x))"))
+    if _iscontiguous(x)
+        _run_contig!(x, p)
+    else
+        buf = collect(x)            # contiguous copy (strided/non-dense input)
+        _run_contig!(buf, p)
+        copyto!(x, buf)
+    end
+    return x
+end
+
+@inline function _run_contig!(x, p)
     apply_unnormalized!(p, x)
     if plan_inverse(p)
-        invn = inv(T(n))
+        invn = inv(real(eltype(x))(length(x)))
         @inbounds @simd for i in eachindex(x)
             x[i] *= invn
         end

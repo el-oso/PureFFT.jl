@@ -418,3 +418,47 @@ end
         @test tp <= ratio * tm
     end
 end
+
+@testitem "public API edges: tiny n, strided views, inference, ldiv!" setup = [FFTUtil] begin
+    using FFTW, AbstractFFTs
+    using LinearAlgebra: ldiv!
+
+    @testset "tiny n via the default :fast ($T, n=$n)" for T in (Float64, Float32), n in (1, 2, 3)
+        x = randn(Complex{T}, n)
+        @test relerr(pfft(x), fft(x)) < tol(T)              # default :fast (not pow2-only :scalar) handles any n
+        @test relerr(ipfft(pfft(x)), x) < tol(T)
+    end
+
+    @testset "views: contiguous + strided are correct, never silently corrupted (n=$n)" for n in (8, 90, 512)
+        b = randn(ComplexF64, 2n)
+        p = plan_pfft(ComplexF64, n; variant = :fast)
+        cb = copy(b); cv = view(cb, 1:n); rc = fft(collect(cv)); pfft!(cv, p)          # contiguous view, in place
+        @test relerr(cv, rc) < tol(Float64)
+        sb = copy(b); sv = view(sb, 1:2:2n); rs = fft(collect(sv)); pfft!(sv, p)       # strided view → copy-back
+        @test relerr(sv, rs) < tol(Float64)
+        @test relerr(pfft(view(b, 1:2:2n)), fft(collect(view(b, 1:2:2n)))) < tol(Float64)  # out-of-place strided
+    end
+
+    @testset "inference: the public surface returns concrete vectors" begin
+        x = randn(ComplexF64, 256)
+        p = plan_pfft(ComplexF64, 256; variant = :fast)
+        @test @inferred(pfft(x)) isa Vector{ComplexF64}
+        @test @inferred(ipfft(x)) isa Vector{ComplexF64}
+        @test @inferred(pfft!(copy(x), p)) isa AbstractVector{ComplexF64}
+    end
+
+    @testset "ldiv! round-trips to the input" begin
+        x = randn(ComplexF64, 128)
+        p = PureFFT._pure_plan_fft(x)
+        z = similar(x); ldiv!(z, p, p * x)
+        @test relerr(z, x) < tol(Float64)
+    end
+end
+
+@testitem "Aqua project quality" begin
+    using Aqua
+    # piracies = false: PureFFT intentionally extends `AbstractFFTs.plan_fft`/`plan_bfft` etc. on plain
+    # `Vector`s to plug into the Julia FFT ecosystem (the same deliberate extension FFTW.jl makes). Every
+    # other Aqua check (ambiguities, unbound args, undefined exports, stale deps, compat, extras) is on.
+    Aqua.test_all(PureFFT; piracies = false)
+end
