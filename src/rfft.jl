@@ -25,28 +25,28 @@
 import AbstractFFTs
 
 """
-    RealFFTPlan{T}
+    RealFFTPlan{T, P}
 
 Plan for an efficient real-input forward FFT of even length `n`.
-Holds a size-`n÷2` inner complex plan, the precomputed twiddle table, and
+Holds a size-`n÷2` inner complex plan (concrete type P), the precomputed twiddle table, and
 preallocated work buffers — the hot path performs zero heap allocations.
 """
-struct RealFFTPlan{T}
+struct RealFFTPlan{T, P <: AbstractFFTPlan{T}}
     n::Int                        # real input length (even)
-    inner::AbstractFFTPlan{T}     # size-m = n/2 complex FFT plan
+    inner::P                      # size-m = n/2 complex FFT plan (concrete)
     twiddles::Vector{Complex{T}}  # W_n^k for k = 0 .. m  (index k+1)
     zbuf::Vector{Complex{T}}      # packing buffer, length m
     outbuf::Vector{Complex{T}}    # recombined output, length m+1
 end
 
 """
-    RealIFFTPlan{T}
+    RealIFFTPlan{T, P}
 
 Plan for the inverse real FFT (irfft): complex half-spectrum → real, length `n`.
 """
-struct RealIFFTPlan{T}
+struct RealIFFTPlan{T, P <: AbstractFFTPlan{T}}
     n::Int
-    inner::AbstractFFTPlan{T}     # size-m inverse complex FFT plan (unnormalized)
+    inner::P                      # size-m inverse complex FFT plan (concrete)
     twiddles::Vector{Complex{T}}  # conj(W_n^k) for k = 0 .. m
     zbuf::Vector{Complex{T}}      # inverse-recombined complex, length m
 end
@@ -66,7 +66,7 @@ function plan_prfft(::Type{T}, n::Integer) where {T <: AbstractFloat}
     twiddles = _rfft_twiddles(T, n)
     zbuf = Vector{Complex{T}}(undef, m)
     outbuf = Vector{Complex{T}}(undef, m + 1)
-    return RealFFTPlan{T}(Int(n), inner, twiddles, zbuf, outbuf)
+    return RealFFTPlan{T, typeof(inner)}(Int(n), inner, twiddles, zbuf, outbuf)
 end
 
 plan_prfft(x::AbstractVector{<:Real}) = plan_prfft(float(eltype(x)), length(x))
@@ -85,7 +85,7 @@ function plan_pirfft(::Type{T}, n::Integer) where {T <: AbstractFloat}
     inner = plan_pfft(Complex{T}, m; variant = :fast, inverse = false)
     twiddles = _rfft_twiddles(T, n)   # forward twiddles W_n^k; irfft uses their conj
     zbuf = Vector{Complex{T}}(undef, m)
-    return RealIFFTPlan{T}(Int(n), inner, twiddles, zbuf)
+    return RealIFFTPlan{T, typeof(inner)}(Int(n), inner, twiddles, zbuf)
 end
 
 plan_pirfft(X::AbstractVector{<:Complex}, n::Integer) =

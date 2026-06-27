@@ -1,0 +1,261 @@
+{
+  "meta": {
+    "cpu": "znver5",
+    "date": "2026-06-27",
+    "note": "DCT-II (REDFT10), even N, PureFFT in-place, FFTW out-of-place, planning excluded"
+  },
+  "records": [
+    {
+      "T": "Float64",
+      "fftw_gflops": 5.367515238436715,
+      "fftw_relspread": 0.32916367873789876,
+      "kind": "REDFT10",
+      "n": 8,
+      "purefft_gflops": 2.7900422733677783,
+      "purefft_relspread": 0.00976984499765146
+    },
+    {
+      "T": "Float64",
+      "fftw_gflops": 6.462999572013778,
+      "fftw_relspread": 0.24483624431899226,
+      "kind": "REDFT10",
+      "n": 16,
+      "purefft_gflops": 5.827109369222806,
+      "purefft_relspread": 0.02464874657990093
+    },
+    {
+      "T": "Float64",
+      "fftw_gflops": 11.513403510826755,
+      "fftw_relspread": 0.28936357114621614,
+      "kind": "REDFT10",
+      "n": 32,
+      "purefft_gflops": 10.345034024465686,
+      "purefft_relspread": 0.008737935117372676
+    },
+    {
+      "T": "Float64",
+      "fftw_gflops": 14.673859735164296,
+      "fftw_relspread": 0.1466300474088605,
+      "kind": "REDFT10",
+      "n": 64,
+      "purefft_gflops": 16.904947743151403,
+      "purefft_relspread": 0.008159492851567718
+    },
+    {
+      "T": "Float64",
+      "fftw_gflops": 12.14002617656276,
+      "fftw_relspread": 0.17700702342986704,
+      "kind": "REDFT10",
+      "n": 128,
+      "purefft_gflops": 21.05006699963455,
+      "purefft_relspread": 0.0028000626490089255
+    },
+    {
+      "T": "Float64",
+      "fftw_gflops": 15.463216973296754,
+      "fftw_relspread": 0.11621758571800096,
+      "kind": "REDFT10",
+      "n": 256,
+      "purefft_gflops": 24.771396777783153,
+      "purefft_relspread": 0.005768058445014202
+    },
+    {
+      "T": "Float64",
+      "fftw_gflops": 10.472251261306305,
+      "fftw_relspread": 0.09841734466615161,
+      "kind": "REDFT10",
+      "n": 512,
+      "purefft_gflops": 28.411799179527254,
+      "purefft_relspread": 0.16037922445790198
+    },
+    {
+      "T": "Float64",
+      "fftw_gflops": 14.819579340065609,
+      "fftw_relspread": 0.22752299478999177,
+      "kind": "REDFT10",
+      "n": 1024,
+      "purefft_gflops": 21.445026178010473,
+      "purefft_relspread": 0.13973109947643966
+    },
+    {
+      "T": "Float64",
+      "fftw_gflops": 20.575395013243217,
+      "fftw_relspread": 0.059199318050354575,
+      "kind": "REDFT10",
+      "n": 2048,
+      "purefft_gflops": 35.81985133362484,
+      "purefft_relspread": 0.008168700560480184
+    },
+    {
+      "T": "Float64",
+      "fftw_gflops": 18.319791278419682,
+      "fftw_relspread": 0.0707059262020127,
+      "kind": "REDFT10",
+      "n": 4096,
+      "purefft_gflops": 32.98127893712675,
+      "purefft_relspread": 0.0068804938602966435
+    },
+    {
+      "T": "Float64",
+      "fftw_gflops": 20.131568998109643,
+      "fftw_relspread": 0.026899810964083174,
+      "kind": "REDFT10",
+      "n": 8192,
+      "purefft_gflops": 33.42623979912115,
+      "purefft_relspread": 0.012900188323917138
+    },
+    {
+      "T": "Float64",
+      "fftw_gflops": 18.249779213442917,
+      "fftw_relspread": 0.07424761510736995,
+      "kind": "REDFT10",
+      "n": 16384,
+      "purefft_gflops": 33.16119705074454,
+      "purefft_relspread": 0.04330143125632494
+    },
+    {
+      "T": "Float64",
+      "fftw_gflops": 19.899272886269046,
+      "fftw_relspread": 0.06114945506955354,
+      "kind": "REDFT10",
+      "n": 32768,
+      "purefft_gflops": 34.06189796399219,
+      "purefft_relspread": 0.04540754805893192
+    },
+    {
+      "T": "Float64",
+      "fftw_gflops": 18.465136264061368,
+      "fftw_relspread": 0.034618960744398346,
+      "kind": "REDFT10",
+      "n": 65536,
+      "purefft_gflops": 35.586688115552484,
+      "purefft_relspread": 0.024531823766179975
+    },
+    {
+      "T": "Float32",
+      "fftw_gflops": 4.622421213115387,
+      "fftw_relspread": 0.19879113032402493,
+      "kind": "REDFT10",
+      "n": 8,
+      "purefft_gflops": 2.814498933901919,
+      "purefft_relspread": 0.0008173418621179048
+    },
+    {
+      "T": "Float32",
+      "fftw_gflops": 3.156178544567999,
+      "fftw_relspread": 0.09642517149303685,
+      "kind": "REDFT10",
+      "n": 16,
+      "purefft_gflops": 5.489990749952004,
+      "purefft_relspread": 0.027339651290643422
+    },
+    {
+      "T": "Float32",
+      "fftw_gflops": 9.341014672465247,
+      "fftw_relspread": 0.14736399935922914,
+      "kind": "REDFT10",
+      "n": 32,
+      "purefft_gflops": 11.514946152599554,
+      "purefft_relspread": 0.009746747793803506
+    },
+    {
+      "T": "Float32",
+      "fftw_gflops": 12.84000380532252,
+      "fftw_relspread": 0.12184628611092514,
+      "kind": "REDFT10",
+      "n": 64,
+      "purefft_gflops": 18.63175136237677,
+      "purefft_relspread": 0.012471232989605792
+    },
+    {
+      "T": "Float32",
+      "fftw_gflops": 14.804442677032167,
+      "fftw_relspread": 0.1446406147607552,
+      "kind": "REDFT10",
+      "n": 128,
+      "purefft_gflops": 23.41605229890168,
+      "purefft_relspread": 0.01166596434798417
+    },
+    {
+      "T": "Float32",
+      "fftw_gflops": 15.520147009164514,
+      "fftw_relspread": 0.10180997180753738,
+      "kind": "REDFT10",
+      "n": 256,
+      "purefft_gflops": 29.5249863807284,
+      "purefft_relspread": 0.008523670958398153
+    },
+    {
+      "T": "Float32",
+      "fftw_gflops": 17.59584542538567,
+      "fftw_relspread": 0.048289292805865296,
+      "kind": "REDFT10",
+      "n": 512,
+      "purefft_gflops": 37.44514870794734,
+      "purefft_relspread": 0.005364166144273459
+    },
+    {
+      "T": "Float32",
+      "fftw_gflops": 20.93403598037434,
+      "fftw_relspread": 0.028007450481555514,
+      "kind": "REDFT10",
+      "n": 1024,
+      "purefft_gflops": 39.22169449977019,
+      "purefft_relspread": 0.028005209131300658
+    },
+    {
+      "T": "Float32",
+      "fftw_gflops": 22.524138719076728,
+      "fftw_relspread": 0.021202650974118702,
+      "kind": "REDFT10",
+      "n": 2048,
+      "purefft_gflops": 45.009989788216494,
+      "purefft_relspread": 0.018771034054078033
+    },
+    {
+      "T": "Float32",
+      "fftw_gflops": 23.361216730038024,
+      "fftw_relspread": 0.02999809885931558,
+      "kind": "REDFT10",
+      "n": 4096,
+      "purefft_gflops": 46.45819877439784,
+      "purefft_relspread": 0.010125553332598215
+    },
+    {
+      "T": "Float32",
+      "fftw_gflops": 23.67419526942913,
+      "fftw_relspread": 0.030538858260714966,
+      "kind": "REDFT10",
+      "n": 8192,
+      "purefft_gflops": 45.65940661979078,
+      "purefft_relspread": 0.006859886811867604
+    },
+    {
+      "T": "Float32",
+      "fftw_gflops": 22.197534209456716,
+      "fftw_relspread": 0.029477229179166585,
+      "kind": "REDFT10",
+      "n": 16384,
+      "purefft_gflops": 46.23397565105217,
+      "purefft_relspread": 0.013150850600661105
+    },
+    {
+      "T": "Float32",
+      "fftw_gflops": 21.24977302793702,
+      "fftw_relspread": 0.04988007228519795,
+      "kind": "REDFT10",
+      "n": 32768,
+      "purefft_gflops": 50.31786493043825,
+      "purefft_relspread": 0.22775303788786158
+    },
+    {
+      "T": "Float32",
+      "fftw_gflops": 21.917478366289036,
+      "fftw_relspread": 0.04948355001881183,
+      "kind": "REDFT10",
+      "n": 65536,
+      "purefft_gflops": 47.6008806773044,
+      "purefft_relspread": 0.01978890982136776
+    }
+  ]
+}

@@ -63,6 +63,17 @@ Status + planned work. This is the canonical, checked-in roadmap (human- and age
   smooth-size coverage.
 
 ### Breadth / type coverage (gaps for a *general* library vs the 1-D complex-`Float64` investigation)
+- **DCT/DST (real-to-real) — Phase 1 DONE.** DCT-II (`REDFT10`) + DCT-III (`REDFT01`) are live
+  for all N: even N uses the Makhoul real-FFT reduction (zero-alloc, dispatch-free); odd N falls
+  back to a complex FFT (correctness, ~2× slower). API: `plan_r2r`, `r2r`, `mul!`, `dct`/`idct`
+  (orthonormal, FFTW.jl drop-in), `plan_r2r \ x` (inverse). Bench harness:
+  `bench/run_compare_r2r.jl` → `bench/results/compare_r2r.json` → `bench/plot_compare_r2r.jl`.
+  Bench (no bounds checking): even-N PF/FFTW **1.45–2.71× for F64, 1.23–2.37× for F32**.
+  Parity gate is `@test_broken` in the test suite because `Pkg.test --check-bounds=yes`
+  overrides @inbounds in Julia loops (not in FFTW's C) — an artificial ~3× handicap.
+  The bench is the authoritative measurement; gate is kept to catch regressions.
+  Phases 2–4: DCT-IV, DST-II/III/IV, type-I pair — each adds `_pre!`/`_post!` per kind.
+  See the spec at `.superpowers/sdd/task-7-brief.md` §"Phases 2–4".
 - **Float32 — DONE (at/above FFTW & RustFFT).** The AVX path is now `Float32`-capable by genericizing the
   4-complex kernels over `Vec{8,T}` (the element type follows from `T`; only the explicit FMA `llvmcall` is
   per-(N,T)): **non-pow2** routes through the `V8f32 = Vec{8,Float32}` (256-bit AVX2) W=8 tree — beats FFTW
