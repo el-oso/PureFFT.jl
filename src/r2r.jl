@@ -75,9 +75,40 @@ function _build_r2r(::REDFT10_T, ::Type{T}, n::Int) where {T}
     end
 end
 
+# ── DCT-II (REDFT10) — odd-N complex-FFT fallback ────────────────────────────
+# Same Makhoul reorder as even N (even samples ascending, odd samples reversed into the tail), but the
+# inner transform is a length-n COMPLEX FFT and V is the FULL spectrum (no Hermitian shortcut). Documented
+# ~2× slower than the even-N real-FFT route — correctness only, below the parity gate. Route is selected by
+# DISPATCH on the inner plan type P (complex plan <: AbstractFFTPlan; the even-N RealFFTPlan is not), so each
+# _apply! body stays monomorphic / @test_opt-clean.
+function _build_r2r_dct2_odd(::Type{T}, n::Int) where {T}
+    inner = plan_pfft(Complex{T}, n; variant = :fast, inverse = false)
+    post  = _dct_post_tw(T, n)
+    cbuf  = Vector{Complex{T}}(undef, n)               # full complex spectrum
+    plan  = R2RPlan{REDFT10_T, T, typeof(inner)}(n, inner, Complex{T}[], post, T[], cbuf, one(T))
+    return Result{R2RPlan, R2RError}(Ok(plan))
+end
+
+# Apply (odd N): inner is a complex plan (P<:AbstractFFTPlan). Reorder x → full complex buffer, length-n
+# complex FFT, y_k = 2·Re(post_k·V_k) over the full spectrum.
+function _apply!(p::R2RPlan{REDFT10_T, T, P}, y::AbstractVector{T}, x::AbstractVector{<:Real}) where {T, P <: AbstractFFTPlan}
+    n = p.n; V = p.cbuf; W = p.post
+    @inbounds for j in 0:((n - 1) ÷ 2)
+        V[j + 1] = Complex{T}(T(x[2j + 1]), zero(T))   # even samples ascending into the front
+    end
+    @inbounds for j in 0:(n ÷ 2 - 1)
+        V[n - j] = Complex{T}(T(x[2j + 2]), zero(T))   # odd samples reversed into the tail
+    end
+    apply_unnormalized!(p.inner, V)
+    @inbounds for k in 0:(n - 1)
+        y[k + 1] = T(2) * real(W[k + 1] * V[k + 1])
+    end
+    return y
+end
+
 # Apply (even N): reorder x → rbuf (even samples up, odd samples reversed), real FFT → cbuf
 # half-spectrum, y_k = 2·Re(post_k·V_k) with Hermitian extension V_k = conj(V_{n-k}) for k > n/2.
-function _apply!(p::R2RPlan{REDFT10_T, T}, y::AbstractVector{T}, x::AbstractVector{<:Real}) where {T}
+function _apply!(p::R2RPlan{REDFT10_T, T, P}, y::AbstractVector{T}, x::AbstractVector{<:Real}) where {T, P <: RealFFTPlan}
     n = p.n; m = n ÷ 2; v = p.rbuf; V = p.cbuf; W = p.post
     @inbounds for j in 0:(m - 1)
         v[j + 1] = T(x[2j + 1])      # x[2j]

@@ -27,3 +27,14 @@ end
         @test maximum(abs.(y .- T.(naive(Float64.(x))))) / max(maximum(abs.(ref)), eps(T)) < tol(T)
     end
 end
+
+@testitem "DCT-II (REDFT10) odd-N bit-exact vs FFTW" begin
+    using PureFFT, FFTW, ErrorTypes
+    tol(::Type{Float64}) = 1e-12; tol(::Type{Float32}) = 1f-4
+    for T in (Float64, Float32), n in (1, 3, 5, 7, 9, 99, 257)
+        x = randn(T, n)
+        y = ErrorTypes.unwrap(PureFFT.tryr2r(x, REDFT10))
+        ref = FFTW.r2r(x, FFTW.REDFT10)
+        @test maximum(abs.(y .- ref)) / max(maximum(abs.(ref)), eps(T)) < tol(T)
+    end
+end
