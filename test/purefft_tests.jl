@@ -410,6 +410,9 @@ end
         # a constructed plan (@validate Main.evals each arg) rather than hardcoding the fragile inner type.
         PureFFT.apply_unnormalized!(typeof(PureFFT._pure_plan_fft_nd(Array{ComplexF64}(undef, 8, 5), (1, 2); inverse = false)), Array{ComplexF64, 2}),
         PureFFT.apply_unnormalized!(typeof(PureFFT._pure_plan_fft_nd(Array{ComplexF32}(undef, 6, 4, 5), (1, 3); inverse = false)), Array{ComplexF32, 3}),
+        # strided prime dim → BatchedRaderDim (batched Rader, Task 7f): the gather/scatter + batched inner
+        # FFT are trim-safe (RaderPlan/BatchPlan precompute is plan-time; the hot apply is concrete).
+        PureFFT.apply_unnormalized!(typeof(PureFFT._pure_plan_fft_nd(Array{ComplexF64}(undef, 16, 127), (1, 2); inverse = false)), Array{ComplexF64, 2}),
     )
 end
 

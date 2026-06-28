@@ -48,6 +48,10 @@ const SHAPES = [
     ("224×224",   (224, 224),      "2d_nonpow2"),    # 2^5·7   — radix-7 batched
     ("160×160×160", (160, 160, 160), "3d_nonpow2"),  # 2^5·5   — radix-5 batched
     ("112×112×112", (112, 112, 112), "3d_nonpow2"),  # 2^4·7   — radix-7 batched
+    ("127×127",   (127, 127),      "2d_prime"),      # 127 prime, 126=2·3²·7 — batched Rader (Task 7f)
+    ("251×251",   (251, 251),      "2d_prime"),      # 251 prime, 250=2·5³   — batched Rader
+    ("113×113×113", (113, 113, 113), "3d_prime"),    # 113 prime, 112=2⁴·7   — batched Rader
+    ("256×127",   (256, 127),      "2d_prime"),      # mixed: strided dim-2 prime (Rader) + pow2 dim-1
 ]
 
 println("N-D complex FFT: FFTW vs PureFFT (F64 + F32)  |  $(Sys.CPU_NAME)\n")

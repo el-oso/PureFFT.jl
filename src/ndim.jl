@@ -45,6 +45,53 @@ struct TransposeDim{P}
     d::Int
     plan::P
 end
+# prime dim p (p ≥ RADER_MIN_P, p-1 smooth = 2^a·3^b) — batched Rader's algorithm across the contiguous
+# inner batch, NO transpose. The length-(p-1) convolution's two FFTs run on the batched kernel (fwd/invp
+# are BatchPlan8 for pow2 p-1, else BatchPlanMR for 2^a·3^b). B = FFT(b)/(p-1) folds the inverse 1/L (the
+# batched kernels are unnormalized). scr = (p-1)×inner, x0/x1 = inner: all preallocated (zero-alloc apply).
+struct BatchedRaderDim{T, FP, IP}
+    d::Int
+    p::Int
+    L::Int                       # p - 1
+    ain::Vector{Int}             # gather: a[q] = x[ain[q]] (0-based x position, 1..p-1)
+    kout::Vector{Int}            # scatter: X[kout[r]] = x0 + conv[r] (0-based, 1..p-1)
+    B::Vector{Complex{T}}        # FFT(b)/L, length L
+    fwd::FP                      # length-L batched forward kernel (BatchPlan8 | BatchPlanMR)
+    invp::IP                     # length-L batched inverse kernel (unnormalized; 1/L folded into B)
+    scr::Vector{Complex{T}}      # L×inner work buffer, reused per outer slice
+    x0::Vector{Complex{T}}       # DC sum per column (length inner)
+    x1::Vector{Complex{T}}       # saved x[0] per column (length inner)
+end
+
+# Routing predicate: dim length n is a prime whose p-1 is 2·3·5·7-smooth — i.e. the inner length-L=p-1
+# convolution FFT is exactly what the batched kernel handles (BatchPlan8 for pow2 L, else BatchPlanMR /
+# radix-2·3·5·7). `_max_prime_factor(n)==n` ⇒ n prime; primes ≤7 are already smooth-routed (BatchedSmoothDim
+# above), so this branch only ever sees non-smooth primes (≥11).
+# NB two deliberate widenings vs the 1-D autoplan Rader gate (src/autotune.jl), because in N-D the only
+# alternative is the slow TransposeDim (not Bluestein/codelet), so batched Rader still wins:
+#  • gate is `_is_smooth_2a3(p-1)` (≤7), not RADER_MAX_PM1_PRIME=3 (a 5/7 in p-1 loses to Bluestein in 1-D);
+#  • NO RADER_MIN_P=128 floor (that floor is Rader-vs-codelet/Bluestein tuning, irrelevant to Rader-vs-transpose).
+# Both are REQUIRED for the task's bench primes 127 (126=2·3²·7) and 113 (112=2⁴·7) to leave the transpose path.
+@inline _is_rader_dim(n::Int) =
+    _max_prime_factor(n) == n && _is_smooth_2a3(n - 1)
+
+# inner is PADDED to a multiple of the batch width W so the inner length-L FFT runs all-vector (no
+# scalar tail). The tail kernel is a naive O(L²) DFT — fine for the ≤W-1 leftover of a smooth strided
+# dim, but for a PRIME dim inner = p is never a multiple of W ⇒ a full W-1 column tail of O(L²) work every
+# outer slice (measured: F32 127² collapsed to 0.2× without padding). Pad columns are zero (gather only
+# writes the real `inner`), so FFT(0)=0 keeps them harmless across reps — one extra vector group at most.
+function BatchedRaderDim(::Type{Complex{T}}, d::Int, p::Int, inner::Int; inverse::Bool) where {T}
+    rp = RaderPlan(Complex{T}, p; inverse)          # reuse precompute: primitive root, ain, kout, B=FFT(b)
+    L = p - 1
+    fwd  = ispow2(L) ? BatchPlan8(T, L; forward = true)  : BatchPlanMR(T, L; forward = true)
+    invp = ispow2(L) ? BatchPlan8(T, L; forward = false) : BatchPlanMR(T, L; forward = false)
+    Bs = rp.B ./ T(L)                               # fold the inverse 1/L (batched inv is unnormalized)
+    W = _batch_lanes(T) >> 1
+    spad = cld(inner, W) * W                         # padded column count (multiple of W)
+    return BatchedRaderDim{T, typeof(fwd), typeof(invp)}(
+        d, p, L, rp.ain, rp.kout, Bs, fwd, invp,
+        zeros(Complex{T}, L * spad), Vector{Complex{T}}(undef, inner), Vector{Complex{T}}(undef, inner))
+end
 
 # canonicalize a region (Int / tuple / range / Colon) over an N-d array → sorted, deduped
 # NTuple{D,Int}, validated ⊆ 1:N.
@@ -93,6 +140,9 @@ function _mk_dim(::Type{Complex{T}}, d::Int, sz; inverse::Bool) where {T}
         BatchedDim(d, BatchPlan8(T, sz[d]; forward=!inverse))
     elseif _is_smooth_2a3(sz[d])
         BatchedSmoothDim(d, BatchPlanMR(T, sz[d]; forward=!inverse))
+    elseif _is_rader_dim(sz[d])
+        inner = prod(@inbounds(sz[i]) for i in 1:(d-1); init=1)
+        BatchedRaderDim(Complex{T}, d, sz[d], inner; inverse)
     else
         TransposeDim(d, plan_pfft(Complex{T}, sz[d]; inverse, variant=:fast))
     end
@@ -109,7 +159,7 @@ function _pure_plan_fft_nd(x::AbstractArray{Complex{T}, N}, region; inverse::Boo
     # allocates (Task 5 gate). `maximum(sz[d])` floors it so the buffer is never empty.
     nscratch = maximum(sz[d] for d in dims)
     for d in dims
-        (d == 1 || ispow2(sz[d]) || _is_smooth_2a3(sz[d])) && continue   # batched dims own their tiles
+        (d == 1 || ispow2(sz[d]) || _is_smooth_2a3(sz[d]) || _is_rader_dim(sz[d])) && continue   # batched dims own their tiles
         nscratch = max(nscratch, prod(sz[1:d-1]) * sz[d])
     end
     NDPlan{T, D, typeof(plans), N}(dims, plans, sz, Vector{Complex{T}}(undef, nscratch), inverse)
@@ -191,6 +241,59 @@ end
     GC.@preserve x begin
         pc = reinterpret(Ptr{Complex{T}}, pointer(x))
         batched_fft_mr!(pd.bp, pc, 0, inner, outer)
+    end
+    return x
+end
+
+# prime d>1 (smooth p-1) — batched Rader, no transpose. Per outer slice: DC-sum + save x[0], gather the
+# reindexed length-L batch into scr (each step contiguous across the inner batch ⇒ @simd ivdep), batched
+# FFT(L), pointwise ×B (1/L folded in), batched IFFT(L), scatter X[kout[r]]=x0+conv[r], then X[0]=DC.
+# Pointer-based + GC.@preserve; scr/x0/x1 preallocated ⇒ zero-alloc.
+@inline function _apply_dim!(pd::BatchedRaderDim{T}, x::AbstractArray{Complex{T}}, sz, scratch) where {T}
+    inner, p, outer = _dim_extents(pd.d, sz)        # p == pd.p
+    L = pd.L; scr = pd.scr; x0 = pd.x0; x1 = pd.x1
+    ain = pd.ain; kout = pd.kout; B = pd.B
+    W = _batch_lanes(T) >> 1
+    sp = cld(inner, W) * W                            # padded scr column stride (multiple of W ⇒ no scalar tail)
+    GC.@preserve x scr begin
+        px = reinterpret(Ptr{Complex{T}}, pointer(x))
+        ps = pointer(scr)
+        for o in 0:(outer - 1)
+            base = o * inner * p
+            @inbounds @simd ivdep for c in 1:inner   # DC sum seed = x[0]; also save x[0] (the r=0 term)
+                v = unsafe_load(px, base + c)
+                x1[c] = v; x0[c] = v
+            end
+            @inbounds for r in 1:(p - 1)
+                rin = r * inner
+                @simd ivdep for c in 1:inner
+                    x0[c] += unsafe_load(px, base + rin + c)
+                end
+            end
+            @inbounds for q in 0:(L - 1)              # gather a[q] = x[ain[q]] into scr (pad cols stay 0)
+                qin = q * sp; ainq = ain[q + 1] * inner
+                @simd ivdep for c in 1:inner
+                    scr[qin + c] = unsafe_load(px, base + ainq + c)
+                end
+            end
+            _batched_apply!(pd.fwd, ps, 0, sp, 1)     # A = FFT(a), batched across the padded inner columns
+            @inbounds for i in 0:(L - 1)              # A .*= B (B[i] scalar-broadcast; includes 1/L)
+                iin = i * sp; Bi = B[i + 1]
+                @simd ivdep for c in 1:inner
+                    scr[iin + c] *= Bi
+                end
+            end
+            _batched_apply!(pd.invp, ps, 0, sp, 1)    # conv = IFFT(A·B) (unnormalized × 1/L from B)
+            @inbounds for r in 0:(L - 1)              # scatter X[kout[r]] = x[0] + conv[r]
+                rin = r * sp; kr = kout[r + 1] * inner
+                @simd ivdep for c in 1:inner
+                    unsafe_store!(px, x1[c] + scr[rin + c], base + kr + c)
+                end
+            end
+            @inbounds @simd ivdep for c in 1:inner    # X[0] = DC sum
+                unsafe_store!(px, x0[c], base + c)
+            end
+        end
     end
     return x
 end

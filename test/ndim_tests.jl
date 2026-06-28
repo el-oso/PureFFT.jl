@@ -60,10 +60,46 @@ end
         y = copy(x); PureFFT.apply_unnormalized!(pf, y)
         ref = fft(x, region)
         @test maximum(abs.(y .- ref))/maximum(abs.(ref)) < tol(T)
-        # inverse round-trip (unnormalized bfft ∘ fft = ∏n)
         pi = PureFFT._pure_plan_fft_nd(x, region; inverse=true)
         z = copy(y); PureFFT.apply_unnormalized!(pi, z)
         @test maximum(abs.(z ./ prod(sz) .- x))/maximum(abs.(x)) < tol(T)
+    end
+end
+
+@testitem "N-D prime strided dims (batched Rader) bit-exact vs FFTW (fwd+inv)" begin
+    using PureFFT, FFTW
+    tol(::Type{Float64})=1e-12; tol(::Type{Float32})=1f-4
+    # prime dims (≥128, p-1 2·3·5·7-smooth) that previously fell to the slow TransposeDim path → BatchedRaderDim.
+    #  127 (126=2·3²·7), 251 (250=2·5³), 193 (192=2^6·3), 257 (256=2^8 pow2 L → BatchPlan8), 769 (768=2^8·3).
+    #  inner%4≠0 + 3-D + leading-singleton (inner=1) edge cases exercise the scalar tails of the batched kernel.
+    cases = (((127,127), (1,2)), ((4,127), 2), ((251,251), (1,2)), ((257,257), (1,2)),
+             ((3,5,193), 3), ((16,193), (1,2)), ((8,769), (1,2)), ((1,127), 2))
+    for T in (Float64, Float32), (sz, region) in cases
+        # confirm a strided prime dim routes to BatchedRaderDim (else the test is vacuous)
+        @test PureFFT._mk_dim(Complex{T}, 2, sz; inverse=false) isa PureFFT.BatchedRaderDim ||
+              PureFFT._mk_dim(Complex{T}, length(sz), sz; inverse=false) isa PureFFT.BatchedRaderDim
+        x = randn(Complex{T}, sz...)
+        pf = PureFFT._pure_plan_fft_nd(x, region; inverse=false)
+        y = copy(x); PureFFT.apply_unnormalized!(pf, y)
+        ref = fft(x, region)
+        @test maximum(abs.(y .- ref))/maximum(abs.(ref)) < tol(T)
+        # inverse round-trip (unnormalized bfft ∘ fft = ∏n over the region)
+        pinv = PureFFT._pure_plan_fft_nd(x, region; inverse=true)
+        z = copy(y); PureFFT.apply_unnormalized!(pinv, z)
+        nrm = prod(sz[d] for d in (region isa Int ? (region,) : region))
+        @test maximum(abs.(z ./ nrm .- x))/maximum(abs.(x)) < tol(T)
+    end
+end
+
+@testitem "N-D batched Rader hot path: dispatch-free + zero-alloc" begin
+    using PureFFT, JET, LinearAlgebra
+    cases = (((193,16),(1,2)), ((4,193),2), ((257,9),2))
+    for T in (Float64, Float32), (sz, region) in cases
+        x = randn(Complex{T}, sz...); y = similar(x)
+        p = PureFFT._pure_plan_fft_nd(x, region; inverse=false)
+        mul!(y, p, x)                                   # warmup
+        @test (@allocated mul!(y, p, x)) == 0
+        @test_opt target_modules=(PureFFT,) mul!(y, p, x)
     end
 end
 
