@@ -59,23 +59,46 @@ _wrap(r::Int, k::Kernel, fwd::Bool) = r == 3 ? MR3(k, fwd) : r == 4 ? MR4(k, fwd
 
 _build_tree(base::Kernel, radixes, fwd::Bool) = RPlan(foldl((k, r) -> _wrap(r, k, fwd), radixes; init = base))
 
+# pure-pow2 kernel of exponent e (2^e), or nothing. B16/B64 leaves for e∈{4,6}; for e≥8 the rustfft "8xn"
+# scheme: monolithic B256/B512 base (by e mod 3, so the leftover is a clean product of 8s + at most one 4,
+# no radix-2) + a radix-8/4 chain. Used by the pure-pow2 (e≥8) route AND the single-factor-of-3 route below.
+function _pow2_kernel(e::Int, fwd::Bool)
+    e == 4 && return B16(fwd)
+    e == 6 && return B64(fwd)
+    e >= 8 || return nothing
+    base, m = e % 3 == 0 ? (B512(fwd), e - 9) : (B256(fwd), e - 8)
+    m % 3 == 1 && return nothing                        # never happens for this base choice, but stay safe
+    k::Kernel = base
+    for _ in 1:(m ÷ 3)
+        k = MR8(k, fwd)
+    end
+    m % 3 == 2 && (k = MR4(k, fwd))
+    return k
+end
+
 # build a kernel tree for n (or nothing if unsupported). fwd = forward.
 function plan_tree(n::Int, fwd::Bool=true)
     p2, p3, p5, rest = factor235(n)
     rest == 1 || return nothing
-    # Pure power of two ≥ 256: monolithic B256/B512 base + radix-8/4 chain (rustfft's "8xn" scheme — the
-    # base depends on 2^e mod 3 so the remaining factor is a clean product of 8s and at most one 4, no radix-2).
+    # Pure power of two ≥ 256: B256/B512 base + radix-8/4 chain (e≥8 only; smaller pure pow2 keep the
+    # existing FFT-specific path — leave p3==0 behavior unchanged).
     if p3 == 0 && p5 == 0
         p2 >= 8 || return nothing
-        e = p2
-        base, m = e % 3 == 0 ? (B512(fwd), e - 9) : (B256(fwd), e - 8)
-        m % 3 == 1 && return nothing                   # never happens for this base choice, but stay safe
-        k::Kernel = base
-        for _ in 1:(m ÷ 3)
-            k = MR8(k, fwd)
+        k = _pow2_kernel(p2, fwd)
+        return isnothing(k) ? nothing : RPlan(k)
+    end
+    # Single factor of 3 (2^a·3): no 3^2 base (B36/B18) available, so these fell to the slow generic path.
+    # Use a pure-pow2 leaf/chain that absorbs the 2s and carry the lone 3 in ONE mixed-radix pass folding up
+    # to 2 leftover 2s (MR3/MR6/MR12 = 3·2^j). Matches FFTW's "wide pow2 codelet × one odd codelet" shape.
+    # Smallest j → largest pow2 inner: 48=MR3(B16), 96=MR6(B16), 192=MR3(B64), 384=MR6(B64), 768=MR3(B256)…
+    if p3 == 1 && p5 == 0
+        for j in 0:2
+            inner = _pow2_kernel(p2 - j, fwd)
+            isnothing(inner) && continue
+            outer = j == 0 ? MR3(inner, fwd) : j == 1 ? MR6(inner, fwd) : MR12(inner, fwd)
+            return RPlan(outer)
         end
-        m % 3 == 2 && (k = MR4(k, fwd))
-        return RPlan(k)
+        return nothing
     end
     p3 >= 2 || return nothing                          # need 3^2 for a base (B36 or B18)
     # Prefer base B36 = 2^2·3^2 when 2^2 is available (consumes two 2s + two 3s).

@@ -36,7 +36,8 @@ function nonpow2_sizes()
     smooth = filter(!ispow2, smooth)
     base = [smooth[argmin(abs.(log2.(smooth) .- e))] for e in 6.5:1.0:18.5]
     w8clean = [768, 6144, 9216, 49152, 110592]
-    return sort!(unique(vcat(base, w8clean)))
+    small3 = [48, 96, 192, 384]   # single-factor-of-3 2^k·3 sizes (B16/B64 leaf + MR{3,6} route)
+    return sort!(unique(vcat(small3, base, w8clean)))
 end
 
 cap(t) = length(t) > MAXSAVE ? t[1:MAXSAVE] : t

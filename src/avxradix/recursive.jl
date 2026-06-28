@@ -57,6 +57,18 @@ end
     @inbounds for f in 0:(length(inp) ÷ 18 - 1); butterfly18!(out, inp, 18f, k.tw, k.bf3, k.bf3lo); end
 end
 
+# ---- leaf: Butterfly16 (4x4, two-phase; needs scratch ≥ its length) ----
+struct B16 <: Kernel
+    n::Int; tw::Vector{V4f}; rot::V4f
+end
+B16(fwd::Bool) = B16(16, bf16_twiddles(fwd), fwd ? _ROT90_FWD : _ROT90_INV)
+@inline function proc_ip!(k::B16, buf, scr)
+    @inbounds for f in 0:(length(buf) ÷ 16 - 1); butterfly16!(buf, buf, scr, 16f, k.tw, k.rot); end
+end
+@inline function proc_oop!(k::B16, out, inp, scr)
+    @inbounds for f in 0:(length(inp) ÷ 16 - 1); butterfly16!(out, inp, out, 16f, k.tw, k.rot); end  # out = workspace
+end
+
 # ---- leaf: Butterfly64 (8x8, two-phase; needs scratch ≥ its length) ----
 struct B64 <: Kernel
     n::Int; tw::Vector{V4f}; rot::V4f

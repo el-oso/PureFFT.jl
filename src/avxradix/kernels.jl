@@ -62,6 +62,30 @@ function butterfly36!(out, inp, base::Int, tw::NTuple{15, V4f}, tw3::V4f)  # out
     avx_store_complex!(out, base + 4, o2[1]); avx_store_complex!(out, base + 10, o2[2]); avx_store_complex!(out, base + 16, o2[3]); avx_store_complex!(out, base + 22, o2[4]); avx_store_complex!(out, base + 28, o2[5]); avx_store_complex!(out, base + 34, o2[6])
 end
 
+# ===== Butterfly16: 4x4, two-phase (faithful scale-down of butterfly64! 8x8 → 4x4) =====
+# phase1: col bf4 + twiddle + transpose4 → scr;  phase2: row bf4 (scr → out). needs scratch ≥ its length.
+# twiddles: chunk(cs*2, r, 16) for cs in 0:1, r in 1:3 → 6 entries, index 3cs+r (mirrors bf64_twiddles).
+bf16_twiddles(fwd) = [avx_mixedradix_twiddle_chunk(cs * 2, r, 16, fwd) for cs in 0:1 for r in 1:3]
+@inline _bf16_ld4(buf, b) = (avx_load_complex(buf, b), avx_load_complex(buf, b + 4),
+                             avx_load_complex(buf, b + 8), avx_load_complex(buf, b + 12))
+function butterfly16!(out, inp, scr, base::Int, tw::Vector{V4f}, rot::V4f)  # out===scr ⇒ in-place ok
+    @inbounds for cs in 0:1                                  # phase 1: col bf4 + twiddle + transpose4 → scr
+        b = base + cs * 2
+        m = avx_column_butterfly4(_bf16_ld4(inp, b)..., rot)
+        t = avx_transpose4_packed(m[1], avx_mul_complex(tw[3cs + 1], m[2]),
+                                  avx_mul_complex(tw[3cs + 2], m[3]), avx_mul_complex(tw[3cs + 3], m[4]))
+        ob = base + cs * 8
+        avx_store_complex!(scr, ob, t[1]); avx_store_complex!(scr, ob + 2, t[2])
+        avx_store_complex!(scr, ob + 4, t[3]); avx_store_complex!(scr, ob + 6, t[4])
+    end
+    @inbounds for cs in 0:1                                  # phase 2: row bf4 (scr → out)
+        b = base + cs * 2
+        m = avx_column_butterfly4(_bf16_ld4(scr, b)..., rot)
+        avx_store_complex!(out, b, m[1]); avx_store_complex!(out, b + 4, m[2])
+        avx_store_complex!(out, b + 8, m[3]); avx_store_complex!(out, b + 12, m[4])
+    end
+end
+
 # ===== Butterfly64: 8x8, two-phase (col+twiddle+transpose, then row) =====
 # twiddles: gen_butterfly_twiddles_separated_columns!(8,8) = 28 = [mixedradix_twiddle_chunk(cs*2, r, 64)
 # for cs in 0:3, r in 1:7], index [7cs + r].
