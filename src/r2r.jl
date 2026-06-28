@@ -54,6 +54,37 @@ end
 _build_r2r(kind::R2RKind, ::Type{T}, n::Int) where {T} =
     Result{R2RPlan, R2RError}(Err(R2RError(ERR_UNSUPPORTED_KIND, "kind $(kind) not implemented yet")))
 
+# ── DCT-I (REDFT00) — even-extension real-FFT ────────────────────────────────
+# FFTW REDFT00 (unnormalized): y_k = x_0 + (−1)^k x_{N−1} + 2·Σ_{j=1}^{N−2} x_j cos(πjk/(N−1)).
+# Reduction: build symmetric extension e = [x_0, x_1, …, x_{N−1}, x_{N−2}, …, x_1] of length
+# M = 2(N−1) (always even for N≥2), run length-M real FFT, take y_k = Re(Ê_k) for k=0..N−1.
+# The half-spectrum has M/2+1 = N entries — exactly the N outputs needed. Self-inverse: 2(N−1)·I.
+function _build_r2r(::REDFT00_T, ::Type{T}, n::Int) where {T}
+    n >= 2 || return Result{R2RPlan, R2RError}(Err(R2RError(ERR_SIZE_TOO_SMALL, "REDFT00 needs n≥2")))
+    M = 2 * (n - 1)
+    inner = plan_prfft(T, M)
+    rbuf  = Vector{T}(undef, M)                # extension buffer length M
+    cbuf  = Vector{Complex{T}}(undef, n)        # half-spectrum (M/2+1 = n)
+    plan  = R2RPlan{REDFT00_T, T, typeof(inner)}(n, inner, Complex{T}[], Complex{T}[], rbuf, cbuf)
+    return Result{R2RPlan, R2RError}(Ok(plan))
+end
+
+# Apply: fill symmetric extension e from x, real FFT → cbuf, y_k = Re(E_k).
+function _apply!(p::R2RPlan{REDFT00_T, T, P}, y::AbstractVector{T}, x::AbstractVector{<:Real}) where {T, P <: RealFFTPlan}
+    n = p.n; e = p.rbuf; E = p.cbuf
+    @inbounds for j in 1:n
+        e[j] = T(x[j])                          # x_0 … x_{N−1}
+    end
+    @inbounds for j in 1:(n - 2)
+        e[n + j] = T(x[n - j])                  # x_{N−2} … x_1 (symmetric tail)
+    end
+    apply_rfft!(p.inner, e, E)                  # E[1..n] = half-spectrum
+    @inbounds for k in 1:n
+        y[k] = real(E[k])
+    end
+    return y
+end
+
 # ── DCT-II (REDFT10) — even-N real-FFT route (Makhoul) ───────────────────────
 # FFTW REDFT10 (unnormalized): y_k = 2·Σ_j x_j·cos(π(2j+1)k/(2N)), k=0..N-1.
 # DCT-II post-twiddle: W_k = exp(-iπk/2N), k = 0..n-1.
@@ -468,3 +499,9 @@ function Base.inv(p::R2RPlan{RODFT11_T, T}) where {T}
     return ScaledR2RPlan(ip, T(1) / (2 * p.n))
 end
 Base.:\(p::R2RPlan{RODFT11_T}, x::AbstractVector) = inv(p) * x
+# REDFT00 is self-inverse up to 2(N−1): REDFT00·REDFT00 = 2(N−1)·I ⇒ inv(REDFT00) = (1/(2(N−1)))·REDFT00.
+function Base.inv(p::R2RPlan{REDFT00_T, T}) where {T}
+    ip = plan_r2r(Vector{T}(undef, p.n), REDFT00)
+    return ScaledR2RPlan(ip, T(1) / (2 * (p.n - 1)))
+end
+Base.:\(p::R2RPlan{REDFT00_T}, x::AbstractVector) = inv(p) * x

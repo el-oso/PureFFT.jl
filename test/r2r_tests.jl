@@ -12,7 +12,7 @@ end
 
 @testitem "tryplan_r2r returns Err for unsupported kind" begin
     using PureFFT, ErrorTypes
-    @test ErrorTypes.is_error(PureFFT.tryplan_r2r(randn(8), REDFT00))
+    @test ErrorTypes.is_error(PureFFT.tryplan_r2r(randn(8), RODFT00))
 end
 
 @testitem "DCT-II (REDFT10) bit-exact vs FFTW + naive (even N)" begin
@@ -73,8 +73,8 @@ end
         # dct! / idct! mutate in place
         xc = copy(x); PD.dct!(xc); @test maximum(abs.(xc .- PD.dct(x))) < tol(T)
     end
-    @test_throws ArgumentError plan_r2r(randn(8), REDFT00)            # still unsupported → throws
-    @test_throws ArgumentError r2r(randn(8), REDFT00)
+    @test_throws ArgumentError plan_r2r(randn(8), RODFT00)            # still unsupported → throws
+    @test_throws ArgumentError r2r(randn(8), RODFT00)
 end
 
 @testitem "r2r hot path: zero-alloc + dispatch-free" begin
@@ -152,6 +152,30 @@ end
         p10 = plan_r2r(x, RODFT10); @test maximum(abs.((p10 \ (p10*x)) .- x))/max(1,maximum(abs.(x))) < tol(T)
         p01 = plan_r2r(x, RODFT01); @test maximum(abs.((p01 \ (p01*x)) .- x))/max(1,maximum(abs.(x))) < tol(T)
     end
+end
+
+@testitem "DCT-I (REDFT00) bit-exact vs FFTW + naive + self-inverse (F64+F32, even+odd N)" begin
+    using PureFFT, FFTW, ErrorTypes
+    tol(::Type{Float64})=1e-12; tol(::Type{Float32})=1f-4
+    naive_dct1(x)=(N=length(x); [x[1]+((-1)^k)*x[N]+2*sum(x[j+1]*cos(pi*j*k/(N-1)) for j in 1:N-2; init=0.0) for k in 0:N-1])
+    for T in (Float64, Float32), n in (2,3,4,5,8,9,16,17,32)
+        x = randn(T, n)
+        y = unwrap(PureFFT.tryr2r(x, REDFT00))
+        ref = FFTW.r2r(x, FFTW.REDFT00)
+        @test maximum(abs.(y .- ref))/max(1,maximum(abs.(ref))) < tol(T)
+        @test maximum(abs.(y .- T.(naive_dct1(Float64.(x)))))/max(1,maximum(abs.(ref))) < tol(T)
+        # REDFT00 self-inverse up to 2(N−1)
+        @test maximum(abs.(unwrap(PureFFT.tryr2r(y, REDFT00)) .- 2*(n-1) .* x))/max(1,maximum(abs.(x))*n) < tol(T)
+    end
+    # tryplan_r2r returns Ok for REDFT00 (no longer "unsupported")
+    @test !ErrorTypes.is_error(PureFFT.tryplan_r2r(randn(8), REDFT00))
+    # inv / \ : self-inverse with 1/(2(N−1)) scale recovers x
+    for T in (Float64, Float32), n in (4, 8, 17)
+        x = randn(T, n); p = plan_r2r(x, REDFT00)
+        @test maximum(abs.((p \ (p*x)) .- x))/max(1,maximum(abs.(x))) < tol(T)
+    end
+    # size < 2 returns Err
+    @test ErrorTypes.is_error(PureFFT.tryplan_r2r(randn(1), REDFT00))
 end
 
 @testitem "DCT-II parity vs FFTW ≥ 0.96× (even N)" tags=[:perf] begin
