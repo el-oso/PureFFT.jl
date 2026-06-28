@@ -64,6 +64,7 @@ _build_tree(base::Kernel, radixes, fwd::Bool) = RPlan(foldl((k, r) -> _wrap(r, k
 # no radix-2) + a radix-8/4 chain. Used by the pure-pow2 (e≥8) route AND the single-factor-of-3 route below.
 function _pow2_kernel(e::Int, fwd::Bool)
     e == 4 && return B16(fwd)
+    e == 5 && return B32(fwd)
     e == 6 && return B64(fwd)
     e >= 8 || return nothing
     base, m = e % 3 == 0 ? (B512(fwd), e - 9) : (B256(fwd), e - 8)
@@ -79,7 +80,27 @@ end
 # build a kernel tree for n (or nothing if unsupported). fwd = forward.
 function plan_tree(n::Int, fwd::Bool=true)
     p2, p3, p5, rest = factor235(n)
+    p7 = 0; while rest % 7 == 0; rest ÷= 7; p7 += 1; end
     rest == 1 || return nothing
+    # ---- single factor of 7 (2^a·7): no 7^2 base, so carry the lone 7 in ONE radix-7 pass (MR7, reusing
+    # avx_column_butterfly7) over a pure-pow2 leaf. 112=MR7(B16), 224=MR7(B32), 448=MR7(B64), 1792=MR7(B256).
+    if p7 == 1 && p3 == 0 && p5 == 0
+        inner = _pow2_kernel(p2, fwd)
+        return isnothing(inner) ? nothing : RPlan(MR7(inner, fwd))
+    end
+    p7 == 0 || return nothing                           # 7^2+ / 7·(3,5) unsupported → fall back
+    # ---- single factor of 5 (2^a·5): carry the lone 5 in ONE radix-5 pass (MR5) over a pow2 leaf.
+    # 80=MR5(B16), 160=MR5(B32), 320=MR5(B64), 1280=MR5(B256). (B32 leaf supplies the 2^5 block.)
+    if p5 == 1 && p3 == 0
+        inner = _pow2_kernel(p2, fwd)
+        return isnothing(inner) ? nothing : RPlan(MR5(inner, fwd))
+    end
+    # ---- 2^a·3·5 (lone 3 and lone 5): pow2 leaf + one radix-3 then one radix-5 pass.
+    # 240=MR5(MR3(B16)), 480=MR5(MR3(B32)), 960=MR5(MR3(B64)).
+    if p3 == 1 && p5 == 1
+        inner = _pow2_kernel(p2, fwd)
+        return isnothing(inner) ? nothing : RPlan(MR5(MR3(inner, fwd), fwd))
+    end
     # Pure power of two ≥ 256: B256/B512 base + radix-8/4 chain (e≥8 only; smaller pure pow2 keep the
     # existing FFT-specific path — leave p3==0 behavior unchanged).
     if p3 == 0 && p5 == 0
@@ -93,6 +114,7 @@ function plan_tree(n::Int, fwd::Bool=true)
     # Smallest j → largest pow2 inner: 48=MR3(B16), 96=MR6(B16), 192=MR3(B64), 384=MR6(B64), 768=MR3(B256)…
     if p3 == 1 && p5 == 0
         for j in 0:2
+            p2 - j == 5 && continue                     # skip B32 leaf: B16(4×4)+MR6 beats B32(4×8)+MR3 at 96 (measured)
             inner = _pow2_kernel(p2 - j, fwd)
             isnothing(inner) && continue
             outer = j == 0 ? MR3(inner, fwd) : j == 1 ? MR6(inner, fwd) : MR12(inner, fwd)

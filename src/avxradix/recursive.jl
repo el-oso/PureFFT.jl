@@ -69,6 +69,19 @@ end
     @inbounds for f in 0:(length(inp) ÷ 16 - 1); butterfly16!(out, inp, out, 16f, k.tw, k.rot); end  # out = workspace
 end
 
+# ---- leaf: Butterfly32 (4×8 two-phase; needs scratch ≥ its length). The 2^5 leaf the 5/7 routes need
+# (160=MR5(B32), 224=MR7(B32), 240=MR5(MR3(B16)) — and 96=MR3(B32) via the single-3 route). ----
+struct B32 <: Kernel
+    n::Int; tw::Vector{V4f}; rot::V4f
+end
+B32(fwd::Bool) = B32(32, bf32_twiddles(fwd), fwd ? _ROT90_FWD : _ROT90_INV)
+@inline function proc_ip!(k::B32, buf, scr)
+    @inbounds for f in 0:(length(buf) ÷ 32 - 1); butterfly32!(buf, buf, scr, 32f, k.tw, k.rot); end
+end
+@inline function proc_oop!(k::B32, out, inp, scr)
+    @inbounds for f in 0:(length(inp) ÷ 32 - 1); butterfly32!(out, inp, out, 32f, k.tw, k.rot); end  # out = workspace
+end
+
 # ---- leaf: Butterfly64 (8x8, two-phase; needs scratch ≥ its length) ----
 struct B64 <: Kernel
     n::Int; tw::Vector{V4f}; rot::V4f
@@ -155,6 +168,27 @@ end
         ib = o + 2c; ob = oo + 10c
         t = avx_transpose5_packed(avx_load_complex(buf, ib), avx_load_complex(buf, ib + M), avx_load_complex(buf, ib + 2M), avx_load_complex(buf, ib + 3M), avx_load_complex(buf, ib + 4M))
         avx_store_complex!(out, ob, t[1]); avx_store_complex!(out, ob + 2, t[2]); avx_store_complex!(out, ob + 4, t[3]); avx_store_complex!(out, ob + 6, t[4]); avx_store_complex!(out, ob + 8, t[5])
+    end
+end
+# ---- radix-7 passes (reuses verified avx_column_butterfly7) ----
+@inline function _colbf7!(buf, o, ::Val{M}, tw, t0, t1, t2) where {M}
+    @inbounds for c in 0:(M ÷ 2 - 1)
+        ib = o + 2c
+        r = avx_column_butterfly7(avx_load_complex(buf, ib), avx_load_complex(buf, ib + M), avx_load_complex(buf, ib + 2M), avx_load_complex(buf, ib + 3M),
+                                  avx_load_complex(buf, ib + 4M), avx_load_complex(buf, ib + 5M), avx_load_complex(buf, ib + 6M), t0, t1, t2)
+        avx_store_complex!(buf, ib, r[1])
+        avx_store_complex!(buf, ib + M, avx_mul_complex(tw[c * 6 + 1], r[2])); avx_store_complex!(buf, ib + 2M, avx_mul_complex(tw[c * 6 + 2], r[3]))
+        avx_store_complex!(buf, ib + 3M, avx_mul_complex(tw[c * 6 + 3], r[4])); avx_store_complex!(buf, ib + 4M, avx_mul_complex(tw[c * 6 + 4], r[5]))
+        avx_store_complex!(buf, ib + 5M, avx_mul_complex(tw[c * 6 + 5], r[6])); avx_store_complex!(buf, ib + 6M, avx_mul_complex(tw[c * 6 + 6], r[7]))
+    end
+end
+@inline function _trans7!(out, oo, buf, o, ::Val{M}) where {M}
+    @inbounds for c in 0:(M ÷ 2 - 1)
+        ib = o + 2c; ob = oo + 14c
+        t = avx_transpose7_packed(avx_load_complex(buf, ib), avx_load_complex(buf, ib + M), avx_load_complex(buf, ib + 2M), avx_load_complex(buf, ib + 3M),
+                                  avx_load_complex(buf, ib + 4M), avx_load_complex(buf, ib + 5M), avx_load_complex(buf, ib + 6M))
+        avx_store_complex!(out, ob, t[1]); avx_store_complex!(out, ob + 2, t[2]); avx_store_complex!(out, ob + 4, t[3]); avx_store_complex!(out, ob + 6, t[4])
+        avx_store_complex!(out, ob + 8, t[5]); avx_store_complex!(out, ob + 10, t[6]); avx_store_complex!(out, ob + 12, t[7])
     end
 end
 
@@ -408,6 +442,29 @@ end
     @inbounds for f in 0:(cnt - 1); _colbf5!(inp, f * n, Val(M), k.tw, k.t0, k.t1); end
     proc_ip!(k.inner, inp, scr)
     @inbounds for f in 0:(cnt - 1); _trans5!(out, f * n, inp, f * n, Val(M)); end
+end
+
+# ---- MixedRadix7 (R=7) ----
+struct MR7{M, I <: Kernel} <: Kernel
+    inner::I; tw::Vector{V4f}; t0::V4f; t1::V4f; t2::V4f
+end
+klen(::MR7{M}) where {M} = 7M
+function MR7(inner::Kernel, fwd::Bool)
+    M = klen(inner)
+    MR7{M, typeof(inner)}(inner, mr_twiddles(7, M, 7M, fwd),
+        avx_broadcast_twiddle(1, 7, fwd), avx_broadcast_twiddle(2, 7, fwd), avx_broadcast_twiddle(3, 7, fwd))
+end
+@inline function proc_ip!(k::MR7{M}, buf, scr) where {M}
+    n = 7M; cnt = length(buf) ÷ n
+    @inbounds for f in 0:(cnt - 1); _colbf7!(buf, f * n, Val(M), k.tw, k.t0, k.t1, k.t2); end
+    proc_oop!(k.inner, scr, buf, scr)
+    @inbounds for f in 0:(cnt - 1); _trans7!(buf, f * n, scr, f * n, Val(M)); end
+end
+@inline function proc_oop!(k::MR7{M}, out, inp, scr) where {M}
+    n = 7M; cnt = length(inp) ÷ n
+    @inbounds for f in 0:(cnt - 1); _colbf7!(inp, f * n, Val(M), k.tw, k.t0, k.t1, k.t2); end
+    proc_ip!(k.inner, inp, scr)
+    @inbounds for f in 0:(cnt - 1); _trans7!(out, f * n, inp, f * n, Val(M)); end
 end
 
 # ---- top-level: FFT(x) in place. ONE scratch buffer of size n (inplace_scratch_len). ----

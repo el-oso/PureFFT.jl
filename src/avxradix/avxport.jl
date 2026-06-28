@@ -325,6 +325,12 @@ end
     (avx_unpacklo_complex(r1, r2), avx_unpacklo_complex(r3, r4), _blend03(r1, r5),
      avx_unpackhi_complex(r2, r3), avx_unpackhi_complex(r4, r5))
 end
+# transpose7_packed (__m256d): 2×7 packed transpose, same odd-radix pattern as transpose5 — pack the
+# 7 low-complex lanes then the 7 high-complex lanes into 7 V4f (blend03 bridges lane 7-lo / 0-hi).
+@inline function avx_transpose7_packed(r1::V4f, r2::V4f, r3::V4f, r4::V4f, r5::V4f, r6::V4f, r7::V4f)
+    (avx_unpacklo_complex(r1, r2), avx_unpacklo_complex(r3, r4), avx_unpacklo_complex(r5, r6), _blend03(r1, r7),
+     avx_unpackhi_complex(r2, r3), avx_unpackhi_complex(r4, r5), avx_unpackhi_complex(r6, r7))
+end
 
 # ---- broadcast / twiddles (broadcast_complex_elements, twiddles::compute_twiddle) ----
 @inline avx_broadcast_complex(re::Float64, im::Float64) = V4f((re, im, re, im))

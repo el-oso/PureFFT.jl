@@ -86,6 +86,32 @@ function butterfly16!(out, inp, scr, base::Int, tw::Vector{V4f}, rot::V4f)  # ou
     end
 end
 
+# ===== Butterfly32: 4x8, two-phase (faithful scale of butterfly16! to a non-square 4×8) =====
+# phase1: col bf4 (len-4 down each of 8 cols) + twiddle + transpose4 → scr (8×4 transposed layout);
+# phase2: col bf8 (len-8 across the 4 rows) scr → out. Output index 4·k2+k1. needs scratch ≥ its length.
+# twiddles: chunk(cs*2, r, 32) for cs in 0:3, r in 1:3 → 12 entries, index 3cs+r (mirrors bf16_twiddles).
+bf32_twiddles(fwd) = [avx_mixedradix_twiddle_chunk(cs * 2, r, 32, fwd) for cs in 0:3 for r in 1:3]
+@inline _bf32_ld4(buf, b) = (avx_load_complex(buf, b), avx_load_complex(buf, b + 8), avx_load_complex(buf, b + 16), avx_load_complex(buf, b + 24))
+@inline _bf32_ld8(buf, b) = (avx_load_complex(buf, b), avx_load_complex(buf, b + 4), avx_load_complex(buf, b + 8), avx_load_complex(buf, b + 12),
+                             avx_load_complex(buf, b + 16), avx_load_complex(buf, b + 20), avx_load_complex(buf, b + 24), avx_load_complex(buf, b + 28))
+function butterfly32!(out, inp, scr, base::Int, tw::Vector{V4f}, rot::V4f)  # out===scr ⇒ in-place ok
+    @inbounds for cs in 0:3                                  # phase 1: 8× col bf4 + twiddle + transpose4 → scr
+        b = base + cs * 2
+        m = avx_column_butterfly4(_bf32_ld4(inp, b)..., rot)
+        t = avx_transpose4_packed(m[1], avx_mul_complex(tw[3cs + 1], m[2]),
+                                  avx_mul_complex(tw[3cs + 2], m[3]), avx_mul_complex(tw[3cs + 3], m[4]))
+        ob = base + cs * 8
+        avx_store_complex!(scr, ob, t[1]); avx_store_complex!(scr, ob + 2, t[2])
+        avx_store_complex!(scr, ob + 4, t[3]); avx_store_complex!(scr, ob + 6, t[4])
+    end
+    @inbounds for cs in 0:1                                  # phase 2: 4× col bf8 (scr → out)
+        b = base + cs * 2
+        m = avx_column_butterfly8(_bf32_ld8(scr, b)..., rot)
+        avx_store_complex!(out, b, m[1]); avx_store_complex!(out, b + 4, m[2]); avx_store_complex!(out, b + 8, m[3]); avx_store_complex!(out, b + 12, m[4])
+        avx_store_complex!(out, b + 16, m[5]); avx_store_complex!(out, b + 20, m[6]); avx_store_complex!(out, b + 24, m[7]); avx_store_complex!(out, b + 28, m[8])
+    end
+end
+
 # ===== Butterfly64: 8x8, two-phase (col+twiddle+transpose, then row) =====
 # twiddles: gen_butterfly_twiddles_separated_columns!(8,8) = 28 = [mixedradix_twiddle_chunk(cs*2, r, 64)
 # for cs in 0:3, r in 1:7], index [7cs + r].
