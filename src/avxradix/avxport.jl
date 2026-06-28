@@ -197,6 +197,53 @@ end
     (output0, output1, output2, output3, output4, output5, output6)
 end
 
+# ---- column_butterfly13, width-generic ----
+# Same odd-prime real-FFT structure as column_butterfly5/7, with 6 conjugate pairs (1,12)(2,11)…(6,7) and
+# tw1..tw6 = W13^1..W13^6 (broadcast complex). Output-k coefficient of pair m is W13^{km}: cos via symmetry
+# cos(2πj/13)=cos(2π(13-j)/13), sin flips sign when (km mod 13) > 6. Straight-line body generated from the
+# (index,sign) tables and verified bit-exact vs a reference DFT (scratchpad/gen13.jl, max-err ~1.5e-14, fwd+inv).
+@inline function avx_column_butterfly13(r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, tw1, tw2, tw3, tw4, tw5, tw6)
+    sum1, diff1 = avx_butterfly2(r2, r13)
+    sum2, diff2 = avx_butterfly2(r3, r12)
+    sum3, diff3 = avx_butterfly2(r4, r11)
+    sum4, diff4 = avx_butterfly2(r5, r10)
+    sum5, diff5 = avx_butterfly2(r6, r9)
+    sum6, diff6 = avx_butterfly2(r7, r8)
+    rot = _rot90_inv(r1)
+    d1 = avx_rotate90(diff1, rot)
+    d2 = avx_rotate90(diff2, rot)
+    d3 = avx_rotate90(diff3, rot)
+    d4 = avx_rotate90(diff4, rot)
+    d5 = avx_rotate90(diff5, rot)
+    d6 = avx_rotate90(diff6, rot)
+    output0 = avx_add(r1, avx_add(avx_add(avx_add(avx_add(avx_add(sum1, sum2), sum3), sum4), sum5), sum6))
+    t1r, t1i = avx_duplicate_complex(tw1)
+    t2r, t2i = avx_duplicate_complex(tw2)
+    t3r, t3i = avx_duplicate_complex(tw3)
+    t4r, t4i = avx_duplicate_complex(tw4)
+    t5r, t5i = avx_duplicate_complex(tw5)
+    t6r, t6i = avx_duplicate_complex(tw6)
+    re1 = avx_fmadd(t6r, sum6, avx_fmadd(t5r, sum5, avx_fmadd(t4r, sum4, avx_fmadd(t3r, sum3, avx_fmadd(t2r, sum2, avx_fmadd(t1r, sum1, r1))))))
+    im1 = avx_fmadd(t6i, d6, avx_fmadd(t5i, d5, avx_fmadd(t4i, d4, avx_fmadd(t3i, d3, avx_fmadd(t2i, d2, avx_mul(t1i, d1))))))
+    re2 = avx_fmadd(t1r, sum6, avx_fmadd(t3r, sum5, avx_fmadd(t5r, sum4, avx_fmadd(t6r, sum3, avx_fmadd(t4r, sum2, avx_fmadd(t2r, sum1, r1))))))
+    im2 = avx_fnmadd(t1i, d6, avx_fnmadd(t3i, d5, avx_fnmadd(t5i, d4, avx_fmadd(t6i, d3, avx_fmadd(t4i, d2, avx_mul(t2i, d1))))))
+    re3 = avx_fmadd(t5r, sum6, avx_fmadd(t2r, sum5, avx_fmadd(t1r, sum4, avx_fmadd(t4r, sum3, avx_fmadd(t6r, sum2, avx_fmadd(t3r, sum1, r1))))))
+    im3 = avx_fmadd(t5i, d6, avx_fmadd(t2i, d5, avx_fnmadd(t1i, d4, avx_fnmadd(t4i, d3, avx_fmadd(t6i, d2, avx_mul(t3i, d1))))))
+    re4 = avx_fmadd(t2r, sum6, avx_fmadd(t6r, sum5, avx_fmadd(t3r, sum4, avx_fmadd(t1r, sum3, avx_fmadd(t5r, sum2, avx_fmadd(t4r, sum1, r1))))))
+    im4 = avx_fnmadd(t2i, d6, avx_fnmadd(t6i, d5, avx_fmadd(t3i, d4, avx_fnmadd(t1i, d3, avx_fnmadd(t5i, d2, avx_mul(t4i, d1))))))
+    re5 = avx_fmadd(t4r, sum6, avx_fmadd(t1r, sum5, avx_fmadd(t6r, sum4, avx_fmadd(t2r, sum3, avx_fmadd(t3r, sum2, avx_fmadd(t5r, sum1, r1))))))
+    im5 = avx_fmadd(t4i, d6, avx_fnmadd(t1i, d5, avx_fnmadd(t6i, d4, avx_fmadd(t2i, d3, avx_fnmadd(t3i, d2, avx_mul(t5i, d1))))))
+    re6 = avx_fmadd(t3r, sum6, avx_fmadd(t4r, sum5, avx_fmadd(t2r, sum4, avx_fmadd(t5r, sum3, avx_fmadd(t1r, sum2, avx_fmadd(t6r, sum1, r1))))))
+    im6 = avx_fnmadd(t3i, d6, avx_fmadd(t4i, d5, avx_fnmadd(t2i, d4, avx_fmadd(t5i, d3, avx_fnmadd(t1i, d2, avx_mul(t6i, d1))))))
+    output1, output12 = avx_butterfly2(re1, im1)
+    output2, output11 = avx_butterfly2(re2, im2)
+    output3, output10 = avx_butterfly2(re3, im3)
+    output4, output9 = avx_butterfly2(re4, im4)
+    output5, output8 = avx_butterfly2(re5, im5)
+    output6, output7 = avx_butterfly2(re6, im6)
+    (output0, output1, output2, output3, output4, output5, output6, output7, output8, output9, output10, output11, output12)
+end
+
 # column_butterfly4: rotation = make_rotation90(FFT direction) — _ROT90_FWD for forward.
 @inline function avx_column_butterfly4(r1, r2, r3, r4, rotation)
     mid0, mid2 = avx_butterfly2(r1, r3)
@@ -330,6 +377,14 @@ end
 @inline function avx_transpose7_packed(r1::V4f, r2::V4f, r3::V4f, r4::V4f, r5::V4f, r6::V4f, r7::V4f)
     (avx_unpacklo_complex(r1, r2), avx_unpacklo_complex(r3, r4), avx_unpacklo_complex(r5, r6), _blend03(r1, r7),
      avx_unpackhi_complex(r2, r3), avx_unpackhi_complex(r4, r5), avx_unpackhi_complex(r6, r7))
+end
+# transpose13_packed (__m256d): same odd-radix pattern as transpose5/7 with 6 unpacklo + blend03 + 6 unpackhi.
+@inline function avx_transpose13_packed(r1::V4f, r2::V4f, r3::V4f, r4::V4f, r5::V4f, r6::V4f, r7::V4f,
+                                        r8::V4f, r9::V4f, r10::V4f, r11::V4f, r12::V4f, r13::V4f)
+    (avx_unpacklo_complex(r1, r2), avx_unpacklo_complex(r3, r4), avx_unpacklo_complex(r5, r6),
+     avx_unpacklo_complex(r7, r8), avx_unpacklo_complex(r9, r10), avx_unpacklo_complex(r11, r12), _blend03(r1, r13),
+     avx_unpackhi_complex(r2, r3), avx_unpackhi_complex(r4, r5), avx_unpackhi_complex(r6, r7),
+     avx_unpackhi_complex(r8, r9), avx_unpackhi_complex(r10, r11), avx_unpackhi_complex(r12, r13))
 end
 
 # ---- broadcast / twiddles (broadcast_complex_elements, twiddles::compute_twiddle) ----

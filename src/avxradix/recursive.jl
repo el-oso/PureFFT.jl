@@ -480,6 +480,60 @@ end
     @inbounds for f in 0:(cnt - 1); _trans7!(out, f * n, inp, f * n, Val(M)); end
 end
 
+# ---- radix-13 passes (reuses verified avx_column_butterfly13) ----
+@inline function _colbf13!(buf, o, ::Val{M}, tw, t0, t1, t2, t3, t4, t5) where {M}
+    @inbounds for c in 0:(M ÷ 2 - 1)
+        ib = o + 2c
+        r = avx_column_butterfly13(avx_load_complex(buf, ib), avx_load_complex(buf, ib + M), avx_load_complex(buf, ib + 2M), avx_load_complex(buf, ib + 3M),
+                                   avx_load_complex(buf, ib + 4M), avx_load_complex(buf, ib + 5M), avx_load_complex(buf, ib + 6M), avx_load_complex(buf, ib + 7M),
+                                   avx_load_complex(buf, ib + 8M), avx_load_complex(buf, ib + 9M), avx_load_complex(buf, ib + 10M), avx_load_complex(buf, ib + 11M),
+                                   avx_load_complex(buf, ib + 12M), t0, t1, t2, t3, t4, t5)
+        avx_store_complex!(buf, ib, r[1])
+        avx_store_complex!(buf, ib + M, avx_mul_complex(tw[c * 12 + 1], r[2])); avx_store_complex!(buf, ib + 2M, avx_mul_complex(tw[c * 12 + 2], r[3]))
+        avx_store_complex!(buf, ib + 3M, avx_mul_complex(tw[c * 12 + 3], r[4])); avx_store_complex!(buf, ib + 4M, avx_mul_complex(tw[c * 12 + 4], r[5]))
+        avx_store_complex!(buf, ib + 5M, avx_mul_complex(tw[c * 12 + 5], r[6])); avx_store_complex!(buf, ib + 6M, avx_mul_complex(tw[c * 12 + 6], r[7]))
+        avx_store_complex!(buf, ib + 7M, avx_mul_complex(tw[c * 12 + 7], r[8])); avx_store_complex!(buf, ib + 8M, avx_mul_complex(tw[c * 12 + 8], r[9]))
+        avx_store_complex!(buf, ib + 9M, avx_mul_complex(tw[c * 12 + 9], r[10])); avx_store_complex!(buf, ib + 10M, avx_mul_complex(tw[c * 12 + 10], r[11]))
+        avx_store_complex!(buf, ib + 11M, avx_mul_complex(tw[c * 12 + 11], r[12])); avx_store_complex!(buf, ib + 12M, avx_mul_complex(tw[c * 12 + 12], r[13]))
+    end
+end
+@inline function _trans13!(out, oo, buf, o, ::Val{M}) where {M}
+    @inbounds for c in 0:(M ÷ 2 - 1)
+        ib = o + 2c; ob = oo + 26c
+        t = avx_transpose13_packed(avx_load_complex(buf, ib), avx_load_complex(buf, ib + M), avx_load_complex(buf, ib + 2M), avx_load_complex(buf, ib + 3M),
+                                   avx_load_complex(buf, ib + 4M), avx_load_complex(buf, ib + 5M), avx_load_complex(buf, ib + 6M), avx_load_complex(buf, ib + 7M),
+                                   avx_load_complex(buf, ib + 8M), avx_load_complex(buf, ib + 9M), avx_load_complex(buf, ib + 10M), avx_load_complex(buf, ib + 11M),
+                                   avx_load_complex(buf, ib + 12M))
+        avx_store_complex!(out, ob, t[1]); avx_store_complex!(out, ob + 2, t[2]); avx_store_complex!(out, ob + 4, t[3]); avx_store_complex!(out, ob + 6, t[4])
+        avx_store_complex!(out, ob + 8, t[5]); avx_store_complex!(out, ob + 10, t[6]); avx_store_complex!(out, ob + 12, t[7]); avx_store_complex!(out, ob + 14, t[8])
+        avx_store_complex!(out, ob + 16, t[9]); avx_store_complex!(out, ob + 18, t[10]); avx_store_complex!(out, ob + 20, t[11]); avx_store_complex!(out, ob + 22, t[12]); avx_store_complex!(out, ob + 24, t[13])
+    end
+end
+
+# ---- MixedRadix13 (R=13) ----
+struct MR13{M, I <: Kernel} <: Kernel
+    inner::I; tw::Vector{V4f}; t0::V4f; t1::V4f; t2::V4f; t3::V4f; t4::V4f; t5::V4f
+end
+klen(::MR13{M}) where {M} = 13M
+function MR13(inner::Kernel, fwd::Bool)
+    M = klen(inner)
+    MR13{M, typeof(inner)}(inner, mr_twiddles(13, M, 13M, fwd),
+        avx_broadcast_twiddle(1, 13, fwd), avx_broadcast_twiddle(2, 13, fwd), avx_broadcast_twiddle(3, 13, fwd),
+        avx_broadcast_twiddle(4, 13, fwd), avx_broadcast_twiddle(5, 13, fwd), avx_broadcast_twiddle(6, 13, fwd))
+end
+@inline function proc_ip!(k::MR13{M}, buf, scr) where {M}
+    n = 13M; cnt = length(buf) ÷ n
+    @inbounds for f in 0:(cnt - 1); _colbf13!(buf, f * n, Val(M), k.tw, k.t0, k.t1, k.t2, k.t3, k.t4, k.t5); end
+    proc_oop!(k.inner, scr, buf, scr)
+    @inbounds for f in 0:(cnt - 1); _trans13!(buf, f * n, scr, f * n, Val(M)); end
+end
+@inline function proc_oop!(k::MR13{M}, out, inp, scr) where {M}
+    n = 13M; cnt = length(inp) ÷ n
+    @inbounds for f in 0:(cnt - 1); _colbf13!(inp, f * n, Val(M), k.tw, k.t0, k.t1, k.t2, k.t3, k.t4, k.t5); end
+    proc_ip!(k.inner, inp, scr)
+    @inbounds for f in 0:(cnt - 1); _trans13!(out, f * n, inp, f * n, Val(M)); end
+end
+
 # ---- top-level: FFT(x) in place. ONE scratch buffer of size n (inplace_scratch_len). ----
 struct RPlan{K <: Kernel, T}; k::K; scr::Vector{Complex{T}}; end
 RPlan(k::Kernel) = RPlan(k, Vector{Complex{keltype(k)}}(undef, klen(k)))
