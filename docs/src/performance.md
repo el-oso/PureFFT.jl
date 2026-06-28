@@ -290,6 +290,16 @@ Hard-won lessons from pushing the faithful port's non-power-of-two coverage to �
   `julia-sched-mwe/` reproducer shows a matched radix-9 butterfly *and* full step compile identically and
   run ≥ Rust in Julia. The gap is rustfft's *implementation* being more optimized than PureFFT's, i.e.
   recoverable by matching its algorithm (decomposition / in-place / transpose), not a fundamental Julia floor.
+  **Update 2 (the bigger one):** the ~0.85–0.92× is *vs rustfft*; **vs FFTW the SIMD radix-9 path WINS on
+  3-heavy sizes** (6561=3⁸ at **1.40×**, 2187/19683 at 1.14–1.28×) — FFTW is weak on pure powers of three.
+  The earlier assumption that pure-3ⁿ must fall to the slow recursive plan was a **routing/correctness bug**,
+  not the floor: every SIMD radix stage packs 2 complex columns per `Vec{4}` (the `0:M÷2-1` loop), so an
+  *odd* inner column count (which pure-3ⁿ always has: 9, 81, 729) dropped the last column (rel-err ~1). The
+  fix is the partial-`V2f` odd-column tail (the same idiom `butterfly9!`/`butterfly18!` already use) applied
+  to the `MR9`/`MR3` cross-pass + admitting pure-3ⁿ to the fast radix-9 tree in `plan_tree`. So 3-heavy
+  non-pow2 is no longer a floor *vs FFTW* — the routing bug was masking a winning path. (Several other
+  non-pow2 "floors" were the same class of `plan_tree`-returned-`nothing` bug: single-factor-3, 2ᵃ·5ᵐ,
+  lone-13 — see the `nonpow2-1d-perf` plan; the geomean on the prompt's hard sizes went 0.84 → ~1.1.)
 - **One scratch buffer, not per-level.** RustFFT's in-place/out-of-place alternation reuses a *single*
   size-n scratch at every recursion level (pass `scr`, not `buf`, as the inner's scratch). Allocating a
   distinct buffer per level (depth×n) blows the working set out of cache and makes the per-level gap

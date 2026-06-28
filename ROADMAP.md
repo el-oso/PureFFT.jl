@@ -48,6 +48,17 @@ Status + planned work. This is the canonical, checked-in roadmap (human- and age
   native redesign using `vpermt2pd` to cut shuffle count could lift this materially. High-risk research.
 
 ### Non-pow2 coverage / parity
+- **1-D non-pow2 vs FFTW — geomean 0.84 → ~1.1 (DONE; was a cluster of routing bugs, not floors).**
+  An external benchmark prompt (`docs/superpowers/plans/2026-06-28-nonpow2-1d-perf.md`) flagged a ~16% gap;
+  the slow sizes were each falling to the slow `RecursiveMixedRadixPlan` because the fast `AvxMixedRadixPlan`
+  `plan_tree` returned `nothing`. Fixed: **single-factor-3** (96: 0.63→1.3), **2ᵃ·5ᵐ** (1000/10000: 0.7→1.0,
+  B8 leaf + radix-5 chain), **lone large-prime-13** (65520: 0.69→1.13, new SIMD `avx_column_butterfly13`+MR13
+  + a smooth-tree-carries-7/13 refactor), **Bluestein smooth-M** (99991: 0.68→0.98 — convolution size is now
+  the smallest 2·3·5-smooth ≥2n−1, not nextpow2), and **pure-3ⁿ radix-9** (6561: 0.84→**1.40**) — the latter
+  via a **partial-`V2f` odd-column tail** on MR9/MR3 (the SIMD radix-9 stage needs even column counts; pure-3ⁿ
+  is always odd and was dropping the last column → it was routed to recursive). All bit-exact (≤1.6e-16), no
+  pow2 regression. Remaining sub-gate: the genuine **radix-5/9 shuffle floor vs *rustfft*** (still ~0.90 on a
+  few high-5-power sizes) and **radix-11** sizes (no codelet — Bluestein, niche).
 - **More packed bases** — `Butterfly18` **DONE** (B18 = 2·3², closed 2^odd·3²·5); pow2 `Butterfly256/512`
   **DONE** (closed the odd-power gap). Still to port: `Butterfly{24,27,32}` (dual-width packed path) + the
   `avx_planner` base-selection (`base_fn`) so PureFFT's decompositions match RustFFT's per size. Lifts the
