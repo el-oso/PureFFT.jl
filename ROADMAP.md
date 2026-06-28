@@ -121,8 +121,13 @@ Status + planned work. This is the canonical, checked-in roadmap (human- and age
     Beating it needs a hand-written FFTW-class length-128 F64 codelet — niche.
   - **At-gate within noise:** F64 64³ (≈0.93–0.99) and 512² (≈0.96–1.01) — bandwidth-bound; a register
     codelet is infeasible at n=512 (sub-DFTs exceed the zmm file).
-  - **Remaining (not blocking):** Rader for **prime** dims (smooth is done); a fused real N-D pass for F64
-    rfft small shapes.
+  - **Batched Rader for prime dims — DONE** (branch `feat/ndim-rader`): a `BatchedRaderDim` runs a prime
+    strided dim p (smooth p−1) as a batched length-(p−1) cyclic convolution on the batched kernel, no
+    transpose. All prime shapes clear (127² 1.9×, 251² 1.7×, 113³ 1.95/3.3×, 256×127 2.3×) and beat the old
+    transpose path 1.2–1.46×. So **non-pow2 N-D coverage is complete**: pow2 + 2·3·5·7-smooth + Rader-primes
+    all batched. **27/28 benchmarked shapes ≥ 0.96×** (only F64 128² floors).
+  - **Remaining (not blocking):** a fused real N-D pass for F64 rfft small shapes (narrow-F64 real-codelet
+    floor, same class as F64 128²).
   - Spec: `docs/superpowers/specs/2026-06-27-ndim-fft-design.md`; bench: `bench/run_compare_ndim.jl` +
     `bench/run_compare_rndim.jl`.
 - **Multi-threading** — single-thread only (deliberate for the kernel investigation; a real library wants
