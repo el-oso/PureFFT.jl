@@ -85,6 +85,40 @@ function _apply!(p::R2RPlan{REDFT00_T, T, P}, y::AbstractVector{T}, x::AbstractV
     return y
 end
 
+# ── DST-I (RODFT00) — odd-extension real-FFT ─────────────────────────────────
+# FFTW RODFT00 (unnormalized): y_k = 2·Σ_{j=0}^{N−1} x_j sin(π(j+1)(k+1)/(N+1)), k=0..N-1.
+# Reduction: build the odd (antisymmetric) extension
+#   o = [0, x_0, x_1, …, x_{N−1}, 0, −x_{N−1}, …, −x_0]  of length M = 2(N+1),
+# run length-M real FFT, take y_k = −Im(Ô_{k+1}) for k=0..N−1 (0-indexed; Julia: −imag(O[k+2])).
+# The half-spectrum has M/2+1 = N+2 entries; only indices 2..N+1 are used. Self-inverse: 2(N+1)·I.
+function _build_r2r(::RODFT00_T, ::Type{T}, n::Int) where {T}
+    n >= 1 || return Result{R2RPlan, R2RError}(Err(R2RError(ERR_SIZE_TOO_SMALL, "RODFT00 needs n≥1")))
+    M = 2 * (n + 1)
+    inner = plan_prfft(T, M)
+    rbuf  = Vector{T}(undef, M)                  # extension buffer length M
+    cbuf  = Vector{Complex{T}}(undef, n + 2)     # half-spectrum (M/2+1 = n+2)
+    plan  = R2RPlan{RODFT00_T, T, typeof(inner)}(n, inner, Complex{T}[], Complex{T}[], rbuf, cbuf)
+    return Result{R2RPlan, R2RError}(Ok(plan))
+end
+
+# Apply: fill odd extension o from x, real FFT → cbuf, y[k+1] = −imag(O[k+2]) for k=0..N−1.
+function _apply!(p::R2RPlan{RODFT00_T, T, P}, y::AbstractVector{T}, x::AbstractVector{<:Real}) where {T, P <: RealFFTPlan}
+    n = p.n; o = p.rbuf; O = p.cbuf
+    o[1] = zero(T)                               # leading zero
+    @inbounds for j in 1:n
+        o[j + 1] = T(x[j])                      # x_0 … x_{N−1}
+    end
+    o[n + 2] = zero(T)                           # middle zero
+    @inbounds for j in 1:n
+        o[n + 2 + j] = -T(x[n + 1 - j])        # −x_{N−1} … −x_0 (antisymmetric tail)
+    end
+    apply_rfft!(p.inner, o, O)                   # O[1..n+2] = half-spectrum
+    @inbounds for k in 0:(n - 1)
+        y[k + 1] = -imag(O[k + 2])
+    end
+    return y
+end
+
 # ── DCT-II (REDFT10) — even-N real-FFT route (Makhoul) ───────────────────────
 # FFTW REDFT10 (unnormalized): y_k = 2·Σ_j x_j·cos(π(2j+1)k/(2N)), k=0..N-1.
 # DCT-II post-twiddle: W_k = exp(-iπk/2N), k = 0..n-1.
@@ -505,3 +539,9 @@ function Base.inv(p::R2RPlan{REDFT00_T, T}) where {T}
     return ScaledR2RPlan(ip, T(1) / (2 * (p.n - 1)))
 end
 Base.:\(p::R2RPlan{REDFT00_T}, x::AbstractVector) = inv(p) * x
+# RODFT00 is self-inverse up to 2(N+1): RODFT00·RODFT00 = 2(N+1)·I ⇒ inv(RODFT00) = (1/(2(N+1)))·RODFT00.
+function Base.inv(p::R2RPlan{RODFT00_T, T}) where {T}
+    ip = plan_r2r(Vector{T}(undef, p.n), RODFT00)
+    return ScaledR2RPlan(ip, T(1) / (2 * (p.n + 1)))
+end
+Base.:\(p::R2RPlan{RODFT00_T}, x::AbstractVector) = inv(p) * x

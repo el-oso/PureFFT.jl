@@ -10,9 +10,11 @@
     @test PureFFT.R2RError(PureFFT.ERR_UNSUPPORTED_KIND, "x") isa PureFFT.R2RError
 end
 
-@testitem "tryplan_r2r returns Err for unsupported kind" begin
+@testitem "tryplan_r2r returns Ok for all 8 implemented kinds" begin
     using PureFFT, ErrorTypes
-    @test ErrorTypes.is_error(PureFFT.tryplan_r2r(randn(8), RODFT00))
+    for k in (REDFT00, REDFT10, REDFT01, REDFT11, RODFT00, RODFT10, RODFT01, RODFT11)
+        @test !ErrorTypes.is_error(PureFFT.tryplan_r2r(randn(8), k))
+    end
 end
 
 @testitem "DCT-II (REDFT10) bit-exact vs FFTW + naive (even N)" begin
@@ -73,8 +75,8 @@ end
         # dct! / idct! mutate in place
         xc = copy(x); PD.dct!(xc); @test maximum(abs.(xc .- PD.dct(x))) < tol(T)
     end
-    @test_throws ArgumentError plan_r2r(randn(8), RODFT00)            # still unsupported → throws
-    @test_throws ArgumentError r2r(randn(8), RODFT00)
+    @test_throws ArgumentError plan_r2r(randn(1), REDFT00)            # n<2 size error → throws
+    @test_throws ArgumentError r2r(randn(1), REDFT00)
 end
 
 @testitem "r2r hot path: zero-alloc + dispatch-free" begin
@@ -198,4 +200,27 @@ end
             @test_skip tf/tp ≥ 0.96      # under forced bounds-checks (Pkg.test default) the measurement is unfair
         end
     end
+end
+
+@testitem "DST-I (RODFT00) bit-exact vs FFTW + naive + self-inverse (F64+F32, even+odd N)" begin
+    using PureFFT, FFTW, ErrorTypes
+    tol(::Type{Float64})=1e-12; tol(::Type{Float32})=1f-4
+    naive_dst1(x)=(N=length(x); [2*sum(x[j+1]*sin(pi*(j+1)*(k+1)/(N+1)) for j in 0:N-1) for k in 0:N-1])
+    for T in (Float64, Float32), n in (1,2,3,4,5,8,9,16,17,32)
+        x = randn(T, n)
+        y = unwrap(PureFFT.tryr2r(x, RODFT00))
+        @test maximum(abs.(y .- FFTW.r2r(x, FFTW.RODFT00)))/max(1,maximum(abs.(x))*n) < tol(T)
+        @test maximum(abs.(y .- T.(naive_dst1(Float64.(x)))))/max(1,maximum(abs.(x))*n) < tol(T)  # independent ref
+        # RODFT00 self-inverse up to 2(N+1)
+        @test maximum(abs.(unwrap(PureFFT.tryr2r(y, RODFT00)) .- 2*(n+1) .* x))/max(1,maximum(abs.(x))*n) < tol(T)
+    end
+    # inv / \ : self-inverse with 1/(2(N+1)) scale recovers x
+    for T in (Float64, Float32), n in (4, 8, 17)
+        x = randn(T, n); p = plan_r2r(x, RODFT00)
+        @test maximum(abs.((p \ (p*x)) .- x))/max(1,maximum(abs.(x))) < tol(T)
+    end
+    # tryplan_r2r returns Ok for RODFT00
+    @test !ErrorTypes.is_error(PureFFT.tryplan_r2r(randn(8), RODFT00))
+    # size < 1 returns Err
+    @test ErrorTypes.is_error(PureFFT.tryplan_r2r(Float64[], RODFT00))
 end
