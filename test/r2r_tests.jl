@@ -133,6 +133,27 @@ end
     end
 end
 
+@testitem "DST-III (RODFT01) bit-exact vs FFTW + naive + II↔III round-trip + inv/\\ (F64+F32, even+odd N)" begin
+    using PureFFT, FFTW, ErrorTypes, LinearAlgebra
+    tol(::Type{Float64})=1e-12; tol(::Type{Float32})=1f-4
+    naive_dst3(x) = (N=length(x); [((-1)^k)*x[N] + 2*sum((x[j+1]*sin(pi*(j+1)*(2k+1)/(2N)) for j in 0:N-2); init=0.0) for k in 0:N-1])
+    for T in (Float64, Float32), n in (1,2,3,4,5,8,9,16,17,32)   # even N → real-IFFT route, odd N → complex fallback
+        x = randn(T, n)
+        y = unwrap(PureFFT.tryr2r(x, RODFT01))
+        @test maximum(abs.(y .- FFTW.r2r(x, FFTW.RODFT01)))/max(1,maximum(abs.(x))*n) < tol(T)
+        @test maximum(abs.(y .- T.(naive_dst3(Float64.(x)))))/max(1,maximum(abs.(x))*n) < tol(T)  # independent ref
+        # unnormalized round-trip: RODFT01 ∘ RODFT10 = 2N·identity
+        rt = unwrap(PureFFT.tryr2r(unwrap(PureFFT.tryr2r(x, RODFT10)), RODFT01))
+        @test maximum(abs.(rt ./ (2n) .- x))/max(maximum(abs.(x)), eps(T)) < tol(T)
+    end
+    # inv / \ : the II↔III pair (RODFT01 = 1/2N·inverse of RODFT10) recovers x in BOTH directions
+    for T in (Float64, Float32), n in (4, 8, 17)
+        x = randn(T, n)
+        p10 = plan_r2r(x, RODFT10); @test maximum(abs.((p10 \ (p10*x)) .- x))/max(1,maximum(abs.(x))) < tol(T)
+        p01 = plan_r2r(x, RODFT01); @test maximum(abs.((p01 \ (p01*x)) .- x))/max(1,maximum(abs.(x))) < tol(T)
+    end
+end
+
 @testitem "DCT-II parity vs FFTW ≥ 0.96× (even N)" tags=[:perf] begin
     using PureFFT, FFTW, BenchmarkTools, Statistics, LinearAlgebra
     # `Pkg.test` runs with `--check-bounds=yes`, which overrides @inbounds in PureFFT's Julia

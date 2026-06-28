@@ -243,6 +243,66 @@ function _apply!(p::R2RPlan{RODFT10_T, T, P}, y::AbstractVector{T}, x::AbstractV
     return y
 end
 
+# ── DST-III (RODFT01) — structural inverse of DST-II (mirrors REDFT01↔REDFT10) ──
+# FFTW RODFT01 (unnormalized): y_k = (−1)^k x_{N−1} + 2·Σ_{j=0}^{N−2} x_j sin(π(j+1)(2k+1)/(2N)).
+# Identity (DST-II = R∘DCT-II∘S with R = output reversal, S = input sign (−1)ʲ ⇒ DST-III = S∘DCT-III∘R):
+#   RODFT01(x)_k = (−1)^k · REDFT01(reverse(x))_k.
+# So run REDFT01's EXACT machinery on the reversed input (z_j = x_{N−1−j}), then negate the odd-index
+# outputs. In the V build this just relabels x indices: z_k = x[N−k], z_{N−k} = x[k] (1-based). Buffers /
+# inner plans (plan_pirfft even, inverse complex FFT odd) and the pre-twiddle (conj(W_k)) are identical
+# to REDFT01. The 1/2N inv-pair with RODFT10 is wired below.
+function _build_r2r(::RODFT01_T, ::Type{T}, n::Int) where {T}
+    n >= 1 || return Result{R2RPlan, R2RError}(Err(R2RError(ERR_SIZE_TOO_SMALL, "RODFT01 needs n≥1")))
+    if iseven(n)
+        inner = plan_pirfft(T, n)
+        pre   = _dct_post_tw(T, n)                     # W_k; III uses conj(W_k)
+        rbuf  = Vector{T}(undef, n)
+        cbuf  = Vector{Complex{T}}(undef, n ÷ 2 + 1)
+        plan  = R2RPlan{RODFT01_T, T, typeof(inner)}(n, inner, pre, Complex{T}[], rbuf, cbuf)
+        return Result{R2RPlan, R2RError}(Ok(plan))
+    else
+        inner = plan_pfft(Complex{T}, n; variant = :fast, inverse = true)
+        pre   = _dct_post_tw(T, n)
+        cbuf  = Vector{Complex{T}}(undef, n)           # full complex spectrum
+        plan  = R2RPlan{RODFT01_T, T, typeof(inner)}(n, inner, pre, Complex{T}[], T[], cbuf)
+        return Result{R2RPlan, R2RError}(Ok(plan))
+    end
+end
+
+# Apply (even N): build the scaled half-spectrum V from REVERSED x, apply_irfft! → reordered real v,
+# inverse-reorder into y, NEGATING the odd-index outputs (the (−1)^k sign).
+function _apply!(p::R2RPlan{RODFT01_T, T, P}, y::AbstractVector{T}, x::AbstractVector{<:Real}) where {T, P <: RealIFFTPlan}
+    n = p.n; m = n ÷ 2; W = p.pre; V = p.cbuf; v = p.rbuf
+    @inbounds V[1] = Complex{T}(T(n) * T(x[n]), zero(T))                # N·z_0 = N·x_{N−1}
+    @inbounds for k in 1:m
+        V[k + 1] = T(n) * conj(W[k + 1]) * Complex{T}(T(x[n - k]), -T(x[k]))   # z_k − i·z_{N−k}
+    end
+    apply_irfft!(p.inner, V, v)                                        # v = reordered time domain
+    @inbounds for j in 0:(m - 1)
+        y[2j + 1] = v[j + 1]                                           # even output (+)
+        y[2j + 2] = -v[n - j]                                          # odd output negated (−1)^k
+    end
+    return y
+end
+
+# Apply (odd N): full Hermitian spectrum from REVERSED x, unnormalized inverse FFT, inverse-reorder
+# into y with the odd-index outputs negated.
+function _apply!(p::R2RPlan{RODFT01_T, T, P}, y::AbstractVector{T}, x::AbstractVector{<:Real}) where {T, P <: AbstractFFTPlan}
+    n = p.n; W = p.pre; V = p.cbuf
+    @inbounds V[1] = Complex{T}(T(x[n]), zero(T))                      # z_0 = x_{N−1}
+    @inbounds for k in 1:(n - 1)
+        V[k + 1] = conj(W[k + 1]) * Complex{T}(T(x[n - k]), -T(x[k]))  # z_k − i·z_{N−k}
+    end
+    apply_unnormalized!(p.inner, V)
+    @inbounds for j in 0:((n - 1) ÷ 2)
+        y[2j + 1] = real(V[j + 1])                                     # even output (+)
+    end
+    @inbounds for j in 0:(n ÷ 2 - 1)
+        y[2j + 2] = -real(V[n - j])                                    # odd output negated
+    end
+    return y
+end
+
 # ── DCT-IV (REDFT11) — size-N complex-FFT route (Makhoul-IV) ─────────────────
 # FFTW REDFT11 (unnormalized): y_k = 2·Σ_j x_j·cos(π(2j+1)(2k+1)/(4N)), k=0..N-1.
 # Reduction (any N, even or odd): use the DCT-II even/odd reorder WITH A SIGN FLIP on the
@@ -385,6 +445,17 @@ function Base.inv(p::R2RPlan{REDFT10_T, T}) where {T}
     return ScaledR2RPlan(ip, T(1) / (2 * p.n))
 end
 Base.:\(p::R2RPlan{REDFT10_T}, x::AbstractVector) = inv(p) * x
+# RODFT10·RODFT01 = 2N·I (the DST-II↔III pair) ⇒ each is (1/2N)× the other. Wire BOTH directions.
+function Base.inv(p::R2RPlan{RODFT10_T, T}) where {T}
+    ip = plan_r2r(Vector{T}(undef, p.n), RODFT01)
+    return ScaledR2RPlan(ip, T(1) / (2 * p.n))
+end
+Base.:\(p::R2RPlan{RODFT10_T}, x::AbstractVector) = inv(p) * x
+function Base.inv(p::R2RPlan{RODFT01_T, T}) where {T}
+    ip = plan_r2r(Vector{T}(undef, p.n), RODFT10)
+    return ScaledR2RPlan(ip, T(1) / (2 * p.n))
+end
+Base.:\(p::R2RPlan{RODFT01_T}, x::AbstractVector) = inv(p) * x
 # REDFT11 is self-inverse up to 2N: REDFT11·REDFT11 = 2N·I ⇒ inv(REDFT11) = (1/2N)·REDFT11.
 function Base.inv(p::R2RPlan{REDFT11_T, T}) where {T}
     ip = plan_r2r(Vector{T}(undef, p.n), REDFT11)
