@@ -110,6 +110,16 @@ function _smooth235_kernel(p2::Int, p3::Int, p5::Int, fwd::Bool)
         end
         return nothing
     end
+    # Pure power of 3 (3^p3, no 2s/5s): B9 base (3²) + radix-9 passes (2 threes each) + one radix-3 for an
+    # odd power. Every inner length here is odd, so the MR9/MR3 cross-passes use the partial-V2f odd-column
+    # tail. 81=MR9(B9), 729=MR9²(B9), 6561=MR9³(B9); 27=MR3(B9), 2187=MR3(MR9²(B9)).
+    if p2 == 0 && p5 == 0 && p3 >= 2
+        rem = p3 - 2
+        k::Kernel = B9(fwd)
+        for _ in 1:(rem ÷ 2); k = MR9(k, fwd); end
+        isodd(rem) && (k = MR3(k, fwd))
+        return k
+    end
     p3 >= 2 || return nothing                          # need 3^2 for a base (B36 or B18)
     # Prefer base B36 = 2^2·3^2 when 2^2 is available (consumes two 2s + two 3s).
     if p2 >= 2

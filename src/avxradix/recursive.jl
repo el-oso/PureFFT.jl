@@ -140,12 +140,27 @@ end
         avx_store_complex!(buf, ib + M, avx_mul_complex(tw[c * 2 + 1], r[2]))
         avx_store_complex!(buf, ib + 2M, avx_mul_complex(tw[c * 2 + 2], r[3]))
     end
+    if isodd(M)                                          # leftover column M-1 as a partial V2f (1 complex)
+        @inbounds begin
+            ib = o + (M - 1); tc = (M ÷ 2) * 2
+            r = avx_column_butterfly3(avx_load_partial1(buf, ib), avx_load_partial1(buf, ib + M), avx_load_partial1(buf, ib + 2M), avx_lo(bf3))
+            avx_store_partial1!(buf, ib, r[1])
+            avx_store_partial1!(buf, ib + M, avx_mul_complex(avx_lo(tw[tc + 1]), r[2]))
+            avx_store_partial1!(buf, ib + 2M, avx_mul_complex(avx_lo(tw[tc + 2]), r[3]))
+        end
+    end
 end
 @inline function _trans3!(out, oo, buf, o, ::Val{M}) where {M}
     @inbounds for c in 0:(M ÷ 2 - 1)
         ib = o + 2c; ob = oo + 6c
         t = avx_transpose3_packed(avx_load_complex(buf, ib), avx_load_complex(buf, ib + M), avx_load_complex(buf, ib + 2M))
         avx_store_complex!(out, ob, t[1]); avx_store_complex!(out, ob + 2, t[2]); avx_store_complex!(out, ob + 4, t[3])
+    end
+    if isodd(M)                                          # transpose of a 3x1 column = 3 contiguous complex at oo+3(M-1)
+        @inbounds begin
+            ib = o + (M - 1); ob = oo + 3 * (M - 1)
+            avx_store_partial1!(out, ob, avx_load_partial1(buf, ib)); avx_store_partial1!(out, ob + 1, avx_load_partial1(buf, ib + M)); avx_store_partial1!(out, ob + 2, avx_load_partial1(buf, ib + 2M))
+        end
     end
 end
 @inline function _colbf4!(buf, o, ::Val{M}, tw, rot) where {M}
@@ -259,6 +274,18 @@ end
         avx_store_complex!(buf, ib + 5M, avx_mul_complex(tw[c * 8 + 5], r[6])); avx_store_complex!(buf, ib + 6M, avx_mul_complex(tw[c * 8 + 6], r[7]))
         avx_store_complex!(buf, ib + 7M, avx_mul_complex(tw[c * 8 + 7], r[8])); avx_store_complex!(buf, ib + 8M, avx_mul_complex(tw[c * 8 + 8], r[9]))
     end
+    if isodd(M)                                          # leftover column M-1 as a partial V2f (1 complex)
+        @inbounds begin
+            ib = o + (M - 1); tc = (M ÷ 2) * 8
+            r = avx_column_butterfly9(avx_load_partial1(buf, ib), avx_load_partial1(buf, ib + M), avx_load_partial1(buf, ib + 2M), avx_load_partial1(buf, ib + 3M), avx_load_partial1(buf, ib + 4M),
+                                      avx_load_partial1(buf, ib + 5M), avx_load_partial1(buf, ib + 6M), avx_load_partial1(buf, ib + 7M), avx_load_partial1(buf, ib + 8M), avx_lo(tw1), avx_lo(tw2), avx_lo(tw3), avx_lo(bf3))
+            avx_store_partial1!(buf, ib, r[1])
+            avx_store_partial1!(buf, ib + M, avx_mul_complex(avx_lo(tw[tc + 1]), r[2])); avx_store_partial1!(buf, ib + 2M, avx_mul_complex(avx_lo(tw[tc + 2]), r[3]))
+            avx_store_partial1!(buf, ib + 3M, avx_mul_complex(avx_lo(tw[tc + 3]), r[4])); avx_store_partial1!(buf, ib + 4M, avx_mul_complex(avx_lo(tw[tc + 4]), r[5]))
+            avx_store_partial1!(buf, ib + 5M, avx_mul_complex(avx_lo(tw[tc + 5]), r[6])); avx_store_partial1!(buf, ib + 6M, avx_mul_complex(avx_lo(tw[tc + 6]), r[7]))
+            avx_store_partial1!(buf, ib + 7M, avx_mul_complex(avx_lo(tw[tc + 7]), r[8])); avx_store_partial1!(buf, ib + 8M, avx_mul_complex(avx_lo(tw[tc + 8]), r[9]))
+        end
+    end
 end
 @inline function _trans9!(out, oo, buf, o, ::Val{M}) where {M}
     @inbounds for c in 0:(M ÷ 2 - 1)
@@ -267,6 +294,12 @@ end
                                   avx_load_complex(buf, ib + 5M), avx_load_complex(buf, ib + 6M), avx_load_complex(buf, ib + 7M), avx_load_complex(buf, ib + 8M))
         avx_store_complex!(out, ob, t[1]); avx_store_complex!(out, ob + 2, t[2]); avx_store_complex!(out, ob + 4, t[3]); avx_store_complex!(out, ob + 6, t[4]); avx_store_complex!(out, ob + 8, t[5])
         avx_store_complex!(out, ob + 10, t[6]); avx_store_complex!(out, ob + 12, t[7]); avx_store_complex!(out, ob + 14, t[8]); avx_store_complex!(out, ob + 16, t[9])
+    end
+    if isodd(M)                                          # transpose of a 9x1 column = 9 contiguous complex at oo+9(M-1)
+        @inbounds begin
+            ib = o + (M - 1); ob = oo + 9 * (M - 1)
+            for r in 0:8; avx_store_partial1!(out, ob + r, avx_load_partial1(buf, ib + r * M)); end
+        end
     end
 end
 
@@ -299,8 +332,11 @@ end
 end
 
 # mixedradix twiddles: make_mixedradix_twiddle_chunk(c*2, y, n) for c in 0:M/2-1, y in 1:R-1 → [c*(R-1)+y]
+# Pad to cld(M,2) chunks: for ODD M this adds one trailing chunk whose LO lane is the twiddle for the
+# leftover column M-1 (HI lane = column M, a discarded dummy). The even-M V4f loop never reads it; the
+# odd-M partial-V2f tail reads avx_lo(tw[(M÷2)*(R-1) + y]). Even M ⇒ cld(M,2)==M÷2, unchanged.
 function mr_twiddles(R, M, n, fwd)
-    [avx_mixedradix_twiddle_chunk(c * 2, y, n, fwd) for c in 0:(M ÷ 2 - 1) for y in 1:(R - 1)]
+    [avx_mixedradix_twiddle_chunk(c * 2, y, n, fwd) for c in 0:(cld(M, 2) - 1) for y in 1:(R - 1)]
 end
 
 # ---- MixedRadix3 (R=3) ----
