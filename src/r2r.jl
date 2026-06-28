@@ -181,6 +181,42 @@ function _apply!(p::R2RPlan{REDFT01_T, T, P}, y::AbstractVector{T}, x::AbstractV
     return y
 end
 
+# ── DCT-IV (REDFT11) — size-N complex-FFT route (Makhoul-IV) ─────────────────
+# FFTW REDFT11 (unnormalized): y_k = 2·Σ_j x_j·cos(π(2j+1)(2k+1)/(4N)), k=0..N-1.
+# Reduction (any N, even or odd): use the DCT-II even/odd reorder WITH A SIGN FLIP on the
+# reflected odd samples — v_p = x_{2m} at p=m, v_p = −x_{2m+1} at p=N−1−m — which folds both
+# input groups into the single form Σ_p v_p·cos(π(4p+1)(2k+1)/(4N)). Expanding (4p+1)(2k+1)
+# gives the 8pk term = a clean size-N kernel e^{−2πipk/N}, with separable pre/post twiddles:
+#   pre_p = e^{−iπp/N},  post_k = e^{−iπ(2k+1)/(4N)},  y_k = 2·Re(post_k · FFT(v_p·pre_p)_k).
+# (The naive single-FFT pre/post twiddle leaves an 8pk vs 4pk residual and is NOT DCT-IV — the
+# reorder+sign is what halves the cross term.) Self-inverse: REDFT11·REDFT11 = 2N·I.
+function _build_r2r(::REDFT11_T, ::Type{T}, n::Int) where {T}
+    n >= 1 || return Result{R2RPlan, R2RError}(Err(R2RError(ERR_SIZE_TOO_SMALL, "REDFT11 needs n≥1")))
+    inner = plan_pfft(Complex{T}, n; variant = :fast, inverse = false)
+    pre   = Complex{T}[cispi(-T(p) / T(n))         for p in 0:(n - 1)]   # e^{−iπ p /N}
+    post  = Complex{T}[cispi(-T(2k + 1) / T(4n))   for k in 0:(n - 1)]   # e^{−iπ(2k+1)/4N}
+    cbuf  = Vector{Complex{T}}(undef, n)
+    plan  = R2RPlan{REDFT11_T, T, typeof(inner)}(n, inner, pre, post, T[], cbuf)
+    return Result{R2RPlan, R2RError}(Ok(plan))
+end
+
+# Apply: inner is a complex plan (P<:AbstractFFTPlan). Reorder+sign x → pre-twiddled complex
+# buffer, length-n complex FFT, y_k = 2·Re(post_k·C_k).
+function _apply!(p::R2RPlan{REDFT11_T, T, P}, y::AbstractVector{T}, x::AbstractVector{<:Real}) where {T, P <: AbstractFFTPlan}
+    n = p.n; c = p.cbuf
+    @inbounds for m in 0:((n + 1) ÷ 2 - 1)            # even samples ascending into the front
+        c[m + 1] = p.pre[m + 1] * T(x[2m + 1])
+    end
+    @inbounds for m in 0:(n ÷ 2 - 1)                  # odd samples NEGATED, reversed into the tail
+        c[n - m] = p.pre[n - m] * (-T(x[2m + 2]))
+    end
+    apply_unnormalized!(p.inner, c)                   # size-N FFT
+    @inbounds for k in 0:(n - 1)
+        y[k + 1] = T(2) * real(p.post[k + 1] * c[k + 1])
+    end
+    return y
+end
+
 # Generic apply entry + tryr2r (per-kind _apply! dispatched on the plan's K).
 function tryr2r(x::AbstractVector{<:Real}, kind::R2RKind)
     r = tryplan_r2r(x, kind)
@@ -252,3 +288,9 @@ function Base.inv(p::R2RPlan{REDFT10_T, T}) where {T}
     return ScaledR2RPlan(ip, T(1) / (2 * p.n))
 end
 Base.:\(p::R2RPlan{REDFT10_T}, x::AbstractVector) = inv(p) * x
+# REDFT11 is self-inverse up to 2N: REDFT11·REDFT11 = 2N·I ⇒ inv(REDFT11) = (1/2N)·REDFT11.
+function Base.inv(p::R2RPlan{REDFT11_T, T}) where {T}
+    ip = plan_r2r(Vector{T}(undef, p.n), REDFT11)
+    return ScaledR2RPlan(ip, T(1) / (2 * p.n))
+end
+Base.:\(p::R2RPlan{REDFT11_T}, x::AbstractVector) = inv(p) * x

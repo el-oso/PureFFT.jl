@@ -12,7 +12,7 @@ end
 
 @testitem "tryplan_r2r returns Err for unsupported kind" begin
     using PureFFT, ErrorTypes
-    @test ErrorTypes.is_error(PureFFT.tryplan_r2r(randn(8), REDFT11))
+    @test ErrorTypes.is_error(PureFFT.tryplan_r2r(randn(8), REDFT00))
 end
 
 @testitem "DCT-II (REDFT10) bit-exact vs FFTW + naive (even N)" begin
@@ -73,8 +73,8 @@ end
         # dct! / idct! mutate in place
         xc = copy(x); PD.dct!(xc); @test maximum(abs.(xc .- PD.dct(x))) < tol(T)
     end
-    @test_throws ArgumentError plan_r2r(randn(8), REDFT11)            # unsupported in Phase 1 → throws
-    @test_throws ArgumentError r2r(randn(8), REDFT11)
+    @test_throws ArgumentError plan_r2r(randn(8), REDFT00)            # still unsupported → throws
+    @test_throws ArgumentError r2r(randn(8), REDFT00)
 end
 
 @testitem "r2r hot path: zero-alloc + dispatch-free" begin
@@ -85,6 +85,20 @@ end
         mul!(y, p, x)                                  # warmup
         @test (@allocated mul!(y, p, x)) == 0
         @test_opt target_modules=(PureFFT,) mul!(y, p, x)
+    end
+end
+
+@testitem "DCT-IV (REDFT11) bit-exact vs FFTW + self-inverse" begin
+    using PureFFT, FFTW, ErrorTypes
+    tol(::Type{Float64})=1e-12
+    naive_dct4(x) = [2*sum(x[j+1]*cos(pi*(2j+1)*(2k+1)/(4length(x))) for j in 0:length(x)-1) for k in 0:length(x)-1]
+    for n in (1,2,3,4,5,8,9,16,17,32)
+        x = randn(n)
+        y = unwrap(PureFFT.tryr2r(x, REDFT11))
+        @test maximum(abs.(y .- FFTW.r2r(x, FFTW.REDFT11)))/max(1,maximum(abs.(x))*n) < tol(Float64)
+        @test maximum(abs.(y .- naive_dct4(x)))/max(1,maximum(abs.(x))*n) < tol(Float64)   # independent ref
+        # REDFT11 self-inverse up to 2N
+        @test maximum(abs.(unwrap(PureFFT.tryr2r(y, REDFT11)) .- 2n .* x))/max(1,maximum(abs.(x))*n) < tol(Float64)
     end
 end
 
