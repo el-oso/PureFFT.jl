@@ -15,8 +15,24 @@ FFTW.set_num_threads(1)
 gflops(n, t) = 5 * n * log2(n) / t / 1e9
 relspread(t) = (quantile(t, 0.84) - quantile(t, 0.16)) / 2 / median(t)
 
-const SAMPLES = 400
-const SECONDS = 3.0
+const SAMPLES = 800
+const SECONDS = 2.5
+
+# Interleaved in-place timing (noise control for the memory-bandwidth-bound N-D ratio):
+#  (1) alternate one FFTW rep and one PureFFT rep so both see the same machine state — cancels slow drift
+#      in the RATIO (separate measurement blocks let the box drift between them and bias the ratio);
+#  (2) in-place reps, NO per-sample copy — the data overflows to ±Inf but transform throughput is identical
+#      and far steadier (CLAUDE.md rule 6); both sides are the RAW in-place transform (no API copy).
+function interleaved_times(applyf, applyp, x)
+    yf = copy(x); yp = copy(x)
+    applyf(yf); applyp(yp)                                  # warm / force compile
+    tf = Float64[]; tp = Float64[]; el = 0.0
+    while el < SECONDS && length(tf) < SAMPLES
+        s = time_ns(); applyf(yf); d = time_ns() - s; push!(tf, d); el += d / 1e9
+        s = time_ns(); applyp(yp); push!(tp, time_ns() - s)
+    end
+    return tf, tp
+end
 
 # (label, shape, group)
 const SHAPES = [
@@ -44,14 +60,16 @@ for (T, tname) in ((Float64, "F64"), (Float32, "F32"))
         # ponytail: _pure_plan_fft_nd bypasses the FFTW method-override on plan_fft!(::StridedArray)
         pp = PureFFT._pure_plan_fft_nd(x, dims; inverse = false)
 
-        tf = (@benchmark $pf * y setup = (y = copy($x)) samples = SAMPLES seconds = SECONDS).times
-        tp = (@benchmark mul!(y, $pp, $x) setup = (y = similar($x)) samples = SAMPLES seconds = SECONDS).times
+        # raw in-place transforms (no copy): FFTW in-place plan `*` mutates in place; PureFFT apply_unnormalized!
+        applyf = yf -> (pf * yf)
+        applyp = yp -> PureFFT.apply_unnormalized!(pp, yp)
+        tf, tp = interleaved_times(applyf, applyp, x)
 
         gf = gflops(n, median(tf) / 1e9)
         gp = gflops(n, median(tp) / 1e9)
         ratio = gp / gf
-        @printf("  %-12s  FFTW %6.1f  PureFFT %6.1f  PF/FFTW=%.3f  σ(PF)=%.1f%%\n",
-            label, gf, gp, ratio, 100 * relspread(tp))
+        @printf("  %-12s  FFTW %6.1f  PureFFT %6.1f  PF/FFTW=%.3f  σ(FFTW)=%.1f%% σ(PF)=%.1f%%\n",
+            label, gf, gp, ratio, 100 * relspread(tf), 100 * relspread(tp))
 
         for (method, t, g) in (("FFTW", tf, gf), ("PureFFT", tp, gp))
             push!(results, Dict(
