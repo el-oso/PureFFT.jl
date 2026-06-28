@@ -66,6 +66,15 @@ end
 # (BLK∈[4,32]): matches the swept best (256²→16, 512²→8, 64³→32, 128²→16) without re-sweeping per plan.
 _default_blk(n::Int) = clamp((4096 ÷ max(n, 1)) & ~3, 4, 32)
 
+# Mixed-radix (BatchPlanMR) wants a BIGGER tile than the pow2 path. Profiling the length-240 strided pass
+# (Task 6z, scratchpad/p240*.jl) showed its cost is ~2/3 arithmetic (radix-3/5 butterflies + twiddles) and
+# only ~1/3 strided pack/scatter; the per-group FFT working set is L1-resident, so a larger GROUP COUNT per
+# block (an ~L2-resident tile, not L1/2) amortizes the strided gather/scatter over more columns — a strict
+# win on every measured 2^a·3^b·5^c·7^d shape (240²/224²/160³/112³, F64+F32) with no regression (the smaller
+# default GB=4..8 was leaving 5-12% on the table). GB = BLK÷4 lands in the swept sweet spot (8..16) here:
+# n=240→10, 224→10, 160→15, 112→16. Pow2 (BatchPlan8) keeps the L1/2 _default_blk above (its tuning differs).
+_default_blk_mr(n::Int) = clamp((9600 ÷ max(n, 1)) & ~3, 32, 64)
+
 function BatchPlan8(::Type{T}, n::Int; forward::Bool, BLK::Int = _default_blk(n)) where {T}
     @assert ispow2(n)
     L = _batch_lanes(T)
@@ -254,6 +263,32 @@ end
     c4 = bf4(m0[4], m1[4], m2[4], m3[4], rot)
     (c1[1], c2[1], c3[1], c4[1], c1[2], c2[2], c3[2], c4[2],
      c1[3], c2[3], c3[3], c4[3], c1[4], c2[4], c3[4], c4[4])
+end
+
+# Register-form radix-15 (15 = 3×5 Cooley–Tukey, N1=3 inner / N2=5 outer): 15 row-VECTORS in, 15 outputs
+# in NATURAL bin order. Reuses the across-batch column butterflies (avx_column_butterfly3/5). Verified
+# bit-exact vs the size-15 DFT (scratchpad/p240f.jl; F64 ~2e-15, F32 ~6e-7, fwd+inv). w_j = W_15^j broadcast.
+#   X[k1+3k2] = Σ_{n1} W_3^{n1 k1} W_15^{n2 k1} [Σ_{n1} x[5n1+n2] W_3^{n1 k1}]  — inner bf3 over n1, twiddle
+#   W_15^{n2 k1}, outer bf5 over n2. (k1=0 column untwiddled; W_15^0=1.)
+@inline function _rbf15(r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14,
+                        bf3::Vec{L, T}, bf5_0::Vec{L, T}, bf5_1::Vec{L, T},
+                        w1::Vec{L, T}, w2::Vec{L, T}, w3::Vec{L, T}, w4::Vec{L, T},
+                        w6::Vec{L, T}, w8::Vec{L, T}) where {L, T}
+    bf3f = AvxRadix.avx_column_butterfly3; bf5f = AvxRadix.avx_column_butterfly5
+    mul = AvxRadix.avx_mul_complex
+    # step1: inner bf3 over n1 (one per n2): M_n2 = bf3(x[n2], x[5+n2], x[10+n2])
+    M0 = bf3f(r0, r5, r10, bf3)
+    M1 = bf3f(r1, r6, r11, bf3)
+    M2 = bf3f(r2, r7, r12, bf3)
+    M3 = bf3f(r3, r8, r13, bf3)
+    M4 = bf3f(r4, r9, r14, bf3)
+    # twiddle M_n2[k1] *= W_15^{n2 k1}, then outer bf5 over n2 (one per k1). k1=0 untwiddled.
+    P0 = bf5f(M0[1], M1[1], M2[1], M3[1], M4[1], bf5_0, bf5_1)
+    P1 = bf5f(M0[2], mul(M1[2], w1), mul(M2[2], w2), mul(M3[2], w3), mul(M4[2], w4), bf5_0, bf5_1)
+    P2 = bf5f(M0[3], mul(M1[3], w2), mul(M2[3], w4), mul(M3[3], w6), mul(M4[3], w8), bf5_0, bf5_1)
+    # X[k1+3k2] = P_{k1}[k2+1]
+    (P0[1], P1[1], P2[1], P0[2], P1[2], P2[2], P0[3], P1[3], P2[3],
+     P0[4], P1[4], P2[4], P0[5], P1[5], P2[5])
 end
 
 # Fused two-step length-128 transform of ONE W-column group. `cb` = 0-based complex index of the group's
@@ -451,7 +486,7 @@ struct BatchPlanMR{T, L}
     stw::Vector{Complex{T}}      # length n, scalar twiddles W_n^k for the naive-DFT tail
 end
 
-function BatchPlanMR(::Type{T}, n::Int; forward::Bool, BLK::Int = _default_blk(n)) where {T}
+function BatchPlanMR(::Type{T}, n::Int; forward::Bool, BLK::Int = _default_blk_mr(n)) where {T}
     @assert _is_smooth_2a3(n)
     L = _batch_lanes(T)
     radices = _choose_radices_smooth(n)
@@ -601,9 +636,93 @@ end
     return nothing
 end
 
+# ==============================================================================================
+# DEDICATED length-240 batched codelet (240 = 2^4·3·5 — the only N-D shape whose [5,3,2,8] generic
+# composition lands below the parity gate). The generic path makes ~6 tile passes (pack + 4 radix stages
+# + scatter); FFTW computes n=240 as a fused TWO codelet steps (12×20). We do the same: a FUSED two-step
+# Cooley–Tukey codelet, 240 = 16 × 15, computed as 16 length-15 DFTs (strided GATHER fused in) → twiddle
+# → 15 length-16 DFTs (strided SCATTER fused in). The 4 intermediate tile passes are eliminated — the
+# tile is written ONCE and read ONCE — and all radix-3/5/16 arithmetic happens in registers. Measured
+# +74% (F64) / +85% (F32) on the strided pass vs [5,3,2,8] (scratchpad/p240f.jl), bit-exact.
+#   n = n1 + 16·n2  (n1∈0:15, n2∈0:14);  k = 15·k1 + k2  (k1∈0:15, k2∈0:14)
+#   X[15k1+k2] = Σ_{n1} W_16^{n1 k1} · W_240^{n1 k2} · [ Σ_{n2} x[n1+16n2] W_15^{n2 k2} ]
+# All twiddles live in p.tw: W_240^{n1 k2}=tw[n1 k2+1] (≤210<240); W_15^j=W_240^{16j}=tw[16j+1];
+# W_16^1=tw[16], W_16^3=tw[46]. Reuses _rbf15 / _rbf16 (across-batch register codelets) + p.bf3/bf5.
+# @generated ⇒ fully-unrolled straight-line code with LITERAL element/twiddle indices (CLAUDE rule #1);
+# only cb and inner are runtime. Unit twiddles (n1==0 or k2==0) are skipped at codegen.
+@generated function _bf240_group!(::Type{Vec{L, T}}, pt::Ptr{T}, cb::Int, inner::Int,
+                                  sc::Vector{Vec{L, T}}, tw::Vector{Vec{L, T}},
+                                  bf3::Vec{L, T}, bf5_0::Vec{L, T}, bf5_1::Vec{L, T},
+                                  rot::Vec{L, T}) where {L, T}
+    VT = Vec{L, T}
+    body = Expr(:block)
+    # W_15^{1,2,3,4,6,8} and W_16^{1,3} as compile-time-fixed tw lookups
+    push!(body.args, :(w1 = tw[17]; w2 = tw[33]; w3 = tw[49]; w4 = tw[65]; w6 = tw[97]; w8 = tw[129]))
+    push!(body.args, :(tw1_16 = tw[16]; tw3_16 = tw[46]))
+    # step1: 16 length-15 DFTs over n2 (strided gather), twiddle W_240^{n1 k2}, store to tile B[k2·16+n1]
+    for n1 in 0:15
+        rs = Symbol[]
+        for m in 0:14
+            s = Symbol("r_", n1, "_", m); push!(rs, s)
+            push!(body.args, :($s = _ldv($VT, pt, cb + $(n1 + 16m) * inner)))
+        end
+        osym = Symbol("o_", n1)
+        push!(body.args, :($osym = _rbf15($(rs...), bf3, bf5_0, bf5_1, w1, w2, w3, w4, w6, w8)))
+        for k2 in 0:14
+            val = :($osym[$(k2 + 1)])
+            rhs = (n1 == 0 || k2 == 0) ? val : :(AvxRadix.avx_mul_complex($val, tw[$(n1 * k2 + 1)]))
+            push!(body.args, :(sc[$(k2 * 16 + n1 + 1)] = $rhs))
+        end
+    end
+    # step2: 15 length-16 DFTs over n1, read tile, scatter fused in to X[15k1+k2]
+    for k2 in 0:14
+        b = k2 * 16
+        psym = Symbol("p_", k2)
+        push!(body.args, :($psym = _rbf16(
+            sc[$(b + 1)], sc[$(b + 2)], sc[$(b + 3)], sc[$(b + 4)], sc[$(b + 5)], sc[$(b + 6)],
+            sc[$(b + 7)], sc[$(b + 8)], sc[$(b + 9)], sc[$(b + 10)], sc[$(b + 11)], sc[$(b + 12)],
+            sc[$(b + 13)], sc[$(b + 14)], sc[$(b + 15)], sc[$(b + 16)], tw1_16, tw3_16, rot)))
+        for k1 in 0:15
+            push!(body.args, :(_stv!(pt, cb + $(15k1 + k2) * inner, $psym[$(k1 + 1)])))
+        end
+    end
+    return Expr(:block, Expr(:macrocall, Symbol("@inbounds"), nothing, body), :(return nothing))
+end
+
+# Driver for the dedicated length-240 codelet: vector groups via the fused two-step, generic scalar tail.
+function batched_fft240!(p::BatchPlanMR{T, L}, pc::Ptr{Complex{T}}, off::Int,
+                         inner::Int, outer::Int) where {T, L}
+    sc = p.scratch; tw = p.tw; rot = p.rot; bf3 = p.bf3; bf5_0 = p.bf5_0; bf5_1 = p.bf5_1
+    sin = p.sin; sout = p.sout; stw = p.stw; W = L >> 1
+    pt = reinterpret(Ptr{T}, pc)
+    nvtot = inner ÷ W
+    @inbounds for o in 0:(outer - 1)
+        base_o = off + o * inner * 240
+        g = 0
+        while g < nvtot
+            _bf240_group!(Vec{L, T}, pt, base_o + g * W, inner, sc, tw, bf3, bf5_0, bf5_1, rot)
+            g += 1
+        end
+        ic = nvtot * W                          # scalar tail: leftover inner % W columns, one transform each
+        while ic < inner
+            cb = base_o + ic
+            for r in 0:239
+                sin[r + 1] = unsafe_load(pc, cb + r * inner + 1)
+            end
+            _dft_scalar!(sout, sin, stw, 240)
+            for r in 0:239
+                unsafe_store!(pc, sout[r + 1], cb + r * inner + 1)
+            end
+            ic += 1
+        end
+    end
+    return nothing
+end
+
 # Cache-blocked driver — identical structure to batched_fft8! (generic radices + generic scalar tail).
 function batched_fft_mr!(p::BatchPlanMR{T, L}, pc::Ptr{Complex{T}}, off::Int,
                          inner::Int, outer::Int) where {T, L}
+    p.n == 240 && return batched_fft240!(p, pc, off, inner, outer)
     n = p.n; sc = p.scratch; rev = p.rev; tw = p.tw; rot = p.rot; bf3 = p.bf3
     bf5_0 = p.bf5_0; bf5_1 = p.bf5_1; bf7_0 = p.bf7_0; bf7_1 = p.bf7_1; bf7_2 = p.bf7_2
     radices = p.radices; GB = p.GB; W = L >> 1
