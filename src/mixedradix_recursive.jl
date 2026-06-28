@@ -96,7 +96,7 @@ end
     cur = n; batch = 1
     for i in 1:(K - 1)
         N1 = facs[i]; M = cur ÷ N1; w = M * batch
-        push!(body, :(_dft_codelet_soa_batched_tw!(br, bi, ar, ai, p.twr[$i], p.twi[$i], $w, Val($N1), V)))  # A→B (+ fused twiddle)
+        push!(body, :(_dft_codelet_soa_batched_tw!(br, bi, ar, ai, p.twr[$i], p.twi[$i], Val($w), Val($N1), V)))  # A→B (+ fused twiddle)
         if batch == 1
             push!(body, :(_transpose_soa!(ar, ai, br, bi, $N1, $M)))      # B→A
         else
@@ -105,7 +105,7 @@ end
         cur = M; batch *= N1
     end
     Nl = facs[K]
-    push!(body, :(_dft_codelet_soa_batched!(br, bi, ar, ai, $batch, Val($Nl), V)))   # leaf A→B
+    push!(body, :(_dft_codelet_soa_batched!(br, bi, ar, ai, Val($batch), Val($Nl), V)))   # leaf A→B
     push!(body, quote
         @inbounds @simd ivdep for i in 1:$n
             x[i] = Complex{T}(br[i], bi[i])             # merge SoA → AoS (result in B)

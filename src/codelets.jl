@@ -261,17 +261,24 @@ function _gen_dft_soa_mixed!(stmts, insr::Vector, insi::Vector, R::Int, s, ::Typ
     return (or, oi)
 end
 
+# Vector width for the batched codelet: the full register (64÷sizeof(T)) when the batch reaches it,
+# else the largest power of two ≤ width (so width<full still vectorizes; W≥1). Compile-time only.
+_codelet_vec_width(::Type{T}, Wd::Int) where {T} = min(64 ÷ sizeof(T), Wd < 1 ? 1 : prevpow(2, Wd))
+
 """
-    _dft_codelet_soa_batched!(outr, outi, xr, xi, width, Val(R), Val(S))
+    _dft_codelet_soa_batched!(outr, outi, xr, xi, Val(width), Val(R), Val(S))
 
 Apply a size-`R` DFT to each of `width` independent transforms held in split (re/im) arrays, where
-transform `t`'s element `j` is at `[j*width + t]`. Vectorized over `t` with `Vec{W}` (W = 8 for
-Float64); a final idempotent overlapping vector covers a `width` not divisible by W. Requires
-`width ≥ W`. Shuffle-free (split layout). This is the per-pass engine of [`FourStepCodeletPlan`](@ref).
+transform `t`'s element `j` is at `[j*width + t]`. Vectorized over `t` with `Vec{W}`; a scalar tail
+covers a `width` not divisible by W. `W` is the FULL register width (`64÷sizeof(T)`: 8 for Float64,
+16 for Float32) when `width` reaches it, else `prevpow(2, width)` — so a small batch (`width <` full,
+common for four-step factors of small `n`, esp. Float32 where full=16) still vectorizes instead of
+falling entirely to the scalar tail. Shuffle-free (split layout). Per-pass engine of
+[`FourStepCodeletPlan`](@ref). `width` is a `Val` (it's a compile-time factor at every call site).
 """
-@generated function _dft_codelet_soa_batched!(outr, outi, xr, xi, width::Int, ::Val{R}, ::Val{S}) where {R, S}
+@generated function _dft_codelet_soa_batched!(outr, outi, xr, xi, ::Val{Wd}, ::Val{R}, ::Val{S}) where {Wd, R, S}
     T = eltype(xr)
-    W = 64 ÷ sizeof(T)
+    W = _codelet_vec_width(T, Wd)
     es = sizeof(T)
     # vector body: W transforms per Vec, gathered/scattered contiguously over the batch index `b`
     vb = Any[]
@@ -302,6 +309,7 @@ Float64); a final idempotent overlapping vector covers a `width` not divisible b
         push!(sb, :(@inbounds outi[$k * width + t + 1] = $(soi[k + 1])))
     end
     quote
+        width = $Wd
         GC.@preserve xr xi outr outi begin
             pr = pointer(xr); pii = pointer(xi); por = pointer(outr); poi = pointer(outi)
             b = 0
@@ -325,9 +333,9 @@ Like [`_dft_codelet_soa_batched!`](@ref) but multiplies each output by a per-ele
 twiddle pass into the codelet so there is no separate full-array twiddle pass. The per-pass engine of
 [`RecursiveMixedRadixPlan`](@ref).
 """
-@generated function _dft_codelet_soa_batched_tw!(outr, outi, xr, xi, twr, twi, width::Int, ::Val{R}, ::Val{S}) where {R, S}
+@generated function _dft_codelet_soa_batched_tw!(outr, outi, xr, xi, twr, twi, ::Val{Wd}, ::Val{R}, ::Val{S}) where {Wd, R, S}
     T = eltype(xr)
-    W = 64 ÷ sizeof(T)
+    W = _codelet_vec_width(T, Wd)
     es = sizeof(T)
     vb = Any[]
     vr = Vector{Any}(undef, R); vi = Vector{Any}(undef, R)
@@ -361,6 +369,7 @@ twiddle pass into the codelet so there is no separate full-array twiddle pass. T
         push!(sb, :(@inbounds outi[$k * width + t + 1] = $(sor[k + 1]) * wi + $(soi[k + 1]) * wr))
     end
     quote
+        width = $Wd
         GC.@preserve xr xi outr outi twr twi begin
             pr = pointer(xr); pii = pointer(xi); por = pointer(outr); poi = pointer(outi)
             ptr = pointer(twr); pti = pointer(twi)

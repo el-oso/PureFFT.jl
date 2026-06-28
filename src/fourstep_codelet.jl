@@ -60,7 +60,7 @@ function apply_unnormalized!(p::FourStepCodeletPlan{T, N1, N2}, x::AbstractVecto
         sr[i] = real(x[i]); si[i] = imag(x[i])
     end
     V = p.inverse ? Val(1) : Val(-1)
-    _dft_codelet_soa_batched!(ar, ai, sr, si, N2, Val(N1), V)            # pass 1: size-N1, width N2
+    _dft_codelet_soa_batched!(ar, ai, sr, si, Val(N2), Val(N1), V)       # pass 1: size-N1, width N2
     twr = p.twr; twi = p.twi
     @inbounds @simd ivdep for idx in 1:n        # twiddle by W_n^{i2·k1}
         a = ar[idx]; b = ai[idx]; wr = twr[idx]; wi = twi[idx]
@@ -68,7 +68,7 @@ function apply_unnormalized!(p::FourStepCodeletPlan{T, N1, N2}, x::AbstractVecto
         ai[idx] = a * wi + b * wr
     end
     _transpose_soa!(br, bi, ar, ai, N1, N2)   # SIMD register-tiled transpose [k1*N2+i2]→[i2*N1+k1]
-    _dft_codelet_soa_batched!(sr, si, br, bi, N1, Val(N2), V)            # pass 2: size-N2, width N1
+    _dft_codelet_soa_batched!(sr, si, br, bi, Val(N1), Val(N2), V)       # pass 2: size-N2, width N1
     @inbounds @simd ivdep for i in 1:n          # merge SoA → AoS (natural order)
         x[i] = Complex{T}(sr[i], si[i])
     end
