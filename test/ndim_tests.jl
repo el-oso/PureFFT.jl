@@ -240,3 +240,31 @@ end
     X = randn(ComplexF64, 5, 4)
     @test_throws ArgumentError PureFFT._pure_plan_brfft_nd(X, 10, 1)            # 10÷2+1=6 ≠ 5
 end
+
+# Exercises the BATCHED dim-1 r2c/c2r path (src/ndim_real.jl BatchedRDim1/BatchedRIDim1): the per-column
+# bit-exact items above use n<16 (m<8) so they stay on the per-column fallback; these use m≥8 & outer≥W
+# (pow2 AND smooth m, with outer%W tails) to drive the SIMD batched recombine + transpose-pack kernels.
+@testitem "Real N-D batched dim-1 r2c/c2r bit-exact + zero-alloc" begin
+    using PureFFT, FFTW, LinearAlgebra
+    tol(::Type{Float64}) = 1e-11; tol(::Type{Float32}) = 1f-4
+    # (sz, region): pow2 m (32→16, 64→32), smooth m (48→24, 96→48), 3-D, outer%W tail (outer=11), c2c-rest.
+    cases = (((32,8), 1), ((48,8), 1), ((32,11), 1), ((96,8), 1),
+             ((16,8,3), 1), ((16,16), (1,2)), ((64,16), (1,2)))
+    for T in (Float64, Float32), (sz, region) in cases
+        x = randn(T, sz...)
+        pf = PureFFT._pure_plan_rfft_nd(x, region)
+        @test !isnothing(pf.bd1)                                  # confirm the batched path is selected
+        Y = Array{Complex{T}}(undef, pf.cplxsz...)
+        mul!(Y, pf, x)                                            # warmup
+        @test maximum(abs.(Y .- rfft(x, region))) / maximum(abs.(rfft(x, region))) < tol(T)
+        @test (@allocated mul!(Y, pf, x)) == 0                    # forward batched hot path: zero-alloc
+        # inverse: brfft bit-exact + irfft round-trip (batched c2r)
+        rl = region isa Int ? region : first(region); n = sz[rl]
+        pb = PureFFT._pure_plan_brfft_nd(Y, n, region)
+        @test !isnothing(pb.bd1)
+        bb = pb * Y
+        @test maximum(abs.(bb .- brfft(Y, n, region))) / maximum(abs.(brfft(Y, n, region))) < tol(T)
+        yb = PureFFT.pirfft(Y, n, region)
+        @test maximum(abs.(yb .- x)) / maximum(abs.(x)) < tol(T)
+    end
+end

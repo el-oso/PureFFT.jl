@@ -13,7 +13,7 @@
 # Own plan (NOT <: NDPlan — the apply is r2c-then-c2c, a different shape). IS <: AbstractFFTs.Plan so
 # rfft/brfft/irfft/plan_irfft all derive from the AbstractFFTs generics (ScaledPlan does the irfft
 # normalization). T = input eltype (real Tr forward, Complex{Tr} inverse); Tr = real float type.
-struct RealNDPlan{T, Tr, D, RP, CP, N} <: AbstractFFTs.Plan{T}
+struct RealNDPlan{T, Tr, D, RP, CP, N, BR} <: AbstractFFTs.Plan{T}
     d::Int                       # r2c/c2r dim = first(region)
     n::Int                       # real length on dim d (even)
     rplan::RP                    # RealFFTPlan (forward) or RealIFFTPlan (inverse)
@@ -23,6 +23,7 @@ struct RealNDPlan{T, Tr, D, RP, CP, N} <: AbstractFFTs.Plan{T}
     cplxsz::NTuple{N, Int}       # half-spectrum shape (dim d → n÷2+1)
     inverse::Bool
     scale::Tr                    # output scale (brfft: n_d; forward: 1)
+    bd1::BR                      # BatchedRDim1 (fast batched r2c on dim 1) or `nothing` (per-column path)
 end
 
 @inline function _prod_before(sz, d)
@@ -60,8 +61,10 @@ function _pure_plan_rfft_nd(x::AbstractArray{<:Real, N}, region) where {N}
     cplan = isempty(rest) ? nothing :
         _pure_plan_fft_nd(Array{Complex{Tr}}(undef, cplxsz), rest; inverse = false)
     dims = (d, rest...)
-    return RealNDPlan{Tr, Tr, length(dims), typeof(rplan), typeof(cplan), N}(
-        d, n, rplan, cplan, dims, realsz, cplxsz, false, one(Tr))
+    outer = _prod_after(realsz, d)
+    bd1 = _use_batched_rdim1(Tr, d, n ÷ 2, outer) ? _build_batched_rdim1(Tr, n, outer) : nothing
+    return RealNDPlan{Tr, Tr, length(dims), typeof(rplan), typeof(cplan), N, typeof(bd1)}(
+        d, n, rplan, cplan, dims, realsz, cplxsz, false, one(Tr), bd1)
 end
 
 function _pure_plan_brfft_nd(X::AbstractArray{<:Complex, N}, n::Integer, region) where {N}
@@ -75,8 +78,10 @@ function _pure_plan_brfft_nd(X::AbstractArray{<:Complex, N}, n::Integer, region)
     cplan = isempty(rest) ? nothing :
         _pure_plan_fft_nd(Array{Complex{Tr}}(undef, cplxsz), rest; inverse = true)
     dims = (d, rest...)
-    return RealNDPlan{Complex{Tr}, Tr, length(dims), typeof(rplan), typeof(cplan), N}(
-        d, Int(n), rplan, cplan, dims, realsz, cplxsz, true, Tr(n))
+    outer = _prod_after(realsz, d)
+    bd1 = _use_batched_rdim1(Tr, d, Int(n) ÷ 2, outer) ? _build_batched_ridim1(Tr, Int(n), outer) : nothing
+    return RealNDPlan{Complex{Tr}, Tr, length(dims), typeof(rplan), typeof(cplan), N, typeof(bd1)}(
+        d, Int(n), rplan, cplan, dims, realsz, cplxsz, true, Tr(n), bd1)
 end
 
 # ── Cores ─────────────────────────────────────────────────────────────────────
@@ -85,10 +90,14 @@ function _rfft_core!(p::RealNDPlan{T, Tr}, Y::AbstractArray, x::AbstractArray) w
     d = p.d; n = p.n; rsz = p.realsz; h = n ÷ 2 + 1
     inner = _prod_before(rsz, d); outer = _prod_after(rsz, d)
     xf = eltype(x) === Tr ? x : Tr.(x)
-    xr = reshape(xf, inner, n, outer)
-    Yr = reshape(Y, inner, h, outer)
-    @inbounds for o in 1:outer, i in 1:inner
-        apply_rfft!(p.rplan, view(xr, i, :, o), view(Yr, i, :, o))
+    if !isnothing(p.bd1) && xf isa Array && Y isa Array   # fast batched dim-1 path (d==1, contiguous)
+        _rfft_dim1_batched!(p.bd1, Y, xf, outer)
+    else
+        xr = reshape(xf, inner, n, outer)
+        Yr = reshape(Y, inner, h, outer)
+        @inbounds for o in 1:outer, i in 1:inner
+            apply_rfft!(p.rplan, view(xr, i, :, o), view(Yr, i, :, o))
+        end
     end
     isnothing(p.cplan) || apply_unnormalized!(p.cplan, Y)
     return Y
@@ -101,13 +110,221 @@ function _brfft_core!(p::RealNDPlan{T, Tr}, y::AbstractArray, X::AbstractArray) 
     isnothing(p.cplan) || apply_unnormalized!(p.cplan, X)
     d = p.d; n = p.n; rsz = p.realsz; h = n ÷ 2 + 1
     inner = _prod_before(rsz, d); outer = _prod_after(rsz, d)
-    Xr = reshape(X, inner, h, outer)
-    yr = reshape(y, inner, n, outer)
-    @inbounds for o in 1:outer, i in 1:inner
-        apply_irfft!(p.rplan, view(Xr, i, :, o), view(yr, i, :, o))
+    if !isnothing(p.bd1) && X isa Array && y isa Array      # fast batched dim-1 c2r path
+        _brfft_dim1_batched!(p.bd1, y, X, outer)
+    else
+        Xr = reshape(X, inner, h, outer)
+        yr = reshape(y, inner, n, outer)
+        @inbounds for o in 1:outer, i in 1:inner
+            apply_irfft!(p.rplan, view(Xr, i, :, o), view(yr, i, :, o))
+        end
     end
     s = p.scale
     s == one(Tr) || (y .*= s)
+    return y
+end
+
+# ── Batched dim-1 r2c (the optimized r2c path) ────────────────────────────────
+# The per-column path above runs ONE length-n real FFT at a time (apply_rfft!): its inner length-m
+# complex FFT is single-transform (underfills the SIMD register) and its pack/recombine are scalar.
+# FFTW instead batches the real transforms ACROSS the trailing columns to fill the SIMD width — the
+# per-column path measures 0.2–0.7× FFTW (bench/run_compare_rndim.jl). We close most of that gap the
+# same way the complex engine's BatchedDim1 does: for the contiguous r2c dim (d==1), process a chunk of
+# `M` columns at once —
+#   (1) transpose-pack the (m × M) packed-complex block → (M × m) so the M columns are the contiguous
+#       (SIMD-inner) axis (packing pairs into complex is FREE: a real column of length n == m complex);
+#   (2) run ONE batched length-m complex FFT over all M columns (reuses batched_fft8!/batched_fft_mr! —
+#       the same bit-exact kernels the complex N-D dims use), inner=M;
+#   (3) a VECTORIZED half-complex recombine across the M columns (W complex per Vec, contiguous loads);
+#   (4) transpose the (M × h) half-spectrum back into Y (h × M block).
+# Reuses _transpose_block!, the batched complex kernels, and AvxRadix.avx_mul_complex; the only new SIMD
+# is the recombine, which is the scalar apply_rfft! step-4 algebra applied W columns at a time. Zero-alloc
+# (pointer-based under GC.@preserve, plan-owned staging). Only d==1, outer≥W, m=n÷2 pow2-or-smooth (so a
+# BatchPlan exists) and m≥8; everything else keeps the per-column path.
+struct BatchedRDim1{T, L, BP}
+    bp::BP                       # BatchPlan8 (pow2 m) or BatchPlanMR (smooth m), forward, size m
+    m::Int                       # n÷2
+    h::Int                       # m+1 (half-spectrum length on dim d)
+    M::Int                       # columns per chunk (multiple of W=L÷2, ≤ outer)
+    stageB::Vector{Complex{T}}   # m × M: transpose-packed columns, FFT'd in place
+    stageY::Vector{Complex{T}}   # h × M: recombined half-spectrum (before transpose-back)
+    cf::Vector{Vec{L, T}}        # cf[k+1] = broadcast(W_n^k · (0,-0.5)) for k=0..m (k=0 unused)
+    sgn::Vec{L, T}               # conjugation mask [1,-1,1,-1,…] (negates the imaginary lanes)
+    tw::Vector{Complex{T}}       # W_n^k, k=0..m (scalar twiddles for the c-tail)
+end
+
+@inline function _use_batched_rdim1(::Type{Tr}, d::Int, m::Int, outer::Int) where {Tr}
+    d == 1 && m >= 8 && outer >= (_batch_lanes(Tr) >> 1) && (ispow2(m) || _is_smooth_2a3(m))
+end
+
+function _build_batched_rdim1(::Type{Tr}, n::Int, outer::Int) where {Tr}
+    m = n ÷ 2; h = m + 1
+    L = _batch_lanes(Tr); W = L >> 1
+    bp = ispow2(m) ? BatchPlan8(Tr, m; forward = true) : BatchPlanMR(Tr, m; forward = true)
+    M = clamp((8192 ÷ m) & ~(W - 1), W, outer)
+    tw = _rfft_twiddles(Tr, n)                       # W_n^k, k=0..m
+    cf = Vector{Vec{L, Tr}}(undef, m + 1)
+    @inbounds for k in 0:m
+        c = tw[k + 1] * Complex{Tr}(zero(Tr), Tr(-0.5))   # W_n^k · (0,-0.5): folds xo's 1/(2i) + twiddle
+        cf[k + 1] = _bcast_c(Vec{L, Tr}, real(c), imag(c))
+    end
+    sgn = Vec{L, Tr}(ntuple(k -> iseven(k) ? -one(Tr) : one(Tr), Val(L)))  # ntuple is 1-based: imag lanes → -1
+    return BatchedRDim1{Tr, L, typeof(bp)}(bp, m, h, M, Vector{Complex{Tr}}(undef, m * M),
+                                           Vector{Complex{Tr}}(undef, h * M), cf, sgn, tw)
+end
+
+# Vectorized half-complex recombine of a transpose-packed, FFT'd block B → half-spectrum Yb. Both are
+# laid out (S × …) with the column index c the CONTIGUOUS axis (stride S = current chunk width): B[c+S·k]
+# is FFT bin k of column c; Yb[c+S·k] is X[k] of column c. Reproduces apply_rfft! step-3/4 W columns at a
+# time. Boundary bins k=0,m are real (scalar over c); k=1..m-1 vectorized (+ scalar c-tail for c%W).
+@inline function _recombine_fwd!(::Type{Vec{L, T}}, pB::Ptr{T}, pY::Ptr{T}, S::Int, mc::Int, m::Int,
+                                 cf::Vector{Vec{L, T}}, sgn::Vec{L, T}, tw::Vector{Complex{T}}) where {L, T}
+    W = L >> 1; nv = mc ÷ W; half = T(0.5)
+    pBc = reinterpret(Ptr{Complex{T}}, pB); pYc = reinterpret(Ptr{Complex{T}}, pY)
+    @inbounds begin
+        for k in 1:(m - 1)
+            cfk = cf[k + 1]; offk = S * k; offmk = S * (m - k)
+            g = 0
+            while g < nv
+                c = g * W
+                Bk = _ldv(Vec{L, T}, pB, offk + c)
+                cjm = _ldv(Vec{L, T}, pB, offmk + c) * sgn       # conj(B[m-k])
+                xe = (Bk + cjm) * half
+                _stv!(pY, offk + c, xe + AvxRadix.avx_mul_complex(Bk - cjm, cfk))
+                g += 1
+            end
+            twk = tw[k + 1]
+            c = nv * W
+            while c < mc
+                bk = unsafe_load(pBc, offk + c + 1); bmk = conj(unsafe_load(pBc, offmk + c + 1))
+                xe = (bk + bmk) * half
+                xo = (bk - bmk) * Complex{T}(zero(T), T(-0.5))
+                unsafe_store!(pYc, xe + twk * xo, offk + c + 1)
+                c += 1
+            end
+        end
+        offm = S * m
+        for c in 0:(mc - 1)                                       # boundary k=0, k=m (real)
+            b0 = unsafe_load(pBc, c + 1); r = real(b0); i = imag(b0)
+            unsafe_store!(pYc, Complex{T}(r + i, zero(T)), c + 1)
+            unsafe_store!(pYc, Complex{T}(r - i, zero(T)), offm + c + 1)
+        end
+    end
+    return nothing
+end
+
+# Batched r2c on dim 1: chunked transpose-pack → batched length-m FFT → recombine → transpose-back into Y.
+function _rfft_dim1_batched!(rb::BatchedRDim1{T, L}, Y::AbstractArray, x::AbstractArray, outer::Int) where {T, L}
+    m = rb.m; h = rb.h; M = rb.M
+    GC.@preserve x Y rb begin
+        pxc = reinterpret(Ptr{Complex{T}}, pointer(x))           # x (n×outer real) viewed as (m×outer) complex
+        pY = reinterpret(Ptr{Complex{T}}, pointer(Y))            # Y (h×outer) complex
+        pBc = pointer(rb.stageB); pYc = pointer(rb.stageY)
+        pBt = reinterpret(Ptr{T}, pBc); pYt = reinterpret(Ptr{T}, pYc)
+        es = sizeof(Complex{T})                                   # Julia Ptr arithmetic is BYTE-wise
+        t0 = 0
+        @inbounds while t0 < outer
+            mc = min(M, outer - t0)
+            _transpose_block!(pBc, pxc + t0 * m * es, m, mc)      # (m×mc) → (mc×m): columns now contiguous
+            _batched_apply!(rb.bp, pBc, 0, mc, 1)                 # batched length-m complex FFT, inner=mc
+            _recombine_fwd!(Vec{L, T}, pBt, pYt, mc, mc, m, rb.cf, rb.sgn, rb.tw)
+            _transpose_block!(pY + t0 * h * es, pYc, mc, h)       # (mc×h) → (h×mc): scatter back into Y
+            t0 += mc
+        end
+    end
+    return Y
+end
+
+# ── Batched dim-1 c2r (the optimized inverse path) ────────────────────────────
+# Mirror of the forward path for brfft/irfft: transpose-pack the half-spectrum columns, batched
+# inverse-recombine (the apply_irfft! step reconstruction, W columns at a time), ONE batched length-m
+# *inverse* complex FFT (bp built forward=false ⇒ a genuine unnormalized IFFT — no conj-FFT-conj dance),
+# transpose-back into the real output. The 1/m normalization (apply_irfft!'s `invm`) is folded into the
+# recombine constants (IFFT is linear ⇒ scaling Z scales the result), so the output equals the per-column
+# apply_irfft! exactly; the downstream brfft `scale` (= n_d) is applied by _brfft_core! as before.
+struct BatchedRIDim1{T, L, BP}
+    bp::BP                       # BatchPlan8/MR of size m, INVERSE (forward=false)
+    m::Int; h::Int; M::Int
+    stageX::Vector{Complex{T}}   # h × M: transpose-packed half-spectrum columns
+    stageZ::Vector{Complex{T}}   # m × M: inverse-recombined Z, IFFT'd in place
+    cf::Vector{Vec{L, T}}        # cf[k+1] = conj(W_n^k)·(0,0.5)·(1/m), k=0..m (k=0 unused)
+    sgn::Vec{L, T}               # conjugation mask
+    tw::Vector{Complex{T}}       # W_n^k, k=0..m (scalar twiddles for the c-tail)
+    invm::T                      # 1/m (folds apply_irfft!'s normalization)
+end
+
+function _build_batched_ridim1(::Type{Tr}, n::Int, outer::Int) where {Tr}
+    m = n ÷ 2; h = m + 1
+    L = _batch_lanes(Tr); W = L >> 1
+    bp = ispow2(m) ? BatchPlan8(Tr, m; forward = false) : BatchPlanMR(Tr, m; forward = false)
+    M = clamp((8192 ÷ m) & ~(W - 1), W, outer)
+    tw = _rfft_twiddles(Tr, n)
+    invm = inv(Tr(m))
+    cf = Vector{Vec{L, Tr}}(undef, m + 1)
+    @inbounds for k in 0:m
+        c = conj(tw[k + 1]) * Complex{Tr}(zero(Tr), Tr(0.5)) * invm  # conj(W_n^k)·0.5i·(1/m)
+        cf[k + 1] = _bcast_c(Vec{L, Tr}, real(c), imag(c))
+    end
+    sgn = Vec{L, Tr}(ntuple(k -> iseven(k) ? -one(Tr) : one(Tr), Val(L)))
+    return BatchedRIDim1{Tr, L, typeof(bp)}(bp, m, h, M, Vector{Complex{Tr}}(undef, h * M),
+                                            Vector{Complex{Tr}}(undef, m * M), cf, sgn, tw, invm)
+end
+
+# Vectorized inverse half-complex recombine: half-spectrum block Xb (S × h, c contiguous) → Z (S × m),
+# already scaled by 1/m. Reproduces apply_irfft!'s Z reconstruction W columns at a time; boundary bin
+# k=0 packs the (k=0,k=m) real pair into Z[0] (scalar over c), k=1..m-1 vectorized (+ scalar c-tail).
+@inline function _recombine_inv!(::Type{Vec{L, T}}, pX::Ptr{T}, pZ::Ptr{T}, S::Int, mc::Int, m::Int,
+                                 cf::Vector{Vec{L, T}}, sgn::Vec{L, T}, tw::Vector{Complex{T}}, invm::T) where {L, T}
+    W = L >> 1; nv = mc ÷ W; halfm = T(0.5) * invm
+    pXc = reinterpret(Ptr{Complex{T}}, pX); pZc = reinterpret(Ptr{Complex{T}}, pZ)
+    @inbounds begin
+        offm = S * m
+        for c in 0:(mc - 1)                                      # boundary: z[0] from X[0],X[m] (real)
+            x0 = real(unsafe_load(pXc, c + 1)); xm = real(unsafe_load(pXc, offm + c + 1))
+            unsafe_store!(pZc, Complex{T}((x0 + xm) * halfm, (x0 - xm) * halfm), c + 1)
+        end
+        for k in 1:(m - 1)
+            cfk = cf[k + 1]; offk = S * k; offmk = S * (m - k)
+            g = 0
+            while g < nv
+                c = g * W
+                Xk = _ldv(Vec{L, T}, pX, offk + c)
+                cjm = _ldv(Vec{L, T}, pX, offmk + c) * sgn        # conj(X[m-k])
+                sh = (Xk + cjm) * halfm
+                _stv!(pZ, offk + c, sh + AvxRadix.avx_mul_complex(Xk - cjm, cfk))
+                g += 1
+            end
+            wcj = conj(tw[k + 1]); c = nv * W
+            while c < mc
+                xk = unsafe_load(pXc, offk + c + 1); xmk = conj(unsafe_load(pXc, offmk + c + 1))
+                sh = (xk + xmk) * halfm
+                iwd = (xk - xmk) * wcj
+                unsafe_store!(pZc, sh + Complex{T}(-imag(iwd) * halfm, real(iwd) * halfm), offk + c + 1)
+                c += 1
+            end
+        end
+    end
+    return nothing
+end
+
+function _brfft_dim1_batched!(rb::BatchedRIDim1{T, L}, y::AbstractArray, X::AbstractArray, outer::Int) where {T, L}
+    m = rb.m; h = rb.h; M = rb.M
+    GC.@preserve y X rb begin
+        pXc = reinterpret(Ptr{Complex{T}}, pointer(X))           # X (h×outer) complex half-spectrum
+        pyc = reinterpret(Ptr{Complex{T}}, pointer(y))           # y (n×outer real) viewed as (m×outer)
+        pXs = pointer(rb.stageX); pZc = pointer(rb.stageZ)
+        pXt = reinterpret(Ptr{T}, pXs); pZt = reinterpret(Ptr{T}, pZc)
+        es = sizeof(Complex{T})
+        t0 = 0
+        @inbounds while t0 < outer
+            mc = min(M, outer - t0)
+            _transpose_block!(pXs, pXc + t0 * h * es, h, mc)      # (h×mc) → (mc×h): columns contiguous
+            _recombine_inv!(Vec{L, T}, pXt, pZt, mc, mc, m, rb.cf, rb.sgn, rb.tw, rb.invm)
+            _batched_apply!(rb.bp, pZc, 0, mc, 1)                 # batched length-m INVERSE FFT
+            _transpose_block!(pyc + t0 * m * es, pZc, mc, m)      # (mc×m) → (m×mc): real output block
+            t0 += mc
+        end
+    end
     return y
 end
 

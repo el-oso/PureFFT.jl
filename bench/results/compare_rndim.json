@@ -1,0 +1,382 @@
+{
+  "meta": {
+    "cpu": "znver5",
+    "date": "2026-06-28",
+    "metric": "GFLOP/s (median, 5·n·log2(n) model)",
+    "note": "N-D real rfft (r2c on dim 1 + c2c rest); FFTW only; single-thread, out-of-place into preallocated buffer, planning excluded"
+  },
+  "records": [
+    {
+      "T": "F64",
+      "gflops": 64.24783098867702,
+      "group": "2d_pow2",
+      "label": "256×256",
+      "median_ns": 81604.0,
+      "method": "FFTW",
+      "relspread": 0.010228665261506753,
+      "sz": [
+        256,
+        256
+      ]
+    },
+    {
+      "T": "F64",
+      "gflops": 42.953477607232536,
+      "group": "2d_pow2",
+      "label": "256×256",
+      "median_ns": 122059.5,
+      "method": "PureFFT",
+      "relspread": 0.012105407608584352,
+      "sz": [
+        256,
+        256
+      ]
+    },
+    {
+      "T": "F64",
+      "gflops": 60.50981910885528,
+      "group": "2d_pow2",
+      "label": "512×512",
+      "median_ns": 389903.0,
+      "method": "FFTW",
+      "relspread": 0.01814728278571848,
+      "sz": [
+        512,
+        512
+      ]
+    },
+    {
+      "T": "F64",
+      "gflops": 40.56951838553918,
+      "group": "2d_pow2",
+      "label": "512×512",
+      "median_ns": 581544.0,
+      "method": "PureFFT",
+      "relspread": 0.015150667877237097,
+      "sz": [
+        512,
+        512
+      ]
+    },
+    {
+      "T": "F64",
+      "gflops": 79.44032693772945,
+      "group": "2d_pow2",
+      "label": "128×128",
+      "median_ns": 14437.0,
+      "method": "FFTW",
+      "relspread": 0.004848652767195401,
+      "sz": [
+        128,
+        128
+      ]
+    },
+    {
+      "T": "F64",
+      "gflops": 44.112465864071694,
+      "group": "2d_pow2",
+      "label": "128×128",
+      "median_ns": 25999.0,
+      "method": "PureFFT",
+      "relspread": 0.01391591984307086,
+      "sz": [
+        128,
+        128
+      ]
+    },
+    {
+      "T": "F64",
+      "gflops": 65.04291464174051,
+      "group": "2d_nonpow2",
+      "label": "384×384",
+      "median_ns": 194626.0,
+      "method": "FFTW",
+      "relspread": 0.010207783132777723,
+      "sz": [
+        384,
+        384
+      ]
+    },
+    {
+      "T": "F64",
+      "gflops": 25.369152714541144,
+      "group": "2d_nonpow2",
+      "label": "384×384",
+      "median_ns": 498993.5,
+      "method": "PureFFT",
+      "relspread": 0.005357184011414944,
+      "sz": [
+        384,
+        384
+      ]
+    },
+    {
+      "T": "F64",
+      "gflops": 62.571616756823126,
+      "group": "2d_nonpow2",
+      "label": "240×240",
+      "median_ns": 72786.5,
+      "method": "FFTW",
+      "relspread": 0.012667184161898154,
+      "sz": [
+        240,
+        240
+      ]
+    },
+    {
+      "T": "F64",
+      "gflops": 36.75753600050448,
+      "group": "2d_nonpow2",
+      "label": "240×240",
+      "median_ns": 123903.0,
+      "method": "PureFFT",
+      "relspread": 0.014373340435663335,
+      "sz": [
+        240,
+        240
+      ]
+    },
+    {
+      "T": "F64",
+      "gflops": 62.80628196988392,
+      "group": "3d_pow2",
+      "label": "64×64×64",
+      "median_ns": 375646.5,
+      "method": "FFTW",
+      "relspread": 0.018071777588770307,
+      "sz": [
+        64,
+        64,
+        64
+      ]
+    },
+    {
+      "T": "F64",
+      "gflops": 41.03722978661231,
+      "group": "3d_pow2",
+      "label": "64×64×64",
+      "median_ns": 574916.0,
+      "method": "PureFFT",
+      "relspread": 0.018046288501276667,
+      "sz": [
+        64,
+        64,
+        64
+      ]
+    },
+    {
+      "T": "F64",
+      "gflops": 36.31241758142177,
+      "group": "3d_nonpow2",
+      "label": "96×96×96",
+      "median_ns": 2.4065955e6,
+      "method": "FFTW",
+      "relspread": 0.0882747183729048,
+      "sz": [
+        96,
+        96,
+        96
+      ]
+    },
+    {
+      "T": "F64",
+      "gflops": 21.366104428635623,
+      "group": "3d_nonpow2",
+      "label": "96×96×96",
+      "median_ns": 4.0900905e6,
+      "method": "PureFFT",
+      "relspread": 0.04303719929913526,
+      "sz": [
+        96,
+        96,
+        96
+      ]
+    },
+    {
+      "T": "F32",
+      "gflops": 80.76904116342124,
+      "group": "2d_pow2",
+      "label": "256×256",
+      "median_ns": 64912.0,
+      "method": "FFTW",
+      "relspread": 0.006342740941582468,
+      "sz": [
+        256,
+        256
+      ]
+    },
+    {
+      "T": "F32",
+      "gflops": 97.21278647185345,
+      "group": "2d_pow2",
+      "label": "256×256",
+      "median_ns": 53932.0,
+      "method": "PureFFT",
+      "relspread": 0.0059589853890083325,
+      "sz": [
+        256,
+        256
+      ]
+    },
+    {
+      "T": "F32",
+      "gflops": 79.61530284777129,
+      "group": "2d_pow2",
+      "label": "512×512",
+      "median_ns": 296337.0,
+      "method": "FFTW",
+      "relspread": 0.01070605425579663,
+      "sz": [
+        512,
+        512
+      ]
+    },
+    {
+      "T": "F32",
+      "gflops": 83.80592428930197,
+      "group": "2d_pow2",
+      "label": "512×512",
+      "median_ns": 281519.0,
+      "method": "PureFFT",
+      "relspread": 0.00879414888515518,
+      "sz": [
+        512,
+        512
+      ]
+    },
+    {
+      "T": "F32",
+      "gflops": 79.93866313515021,
+      "group": "2d_pow2",
+      "label": "128×128",
+      "median_ns": 14347.0,
+      "method": "FFTW",
+      "relspread": 0.002125879974907646,
+      "sz": [
+        128,
+        128
+      ]
+    },
+    {
+      "T": "F32",
+      "gflops": 102.2995272500223,
+      "group": "2d_pow2",
+      "label": "128×128",
+      "median_ns": 11211.0,
+      "method": "PureFFT",
+      "relspread": 0.005797877085005798,
+      "sz": [
+        128,
+        128
+      ]
+    },
+    {
+      "T": "F32",
+      "gflops": 79.2006901183307,
+      "group": "2d_nonpow2",
+      "label": "384×384",
+      "median_ns": 159835.0,
+      "method": "FFTW",
+      "relspread": 0.012573716645290464,
+      "sz": [
+        384,
+        384
+      ]
+    },
+    {
+      "T": "F32",
+      "gflops": 21.960404624287143,
+      "group": "2d_nonpow2",
+      "label": "384×384",
+      "median_ns": 576448.5,
+      "method": "PureFFT",
+      "relspread": 0.0040827584771232816,
+      "sz": [
+        384,
+        384
+      ]
+    },
+    {
+      "T": "F32",
+      "gflops": 75.17445172108982,
+      "group": "2d_nonpow2",
+      "label": "240×240",
+      "median_ns": 60584.0,
+      "method": "FFTW",
+      "relspread": 0.006288789119239403,
+      "sz": [
+        240,
+        240
+      ]
+    },
+    {
+      "T": "F32",
+      "gflops": 46.159456986910456,
+      "group": "2d_nonpow2",
+      "label": "240×240",
+      "median_ns": 98666.0,
+      "method": "PureFFT",
+      "relspread": 0.005693957391603953,
+      "sz": [
+        240,
+        240
+      ]
+    },
+    {
+      "T": "F32",
+      "gflops": 75.86038809665439,
+      "group": "3d_pow2",
+      "label": "64×64×64",
+      "median_ns": 311005.0,
+      "method": "FFTW",
+      "relspread": 0.009013359913827696,
+      "sz": [
+        64,
+        64,
+        64
+      ]
+    },
+    {
+      "T": "F32",
+      "gflops": 82.00371212279202,
+      "group": "3d_pow2",
+      "label": "64×64×64",
+      "median_ns": 287706.0,
+      "method": "PureFFT",
+      "relspread": 0.010336176513524219,
+      "sz": [
+        64,
+        64,
+        64
+      ]
+    },
+    {
+      "T": "F32",
+      "gflops": 61.22382833480959,
+      "group": "3d_nonpow2",
+      "label": "96×96×96",
+      "median_ns": 1.427374e6,
+      "method": "FFTW",
+      "relspread": 0.07281382454773595,
+      "sz": [
+        96,
+        96,
+        96
+      ]
+    },
+    {
+      "T": "F32",
+      "gflops": 25.421650566179654,
+      "group": "3d_nonpow2",
+      "label": "96×96×96",
+      "median_ns": 3.4375935e6,
+      "method": "PureFFT",
+      "relspread": 0.03466635016618452,
+      "sz": [
+        96,
+        96,
+        96
+      ]
+    }
+  ]
+}
