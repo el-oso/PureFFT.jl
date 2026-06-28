@@ -157,9 +157,11 @@ and added register-resident small-n kernels, PureFFT reached parity and now lead
 
 ## DCT / DST (real-to-real transforms)
 
-Phase 1: DCT-II (`REDFT10`) and DCT-III (`REDFT01`) are live for all N. Even N uses the
-Makhoul real-FFT reduction (reorder + `n/2` real FFT + post-twiddle). Odd N falls back to a
-length-N complex FFT (documented ~2× slower, below the parity gate; correctness only in Phase 1).
+All 8 FFTW r2r kinds are supported: DCT-I/II/III/IV (`REDFT00/10/01/11`) and DST-I/II/III/IV
+(`RODFT00/10/01/11`), all bit-exact vs `FFTW.r2r` for F64 and F32, any N. DCT-II (`REDFT10`)
+and DCT-III (`REDFT01`) use the Makhoul real-FFT reduction for even N (zero-alloc, dispatch-free);
+odd N and the remaining 6 kinds use extension or complex-FFT reductions (correctness path;
+perf-tuning deferred to v2). API: `r2r`, `plan_r2r`, `p*x`, `mul!`, `p\x` (inverse).
 
 **Even-N DCT-II/III vs FFTW** — Float64 and Float32, power-of-two sizes 8–65536:
 

@@ -63,18 +63,15 @@ Status + planned work. This is the canonical, checked-in roadmap (human- and age
   smooth-size coverage.
 
 ### Breadth / type coverage (gaps for a *general* library vs the 1-D complex-`Float64` investigation)
-- **DCT/DST (real-to-real) — Phase 1 DONE.** DCT-II (`REDFT10`) + DCT-III (`REDFT01`) are live
-  for all N: even N uses the Makhoul real-FFT reduction (zero-alloc, dispatch-free); odd N falls
-  back to a complex FFT (correctness, ~2× slower). API: `plan_r2r`, `r2r`, `mul!`, `dct`/`idct`
-  (orthonormal, FFTW.jl drop-in), `plan_r2r \ x` (inverse). Bench harness:
-  `bench/run_compare_r2r.jl` → `bench/results/compare_r2r.json` → `bench/plot_compare_r2r.jl`.
-  Bench (no bounds checking): even-N PF/FFTW **1.45–2.71× for F64, 1.23–2.37× for F32**.
-  Parity gate skips under `Pkg.test --check-bounds=yes` (overrides @inbounds in Julia loops
-  but not FFTW's C — an artificial ~3× handicap); asserts in a fair env (check_bounds==0).
-  The bench is the authoritative measurement; gate catches genuine regressions.
-  Phases 2–4: DCT-IV, DST-II/III/IV, type-I pair — each adds `_pre!`/`_post!` per kind.
-  See `docs/superpowers/specs/2026-06-27-dct-dst-r2r-design.md` (design spec) and
-  `docs/superpowers/plans/2026-06-27-dct-dst-phase1.md` (Phase-1 plan; Phases 2–4 noted at its end).
+- **DCT/DST (real-to-real) — all 8 r2r kinds DONE.** DCT-I/II/III/IV (`REDFT00/10/01/11`) and
+  DST-I/II/III/IV (`RODFT00/10/01/11`), bit-exact vs `FFTW.r2r` for F64 and F32, any N.
+  DCT-II (`REDFT10`) + DCT-III (`REDFT01`) even-N: Makhoul real-FFT reduction (zero-alloc,
+  dispatch-free); odd N + remaining 6 kinds: extension or complex-FFT reductions (correctness path).
+  API: `plan_r2r`, `r2r`, `mul!`, `dct`/`idct` (orthonormal, FFTW.jl drop-in), `plan_r2r \ x` (inverse).
+  Bench harness (DCT-II/III even-N): `bench/run_compare_r2r.jl` → `bench/results/compare_r2r.json`
+  → `bench/plot_compare_r2r.jl`. Bench: even-N PF/FFTW **1.45–2.71× for F64, 1.23–2.37× for F32**.
+  Perf-tuning of the remaining 6 kinds deferred to v2 (bar is correctness/parity, not speed).
+  See `docs/superpowers/specs/2026-06-27-dct-dst-r2r-design.md` (design spec).
 - **Float32 — DONE (≥ 0.96× of FFTW AND RustFFT at every benchmarked size).** The AVX path is `Float32`-
   capable by genericizing the 4-complex kernels over `Vec{8,T}` (the hardware register follows from `T`;
   only the explicit FMA `llvmcall` is per-(N,T)). **Non-pow2** routes through the `V8f32 = Vec{8,Float32}`

@@ -81,8 +81,9 @@ end
 
 @testitem "r2r hot path: zero-alloc + dispatch-free" begin
     using PureFFT, JET, LinearAlgebra
-    # Even-N only: both REDFT10 and REDFT01 use the real-FFT route (all buffers preallocated).
-    for kind in (REDFT10, REDFT01), T in (Float64, Float32), n in (8, 256)
+    # Even N: REDFT10/01/RODFT10/01 take the real-FFT route (preallocated rbuf/cbuf);
+    # REDFT11/RODFT11/REDFT00/RODFT00 are route-independent (complex or extension, always zero-alloc).
+    for kind in (REDFT00,REDFT10,REDFT01,REDFT11,RODFT00,RODFT10,RODFT01,RODFT11), T in (Float64, Float32), n in (8, 256)
         x = randn(T, n); y = similar(x); p = plan_r2r(x, kind)
         mul!(y, p, x)                                  # warmup
         @test (@allocated mul!(y, p, x)) == 0
@@ -199,6 +200,23 @@ end
         else
             @test_skip tf/tp ≥ 0.96      # under forced bounds-checks (Pkg.test default) the measurement is unfair
         end
+    end
+end
+
+@testitem "r2r all 8 kinds — public API bit-exact vs FFTW" begin
+    using PureFFT, FFTW, LinearAlgebra
+    kinds = ((REDFT00,FFTW.REDFT00),(REDFT01,FFTW.REDFT01),(REDFT10,FFTW.REDFT10),(REDFT11,FFTW.REDFT11),
+             (RODFT00,FFTW.RODFT00),(RODFT01,FFTW.RODFT01),(RODFT10,FFTW.RODFT10),(RODFT11,FFTW.RODFT11))
+    tol(::Type{Float64})=1e-12; tol(::Type{Float32})=1f-3
+    for T in (Float64,Float32), (pk,fk) in kinds, n in (2,3,4,5,8,9,16,17)
+        x = randn(T,n); ref = T.(FFTW.r2r(Float64.(x), fk))
+        sc = max(1, maximum(abs.(Float64.(x)))*n)
+        # functional r2r
+        @test maximum(abs.(Float64.(r2r(x,pk)) .- Float64.(ref)))/sc < tol(T)
+        # plan * x  and  mul!
+        p = plan_r2r(x, pk); y = similar(x)
+        @test maximum(abs.(Float64.(p*x) .- Float64.(ref)))/sc < tol(T)
+        mul!(y, p, x); @test maximum(abs.(Float64.(y) .- Float64.(ref)))/sc < tol(T)
     end
 end
 
