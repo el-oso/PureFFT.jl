@@ -79,10 +79,15 @@ Status + planned work. This is the canonical, checked-in roadmap (human- and age
   DCT-II (`REDFT10`) + DCT-III (`REDFT01`) even-N: Makhoul real-FFT reduction (zero-alloc,
   dispatch-free); odd N + remaining 6 kinds: extension or complex-FFT reductions (correctness path).
   API: `plan_r2r`, `r2r`, `mul!`, `dct`/`idct` (orthonormal, FFTW.jl drop-in), `plan_r2r \ x` (inverse).
-  Bench harness (DCT-II/III even-N): `bench/run_compare_r2r.jl` → `bench/results/compare_r2r.json`
-  → `bench/plot_compare_r2r.jl`. Bench: even-N PF/FFTW **1.45–2.71× for F64, 1.23–2.37× for F32**.
-  Perf-tuning of the remaining 6 kinds deferred to v2 (bar is correctness/parity, not speed).
-  See `docs/superpowers/specs/2026-06-27-dct-dst-r2r-design.md` (design spec).
+  Bench harness (all 8 kinds, small + mid N): `bench/run_compare_r2r.jl` → `bench/results/compare_r2r.json`
+  → `bench/plot_compare_r2r.jl`. Bench: mid-N PF/FFTW **1.4–3× (F64+F32)**.
+  **Small-N `@generated` codelets (DONE).** The slow small-N kinds (DCT/DST II/III/I) now route to a
+  fully-unrolled `@generated` r2r codelet (`src/r2r.jl`): input reorder + straight-line **half-size**
+  real-packed DFT (reuses `_gen_dft_soa_mixed!`) + baked pre/post twiddles — branch/loop/dispatch-free,
+  zero-alloc. Forward kinds (II/DST-II, I/DST-I) half-size real pack for n ≤ 64; inverse (III/DST-III)
+  full-complex for n ≤ 32. Small-N PF/FFTW lifted from ~0.2–0.9× (wrap) to ~0.9–1.5× (codelet vs wrap
+  at the same size = 1.1–4.9×). FFTW's hardcoded n=8 codelets still edge a couple of kinds (DCT-II
+  n=8 ≈ 0.75×) — honest partial. See `docs/superpowers/specs/2026-06-27-dct-dst-r2r-design.md`.
 - **Float32 — DONE (≥ 0.96× of FFTW AND RustFFT at every benchmarked size).** The AVX path is `Float32`-
   capable by genericizing the 4-complex kernels over `Vec{8,T}` (the hardware register follows from `T`;
   only the explicit FMA `llvmcall` is per-(N,T)). **Non-pow2** routes through the `V8f32 = Vec{8,Float32}`

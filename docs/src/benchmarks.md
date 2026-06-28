@@ -160,8 +160,22 @@ and added register-resident small-n kernels, PureFFT reached parity and now lead
 All 8 FFTW r2r kinds are supported: DCT-I/II/III/IV (`REDFT00/10/01/11`) and DST-I/II/III/IV
 (`RODFT00/10/01/11`), all bit-exact vs `FFTW.r2r` for F64 and F32, any N. DCT-II (`REDFT10`)
 and DCT-III (`REDFT01`) use the Makhoul real-FFT reduction for even N (zero-alloc, dispatch-free);
-odd N and the remaining 6 kinds use extension or complex-FFT reductions (correctness path;
-perf-tuning deferred to v2). API: `r2r`, `plan_r2r`, `p*x`, `mul!`, `p\x` (inverse).
+odd N and the remaining 6 kinds use extension or complex-FFT reductions (correctness path).
+API: `r2r`, `plan_r2r`, `p*x`, `mul!`, `p\x` (inverse).
+
+**Small-N `@generated` codelets.** The FFT-wrap route wins big for n ≥ 128 (below), but at small N
+(≤ 64) its per-call reorder loop + inner-plan dispatch lost to FFTW's hand-unrolled direct codelets.
+PureFFT now routes the slow small-N kinds (DCT/DST II/III/I) to a fully-unrolled `@generated` r2r
+codelet (`src/r2r.jl`, the analogue of `src/codelets.jl`): the input reorder, a straight-line
+**half-size** real-packed DFT (reusing the `_gen_dft_soa_mixed!` emission with compile-time twiddle
+literals), and the pre/post twiddles, emitted as one branch-free, loop-free, dispatch-free, zero-alloc
+routine. Forward kinds (II/DST-II, I/DST-I) use the half-size real FFT pack (≈½ the arithmetic of a
+full complex DFT) for n ≤ 64; inverse kinds (III/DST-III) use a full size-N complex codelet for n ≤ 32
+(above that the wrap route is already at parity). This raises small-N PF/FFTW from ~0.2–0.9× (wrap) to
+~0.9–1.5× (codelet vs the wrap at the SAME size is **1.1–4.9×** — see `wrap_gflops` in the JSON), e.g.
+DCT-II n=8/16/32/64 → 0.75/1.46/1.26/1.11, DST-III n=8 → 3.8×, DCT-I n=8 → 3.9×. FFTW's tiniest
+hardcoded codelets (n=8) remain hard to fully beat for a couple of kinds (DCT-II n=8 ≈ 0.75×) — honest
+partial progress, but the gap is closed everywhere it was large.
 
 **Even-N DCT-II/III vs FFTW** — Float64 and Float32, power-of-two sizes 8–65536:
 

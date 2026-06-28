@@ -182,6 +182,31 @@ end
     @test ErrorTypes.is_error(PureFFT.tryplan_r2r(randn(1), REDFT00))
 end
 
+@testitem "small-N @generated r2r codelet: route selected + bit-exact vs FFTW & naive" begin
+    using PureFFT, FFTW, LinearAlgebra
+    tol(::Type{Float64}) = 1e-12; tol(::Type{Float32}) = 1.0f-4
+    # naive reference sums (FFTW unnormalized r2r definitions)
+    nv(::PureFFT.REDFT10_T, x) = (N=length(x); [2*sum(x[j+1]*cos(pi*(2j+1)*k/(2N)) for j in 0:N-1) for k in 0:N-1])
+    nv(::PureFFT.RODFT10_T, x) = (N=length(x); [2*sum(x[j+1]*sin(pi*(2j+1)*(k+1)/(2N)) for j in 0:N-1) for k in 0:N-1])
+    nv(::PureFFT.REDFT01_T, x) = (N=length(x); [x[1]+2*sum(x[j+1]*cos(pi*j*(2k+1)/(2N)) for j in 1:N-1) for k in 0:N-1])
+    nv(::PureFFT.RODFT01_T, x) = (N=length(x); [((-1)^k)*x[N]+2*sum((x[j+1]*sin(pi*(j+1)*(2k+1)/(2N)) for j in 0:N-2); init=0.0) for k in 0:N-1])
+    nv(::PureFFT.REDFT00_T, x) = (N=length(x); [x[1]+((-1)^k)*x[N]+2*sum(x[j+1]*cos(pi*j*k/(N-1)) for j in 1:N-2; init=0.0) for k in 0:N-1])
+    nv(::PureFFT.RODFT00_T, x) = (N=length(x); [2*sum(x[j+1]*sin(pi*(j+1)*(k+1)/(N+1)) for j in 0:N-1) for k in 0:N-1])
+    kinds = ((REDFT10,FFTW.REDFT10),(REDFT01,FFTW.REDFT01),(RODFT10,FFTW.RODFT10),
+             (RODFT01,FFTW.RODFT01),(REDFT00,FFTW.REDFT00),(RODFT00,FFTW.RODFT00))
+    for T in (Float64, Float32), (pk, fk) in kinds, n in (4, 8, 16, 32)
+        PureFFT._use_r2r_codelet(pk, n) || continue          # only the sizes the codelet serves
+        x = randn(T, n)
+        p = plan_r2r(x, pk)
+        @test typeof(p) <: PureFFT.R2RCodeletPlan            # the codelet route IS selected
+        y = similar(x); mul!(y, p, x)
+        sc = max(1, maximum(abs.(Float64.(x))) * n)
+        @test maximum(abs.(Float64.(y) .- FFTW.r2r(Float64.(x), fk))) / sc < tol(T)
+        @test maximum(abs.(Float64.(y) .- nv(pk, Float64.(x)))) / sc < tol(T)   # independent naive sum
+        @test (@allocated mul!(y, p, x)) == 0               # zero-alloc hot path
+    end
+end
+
 @testitem "DCT-II parity vs FFTW ≥ 0.96× (even N)" tags=[:perf] begin
     using PureFFT, FFTW, BenchmarkTools, Statistics, LinearAlgebra
     # `Pkg.test` runs with `--check-bounds=yes`, which overrides @inbounds in PureFFT's Julia
