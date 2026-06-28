@@ -33,13 +33,28 @@ scalar-broadcast twiddles — the *same* algebra as the codebase's `avx_column_b
 on `r` separate batch-row-vectors instead of packed-within-a-vector. Mixed-radix decomposition per `n_d`
 (reuse the 1-D factorizer's logic, `_recursive_factors`-style).
 
-### 3b. Prime / large-factor non-pow2 → batched Bluestein
-Bluestein reduces a length-`n` DFT to: chirp pre-multiply → length-`M` pow2 FFT (M ≥ 2n−1) → pointwise
-multiply by the chirp's FFT → inverse length-`M` pow2 FFT → chirp post-multiply. **Every step is batchable:**
-the chirp pre/post and the pointwise multiply are elementwise (trivially batched across the contiguous
-batch), and the two length-`M` FFTs use the **batched pow2 kernel we already have**. So batched Bluestein =
-batched chirp/pointwise (new, easy) + 2× batched pow2 FFT (done). The per-dim plan precomputes the chirp and
-its FFT once (cold path).
+**Bonus — likely reuse, not build-from-scratch:** PureFFT *already* has **batched SoA codelets** in
+`FourStepCodeletPlan` (the four-step's inner pass does batched mixed-radix FFTs across a batch — `guide.md:65`,
+`autotune.jl`). That is almost exactly the primitive needed here (a batched FFT across a batch dimension).
+**First investigate reusing/adapting that batched SoA codelet** for the N-D contiguous-batch layout before
+hand-writing new radix-3/5/7 stages — it may already cover smooth `n_d`. Build new batched stages only for
+what it doesn't cover.
+
+### 3b. Smooth-p-1 primes → batched Rader (the prime *parity* path)
+**Bluestein is NOT a parity solution — it is the project's known non-par floor (~3–5 GFLOP/s).** The 1-D
+path uses it only as a last resort and built codelets/four-step/Rader precisely to avoid it
+(`autotune.jl:40-48`, `benchmarks.md:65`). So the prime *parity* path is **batched Rader** (for primes with
+smooth `p−1 = 2ᵃ·3ᵇ`, `p ≥ RADER_MIN_P`): Rader turns the length-`p` DFT into a length-`(p−1)` cyclic
+**convolution**, which runs on a fast inner FFT (here a *batched* pow2/smooth FFT — already built/being
+built) plus elementwise pre/post (batchable). Mirror `autoplan`'s Rader gate (`largest-prime(p−1) ≤ 3`).
+
+### 3c. Hard primes → batched Bluestein (the known floor, NOT a gate-clearer)
+For primes where Rader loses (a 5/7 factor in `p−1`) or genuinely large primes, fall back to **batched
+Bluestein**: chirp pre/post + pointwise are elementwise (batchable), the two length-`M` FFTs reuse the
+**batched pow2 kernel**. This is worth building only because it still beats *transpose + Bluestein* (no
+transpose) — but it **inherits the 1-D Bluestein sub-gate floor**; a prime dim routed here will NOT clear
+0.96× vs FFTW, the same known limitation as 1-D. Flag such shapes OPEN honestly; do not pretend Bluestein
+clears the gate. Lowest priority (prime dims are rare in real N-D shapes — images/volumes are pow2 or smooth).
 
 ## 4. Routing (per non-pow2 transformed dim, d>1)
 Mirror `autoplan`'s non-pow2 decision: `n_d` 2·3·5·7-smooth and ≤ a size cap → batched mixed-radix (3a);
