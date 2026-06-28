@@ -17,3 +17,6 @@ package-lock.json
 Cargo.lock
 
 .DS_Store
+
+# session scratch (subagent prototypes/logs — never commit)
+scratchpad/

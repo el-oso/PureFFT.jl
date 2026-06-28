@@ -93,15 +93,16 @@ end
 
 @testitem "DCT-IV (REDFT11) bit-exact vs FFTW + self-inverse" begin
     using PureFFT, FFTW, ErrorTypes
-    tol(::Type{Float64})=1e-12
+    tol(::Type{Float64})=1e-12; tol(::Type{Float32})=1f-4
     naive_dct4(x) = [2*sum(x[j+1]*cos(pi*(2j+1)*(2k+1)/(4length(x))) for j in 0:length(x)-1) for k in 0:length(x)-1]
-    for n in (1,2,3,4,5,8,9,16,17,32)
-        x = randn(n)
+    for T in (Float64, Float32), n in (1,2,3,4,5,8,9,16,17,32)
+        x = randn(T, n)
         y = unwrap(PureFFT.tryr2r(x, REDFT11))
-        @test maximum(abs.(y .- FFTW.r2r(x, FFTW.REDFT11)))/max(1,maximum(abs.(x))*n) < tol(Float64)
-        @test maximum(abs.(y .- naive_dct4(x)))/max(1,maximum(abs.(x))*n) < tol(Float64)   # independent ref
+        sc = max(1, maximum(abs.(Float64.(x)))*n)
+        @test maximum(abs.(Float64.(y) .- FFTW.r2r(Float64.(x), FFTW.REDFT11)))/sc < tol(T)
+        @test maximum(abs.(Float64.(y) .- naive_dct4(Float64.(x))))/sc < tol(T)             # independent ref, F64+F32
         # REDFT11 self-inverse up to 2N
-        @test maximum(abs.(unwrap(PureFFT.tryr2r(y, REDFT11)) .- 2n .* x))/max(1,maximum(abs.(x))*n) < tol(Float64)
+        @test maximum(abs.(Float64.(unwrap(PureFFT.tryr2r(y, REDFT11))) .- 2n .* Float64.(x)))/sc < tol(T)
     end
 end
 
