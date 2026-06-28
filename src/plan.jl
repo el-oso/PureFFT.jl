@@ -188,5 +188,5 @@ end
 @verify Radix4SoAPlan{Float32}
 @verify Radix4AvxPlan{Float64}
 @verify Radix4AvxPlan{Float32}
-@verify BluesteinPlan{Float64}
-@verify BluesteinPlan{Float32}
+@verify BluesteinPlan{Float64, Radix4AvxPlan{Float64}, Radix4AvxPlan{Float64}}
+@verify BluesteinPlan{Float32, Radix4AvxPlan{Float32}, Radix4AvxPlan{Float32}}
