@@ -220,15 +220,126 @@ end
     return nothing
 end
 
+# ==============================================================================================
+# DEDICATED length-128 batched codelet (the one L2-resident/compute-bound small-square: 128²).
+# n=128=2^7 is an ODD power of two ⇒ the generic radix-8 path needs a radix-2 cleanup pass (7≡1 mod 3)
+# → 3 in-tile FFT passes + a separate strided pack and scatter = ~5 tile passes. FFTW's n1fv_128 loads
+# once, computes in registers, stores once. We close most of that gap with a FUSED two-step (four-step
+# CT) codelet: 128 = 8 × 16, computed as 8 length-16 DFTs (strided GATHER fused in) → twiddle →
+# 16 length-8 DFTs (strided SCATTER fused in). The separate pack+scatter PASSES are eliminated — the
+# tile is written ONCE (step1) and read ONCE (step2) instead of 6× — and only 2 butterfly layers run.
+#   n = n1 + 8·n2  (n1∈0:7, n2∈0:15);  k = 16·k1 + k2  (k1∈0:7, k2∈0:15)
+#   X[16k1+k2] = Σ_{n1} W_8^{n1 k1} · W_128^{n1 k2} · [ Σ_{n2} x[n1+8n2] W_16^{n2 k2} ]
+# All twiddles are already in p.tw: W_128^{n1 k2}=tw[n1 k2+1] (n1 k2≤105<128), W_16^1=W_128^8=tw[9],
+# W_16^3=W_128^24=tw[25]. Reuses the across-batch broadcast-twiddle butterflies (avx_column_butterfly8;
+# _rbf16 = register radix-16, natural-order, verified). No digit reversal (the two-step indexing is direct).
+# ----------------------------------------------------------------------------------------------
+
+# Register-form radix-16 (across-batch: each lane = a different column, twiddles broadcast). Same 4×4
+# algebra as AvxRadix.avx_column_butterfly16 but takes 16 row-VECTORS (not a strided load) and returns
+# the 16 outputs in NATURAL bin order (verified bit-exact vs the size-16 DFT). tw1=W_16^1, tw3=W_16^3.
+@inline function _rbf16(r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15,
+                        tw1::Vec{L, T}, tw3::Vec{L, T}, rot::Vec{L, T}) where {L, T}
+    bf4 = AvxRadix.avx_column_butterfly4; mul = AvxRadix.avx_mul_complex
+    m1 = bf4(r1, r5, r9, r13, rot)
+    m1 = (m1[1], mul(m1[2], tw1), AvxRadix.avx_bf8_tw1(m1[3], rot), mul(m1[4], tw3))
+    m2 = bf4(r2, r6, r10, r14, rot)
+    m2 = (m2[1], AvxRadix.avx_bf8_tw1(m2[2], rot), AvxRadix.avx_rotate90(m2[3], rot), AvxRadix.avx_bf8_tw3(m2[4], rot))
+    m3 = bf4(r3, r7, r11, r15, rot)
+    m3 = (m3[1], mul(m3[2], tw3), AvxRadix.avx_bf8_tw3(m3[3], rot), mul(m3[4], AvxRadix.avx_neg(tw1)))
+    m0 = bf4(r0, r4, r8, r12, rot)
+    c1 = bf4(m0[1], m1[1], m2[1], m3[1], rot)
+    c2 = bf4(m0[2], m1[2], m2[2], m3[2], rot)
+    c3 = bf4(m0[3], m1[3], m2[3], m3[3], rot)
+    c4 = bf4(m0[4], m1[4], m2[4], m3[4], rot)
+    (c1[1], c2[1], c3[1], c4[1], c1[2], c2[2], c3[2], c4[2],
+     c1[3], c2[3], c3[3], c4[3], c1[4], c2[4], c3[4], c4[4])
+end
+
+# Fused two-step length-128 transform of ONE W-column group. `cb` = 0-based complex index of the group's
+# element 0 (the W columns are contiguous → _ldv loads all W at once); element e is at cb+e·inner.
+# `sc` = the plan tile, used as the 128-entry intermediate B (laid out B[k2·8+n1], step2-contiguous).
+# @generated ⇒ fully-unrolled straight-line code with LITERAL element/twiddle indices (CLAUDE rule #1);
+# only cb and inner are runtime. Unit twiddles (n1==0 or k2==0) are skipped at codegen.
+@generated function _bf128_group!(::Type{Vec{L, T}}, pt::Ptr{T}, cb::Int, inner::Int,
+                                  sc::Vector{Vec{L, T}}, tw::Vector{Vec{L, T}}, rot::Vec{L, T}) where {L, T}
+    VT = Vec{L, T}
+    body = Expr(:block)
+    push!(body.args, :(tw1 = tw[9]; tw3 = tw[25]))      # W_16^1, W_16^3
+    # step1: 8 length-16 DFTs over n2, strided gather fused in, twiddle, store to tile B[k2·8+n1]
+    for n1 in 0:7
+        rs = Symbol[]
+        for m in 0:15
+            s = Symbol("r_", n1, "_", m); push!(rs, s)
+            push!(body.args, :($s = _ldv($VT, pt, cb + $(n1 + 8m) * inner)))
+        end
+        osym = Symbol("o_", n1)
+        push!(body.args, :($osym = _rbf16($(rs...), tw1, tw3, rot)))
+        for k2 in 0:15
+            val = :($osym[$(k2 + 1)])
+            rhs = (n1 == 0 || k2 == 0) ? val : :(AvxRadix.avx_mul_complex($val, tw[$(n1 * k2 + 1)]))
+            push!(body.args, :(sc[$(k2 * 8 + n1 + 1)] = $rhs))
+        end
+    end
+    # step2: 16 length-8 DFTs over n1, read tile, scatter fused in to X[16k1+k2]
+    for k2 in 0:15
+        b = k2 * 8
+        psym = Symbol("p_", k2)
+        push!(body.args, :($psym = AvxRadix.avx_column_butterfly8(
+            sc[$(b + 1)], sc[$(b + 2)], sc[$(b + 3)], sc[$(b + 4)],
+            sc[$(b + 5)], sc[$(b + 6)], sc[$(b + 7)], sc[$(b + 8)], rot)))
+        for k1 in 0:7
+            push!(body.args, :(_stv!(pt, cb + $(16k1 + k2) * inner, $psym[$(k1 + 1)])))
+        end
+    end
+    return Expr(:block, Expr(:macrocall, Symbol("@inbounds"), nothing, body), :(return nothing))
+end
+
+# Driver for the dedicated length-128 codelet: vector groups via the fused two-step, scalar tail unchanged.
+function batched_fft128!(p::BatchPlan8{T, L}, pc::Ptr{Complex{T}}, off::Int,
+                         inner::Int, outer::Int) where {T, L}
+    sc = p.scratch; ss = p.sscratch; tw = p.tw; rot = p.rot; W = L >> 1
+    pt = reinterpret(Ptr{T}, pc)
+    nvtot = inner ÷ W
+    @inbounds for o in 0:(outer - 1)
+        base_o = off + o * inner * 128
+        g = 0
+        while g < nvtot
+            _bf128_group!(Vec{L, T}, pt, base_o + g * W, inner, sc, tw, rot)
+            g += 1
+        end
+        ic = nvtot * W                          # scalar tail: leftover inner % W columns, one transform each
+        while ic < inner
+            cb = base_o + ic
+            for r in 0:127
+                ss[_bitrev2(r, 7) + 1] = unsafe_load(pc, cb + r * inner + 1)
+            end
+            _radix2_scalar!(ss, 128, p.forward)
+            for r in 0:127
+                unsafe_store!(pc, ss[r + 1], cb + r * inner + 1)
+            end
+            ic += 1
+        end
+    end
+    return nothing
+end
+
 # ----------------------------------------------------------------------------------------------
 # Cache-blocked driver: FFT all inner*outer length-n transforms along the strided dim, NO transpose.
 # Per outer slice, process inner W-groups in blocks of GB. Pack a block (row-major, into digit-rev
 # positions) into the cache-resident tile, FFT each group out of the tile, scatter back. The strided
 # gather/scatter is thus amortized over the whole block (TLB-friendly bursts).
 # `pc` = pointer to the flat Complex{T} buffer; caller holds GC.@preserve. `off` = 0-based complex offset.
+# n==128 routes to the dedicated fused codelet above — but ONLY at the wide F32 width (L=16, AVX-512
+# Vec{16}=8 complex), where it's a decisive win (128² F32 0.95×→1.09×, measured +15% throughput). At
+# L=8 (F64, or non-AVX512 F32) the fused single-group two-step is ~3% SLOWER than the GB-blocked generic
+# radix path (less cross-group ILP for the narrow 4-complex vector) — so F64 keeps the proven generic
+# path (128² F64 held at 0.76×, no regression). Only 128² has a strided length-128 dim, so this gate
+# changes exactly the one F32 measurement and nothing else.
 # ----------------------------------------------------------------------------------------------
 function batched_fft8!(p::BatchPlan8{T, L}, pc::Ptr{Complex{T}}, off::Int,
                        inner::Int, outer::Int) where {T, L}
+    (L == 16 && p.n == 128) && return batched_fft128!(p, pc, off, inner, outer)
     n = p.n; sc = p.scratch; ss = p.sscratch; rev = p.rev; tw = p.tw; rot = p.rot
     radices = p.radices; GB = p.GB; W = L >> 1
     pt = reinterpret(Ptr{T}, pc)

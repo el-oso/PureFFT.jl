@@ -34,7 +34,8 @@ end
              # 2^a·3^b·5^c·7^d strided dims (radix-5/7 batched stages, Task 6w):
              ((4,40), 2), ((8,160), 2), ((4,4,20), 3), ((4,56), 2), ((8,112), 2), ((4,4,28), 3),  # radix-5 / radix-7
              ((6,30), 2), ((4,70), 2), ((8,240), 2),                                 # mixed 2·3·5 / 2·5·7 / 2^4·3·5
-             ((5,40), 2), ((7,56), 2))                                               # inner%4≠0 scalar tails
+             ((5,40), 2), ((7,56), 2),                                               # inner%4≠0 scalar tails
+             ((8,128), 2), ((128,128), (1,2)), ((5,128), 2), ((2,3,128), 3))         # n_d=128 dedicated codelet (+ scalar tail)
     for T in (Float64, Float32), (sz, region) in cases
         x = randn(Complex{T}, sz...)
         p = PureFFT._pure_plan_fft_nd(x, region; inverse=false)
@@ -154,6 +155,7 @@ end
     cases = (((8,5),(1,2)),       # dim2 n_d=5 non-pow2 → TransposeDim
              ((6,4,5),(1,3)),     # dim3 n_d=5 non-pow2 → TransposeDim
              ((8,16),(1,2)),      # dim2 n_d=16 pow2  → BatchedDim
+             ((8,128),(1,2)),     # dim2 n_d=128 pow2 → BatchedDim (dedicated fused codelet at F32 L=16)
              ((4,8,16),(2,3)),    # dim2 n_d=8, dim3 n_d=16 pow2 → BatchedDim (both d>1)
              ((8,48),(1,2)),      # dim2 n_d=48=2^4·3 → BatchedSmoothDim (mixed-radix batched)
              ((4,8,24),(2,3)),    # dim2 n_d=8 pow2, dim3 n_d=24=2^3·3 smooth → mixed routing
