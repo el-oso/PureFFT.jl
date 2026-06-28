@@ -425,6 +425,42 @@ end
     GC.@preserve x vstore(v, reinterpret(Ptr{Float32}, pointer(x)) + i * 8)
 end
 
+# ============================================================================================
+# Float32 8-complex path: V16f32 = Vec{16,Float32} = one 512-bit (zmm) register = 8 interleaved
+# complex (CPV=8). Lanes [re0,im0,re1,im1,…,re7,im7]. Used by the batched-strided N-D kernel,
+# where the loads are CONTIGUOUS across the inner batch (plain vload) ⇒ doubling the F32 batch
+# width to 512-bit is a genuine ~2× (vs the V8f32 256-bit / 4-complex path). Shuffle patterns
+# are the V8f patterns extended to 16 lanes; only the element-type pieces (xor/rot/fma) differ.
+# The 512-bit ps.512 fmaddsub is gated by _HAS_AVX512 exactly like V8f (it aborts at codegen on
+# a non-AVX512 target); the batched kernel only selects this width when _HAS_AVX512 anyway.
+# ============================================================================================
+const V16f32 = Vec{16, Float32}
+@inline avx_swap_complex(s::Vec{16}) = shufflevector(s, Val((1,0,3,2,5,4,7,6,9,8,11,10,13,12,15,14)))
+@inline avx_dup_re(s::Vec{16}) = shufflevector(s, Val((0,0,2,2,4,4,6,6,8,8,10,10,12,12,14,14)))
+@inline avx_dup_im(s::Vec{16}) = shufflevector(s, Val((1,1,3,3,5,5,7,7,9,9,11,11,13,13,15,15)))
+@inline avx_duplicate_complex(s::Vec{16}) = (avx_dup_re(s), avx_dup_im(s))
+@inline avx_xor(a::V16f32, b::V16f32) = reinterpret(V16f32, reinterpret(Vec{16, UInt32}, a) ⊻ reinterpret(Vec{16, UInt32}, b))
+const _ROT90_FWD16_F32 = V16f32(ntuple(k -> isodd(k) ? -0f0 :  0f0, Val(16)))
+const _ROT90_INV16_F32 = V16f32(ntuple(k -> isodd(k) ?  0f0 : -0f0, Val(16)))
+@inline _rot90_inv(::V16f32) = _ROT90_INV16_F32
+const _HALF_ROOT2_16_F32 = V16f32(ntuple(_ -> sqrt(0.5f0), Val(16)))
+@inline _half_root2(::V16f32) = _HALF_ROOT2_16_F32
+# 512-bit FMA-addsub via the AVX-512 intrinsic (i32 4 = current rounding), gated like V8f's pd.512.
+const _NT16f32 = NTuple{16, VecElement{Float32}}
+const _IR_MADDSUB16F32 = """
+declare <16 x float> @llvm.x86.avx512.vfmaddsub.ps.512(<16 x float>, <16 x float>, <16 x float>, i32)
+define <16 x float> @entry(<16 x float> %a, <16 x float> %b, <16 x float> %c) #0 {
+  %r = call <16 x float> @llvm.x86.avx512.vfmaddsub.ps.512(<16 x float> %a, <16 x float> %b, <16 x float> %c, i32 4)
+  ret <16 x float> %r
+}
+attributes #0 = { alwaysinline }"""
+@inline avx_fmaddsub(a::V16f32, b::V16f32, c::V16f32) =
+    Vec(Base.llvmcall((_IR_MADDSUB16F32, "entry"), _NT16f32, Tuple{_NT16f32, _NT16f32, _NT16f32}, a.data, b.data, c.data))
+const _SGN16F32 = V16f32(ntuple(k -> isodd(k) ? -1f0 : 1f0, Val(16)))
+@inline _mulc16(l::V16f32, r::V16f32, ::Val{true})  = avx_fmaddsub(avx_dup_re(l), r, avx_mul(avx_dup_im(l), avx_swap_complex(r)))
+@inline _mulc16(l::V16f32, r::V16f32, ::Val{false}) = muladd(avx_dup_re(l), r, _SGN16F32 * (avx_dup_im(l) * avx_swap_complex(r)))
+@inline avx_mul_complex(left::V16f32, right::V16f32) = _mulc16(left, right, Val(_HAS_AVX512))
+
 # rot90 masks keyed by element type (W=8 kernel constructors pick the right const from T; the
 # value-dispatched `_rot90_inv(::Vec{8})` stays for the hot-path column butterflies).
 @inline _rot90_fwd8(::Type{Float64}) = _ROT90_FWD8

@@ -24,13 +24,13 @@ plan_inverse(p::NDPlan) = p.inverse
 struct Dim1Plan{P}
     plan::P
 end
-struct BatchedDim{T}
+struct BatchedDim{T, L}
     d::Int
-    bp::BatchPlan8{T}
+    bp::BatchPlan8{T, L}
 end
-struct BatchedSmoothDim{T}
+struct BatchedSmoothDim{T, L}
     d::Int
-    bp::BatchPlanMR{T}
+    bp::BatchPlanMR{T, L}
 end
 struct TransposeDim{P}
     d::Int

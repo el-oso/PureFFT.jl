@@ -7,23 +7,35 @@
 
 using SIMD: Vec, vload, vstore
 
-# Pointer-based 4-complex load/store (i = 0-based complex index; complex = 2 T ⇒ byte stride 2·sizeof(T)).
-@inline _ld8(pt::Ptr{T}, i::Int) where {T} = vload(Vec{8, T}, pt + i * 2 * sizeof(T))
-@inline _st8!(pt::Ptr{T}, i::Int, v::Vec{8, T}) where {T} = vstore(v, pt + i * 2 * sizeof(T))
+# Batch width = full 512-bit per element type: W complex per Vec{L,T}, L = 2W lanes. F64 → 4 complex
+# (Vec{8,Float64}); F32 → 8 complex (Vec{16,Float32}, needs AVX-512 — else fall back to 4-complex
+# Vec{8,Float32} so non-AVX512 builds stay byte-identical to the old path). The batched loads are
+# CONTIGUOUS across the inner batch (plain vload, not a gather) ⇒ the wider F32 vector is a genuine ~2×.
+@inline _batch_lanes(::Type{Float64}) = 8
+@inline _batch_lanes(::Type{Float32}) = AvxRadix._HAS_AVX512 ? 16 : 8
+
+# Pointer-based W-complex load/store (i = 0-based complex index; complex = 2 T ⇒ byte stride 2·sizeof(T)).
+@inline _ldv(::Type{Vec{L, T}}, pt::Ptr{T}, i::Int) where {L, T} = vload(Vec{L, T}, pt + i * 2 * sizeof(T))
+@inline _stv!(pt::Ptr{T}, i::Int, v::Vec{L, T}) where {L, T} = vstore(v, pt + i * 2 * sizeof(T))
+# Broadcast a complex (re,im) to all W lanes of a Vec{L,T}: lanes [re,im,re,im,…]. Compile-time ntuple.
+@inline _bcast_c(::Type{Vec{L, T}}, re, im) where {L, T} = Vec{L, T}(ntuple(k -> isodd(k) ? T(re) : T(im), Val(L)))
+# rot90 direction mask at width L: forward [-0,0,…], inverse [0,-0,…] (matches AvxRadix._rot90_fwd8/inv8).
+@inline _rot_mask(::Type{Vec{L, T}}, forward::Bool) where {L, T} =
+    forward ? _bcast_c(Vec{L, T}, -zero(T), zero(T)) : _bcast_c(Vec{L, T}, zero(T), -zero(T))
 
 # ----------------------------------------------------------------------------------------------
 # Plan: mixed-radix stage list [r0?,8,8,...], generalized digit-reversal, broadcast twiddles, tile.
 # ----------------------------------------------------------------------------------------------
-struct BatchPlan8{T}
+struct BatchPlan8{T, L}
     n::Int
     log2n::Int
     forward::Bool
     radices::Vector{Int}         # stage order (smallest len first); e.g. n=256 -> [4,8,8]
-    rot::Vec{8, T}               # _rot90_fwd8/inv8(T) — direction mask for the butterflies
-    tw::Vector{Vec{8, T}}        # tw[k+1] = W_n^k broadcast to W lanes, full length n
+    rot::Vec{L, T}               # direction mask for the butterflies
+    tw::Vector{Vec{L, T}}        # tw[k+1] = W_n^k broadcast to W=L÷2 lanes, full length n
     rev::Vector{Int}             # generalized digit reversal, 0-based
-    GB::Int                      # groups (of W=4 cols) per cache block; tile holds n*GB Vec{8}
-    scratch::Vector{Vec{8, T}}   # tile: n*GB, reused per block
+    GB::Int                      # groups (of W=L÷2 cols) per cache block; tile holds n*GB Vec{L}
+    scratch::Vector{Vec{L, T}}   # tile: n*GB, reused per block
     sscratch::Vector{Complex{T}} # length n, reused per scalar-tail transform
 end
 
@@ -56,21 +68,24 @@ _default_blk(n::Int) = clamp((4096 ÷ max(n, 1)) & ~3, 4, 32)
 
 function BatchPlan8(::Type{T}, n::Int; forward::Bool, BLK::Int = _default_blk(n)) where {T}
     @assert ispow2(n)
+    L = _batch_lanes(T)
     log2n = trailing_zeros(n)
     radices = _choose_radices(log2n)
-    tw = Vector{Vec{8, T}}(undef, n)
+    tw = Vector{Vec{L, T}}(undef, n)
     for k in 0:(n - 1)
         cr, ci = AvxRadix.compute_twiddle(k, n, forward)
-        tw[k + 1] = AvxRadix.avx_broadcast_complex8(T, cr, ci)
+        tw[k + 1] = _bcast_c(Vec{L, T}, cr, ci)
     end
     # digit reversal must extract digits in REVERSE stage order: stage 1 (lowest len) processes the
     # least-significant reversed digit, so the radix-4/2 cleanup digit must be least significant.
     revrad = reverse(radices)
     rev = Int[_digitrev(r, revrad) for r in 0:(n - 1)]
+    # GB groups of W=L÷2 cols. tile = n·GB Vec{L} = n·GB·64 bytes for BOTH F64 (Vec8) and F32 (Vec16),
+    # so BLK÷4 (tuned at W=4) keeps the tile byte-size identical across element types.
     GB = max(1, BLK ÷ 4)
-    rot = forward ? AvxRadix._rot90_fwd8(T) : AvxRadix._rot90_inv8(T)
-    BatchPlan8{T}(n, log2n, forward, radices, rot, tw, rev, GB,
-                  Vector{Vec{8, T}}(undef, n * GB), Vector{Complex{T}}(undef, n))
+    rot = _rot_mask(Vec{L, T}, forward)
+    BatchPlan8{T, L}(n, log2n, forward, radices, rot, tw, rev, GB,
+                     Vector{Vec{L, T}}(undef, n * GB), Vector{Complex{T}}(undef, n))
 end
 
 # ----------------------------------------------------------------------------------------------
@@ -78,8 +93,8 @@ end
 # Input already digit-reversed; output natural order. len = cumulative product up to & incl this stage.
 # avx_column_butterfly8/4 return outputs in NATURAL bin order ⇒ the DIT stage stores straight back.
 # ----------------------------------------------------------------------------------------------
-@inline function _radix8_stage!(sc::Vector{Vec{8, T}}, b0::Int, tw::Vector{Vec{8, T}}, rot::Vec{8, T},
-                                n::Int, len::Int) where {T}
+@inline function _radix8_stage!(sc::Vector{Vec{L, T}}, b0::Int, tw::Vector{Vec{L, T}}, rot::Vec{L, T},
+                                n::Int, len::Int) where {T, L}
     q = len >> 3
     step = n ÷ len
     @inbounds begin
@@ -110,8 +125,8 @@ end
     return nothing
 end
 
-@inline function _radix4_stage!(sc::Vector{Vec{8, T}}, b0::Int, tw::Vector{Vec{8, T}}, rot::Vec{8, T},
-                                n::Int, len::Int) where {T}
+@inline function _radix4_stage!(sc::Vector{Vec{L, T}}, b0::Int, tw::Vector{Vec{L, T}}, rot::Vec{L, T},
+                                n::Int, len::Int) where {T, L}
     q = len >> 2
     step = n ÷ len
     @inbounds begin
@@ -136,8 +151,8 @@ end
     return nothing
 end
 
-@inline function _radix2_stage!(sc::Vector{Vec{8, T}}, b0::Int, tw::Vector{Vec{8, T}},
-                                n::Int, len::Int) where {T}
+@inline function _radix2_stage!(sc::Vector{Vec{L, T}}, b0::Int, tw::Vector{Vec{L, T}},
+                                n::Int, len::Int) where {T, L}
     half = len >> 1
     step = n ÷ len
     @inbounds begin
@@ -158,8 +173,8 @@ end
     return nothing
 end
 
-@inline function _fft_group!(sc::Vector{Vec{8, T}}, b0::Int, radices::Vector{Int},
-                             tw::Vector{Vec{8, T}}, rot::Vec{8, T}, n::Int) where {T}
+@inline function _fft_group!(sc::Vector{Vec{L, T}}, b0::Int, radices::Vector{Int},
+                             tw::Vector{Vec{L, T}}, rot::Vec{L, T}, n::Int) where {T, L}
     len = 1
     @inbounds for f in radices
         len *= f
@@ -212,10 +227,10 @@ end
 # gather/scatter is thus amortized over the whole block (TLB-friendly bursts).
 # `pc` = pointer to the flat Complex{T} buffer; caller holds GC.@preserve. `off` = 0-based complex offset.
 # ----------------------------------------------------------------------------------------------
-function batched_fft8!(p::BatchPlan8{T}, pc::Ptr{Complex{T}}, off::Int,
-                       inner::Int, outer::Int) where {T}
+function batched_fft8!(p::BatchPlan8{T, L}, pc::Ptr{Complex{T}}, off::Int,
+                       inner::Int, outer::Int) where {T, L}
     n = p.n; sc = p.scratch; ss = p.sscratch; rev = p.rev; tw = p.tw; rot = p.rot
-    radices = p.radices; GB = p.GB; W = 4
+    radices = p.radices; GB = p.GB; W = L >> 1
     pt = reinterpret(Ptr{T}, pc)
     nvtot = inner ÷ W                 # whole W-groups
     @inbounds for o in 0:(outer - 1)
@@ -230,7 +245,7 @@ function batched_fft8!(p::BatchPlan8{T}, pc::Ptr{Complex{T}}, off::Int,
                 rin = r * inner
                 g = 0
                 while g < gb
-                    sc[g * n + rr + 1] = _ld8(pt, bcol + g * W + rin)
+                    sc[g * n + rr + 1] = _ldv(Vec{L, T}, pt, bcol + g * W + rin)
                     g += 1
                 end
             end
@@ -245,7 +260,7 @@ function batched_fft8!(p::BatchPlan8{T}, pc::Ptr{Complex{T}}, off::Int,
                 rin = r * inner
                 g = 0
                 while g < gb
-                    _st8!(pt, bcol + g * W + rin, sc[g * n + r + 1])
+                    _stv!(pt, bcol + g * W + rin, sc[g * n + r + 1])
                     g += 1
                 end
             end
@@ -304,16 +319,16 @@ function _choose_radices_smooth(n::Int)
     return rad
 end
 
-struct BatchPlanMR{T}
+struct BatchPlanMR{T, L}
     n::Int
     forward::Bool
     radices::Vector{Int}         # stage order (smallest len first); e.g. n=384 -> [3,2,8,8]
-    rot::Vec{8, T}               # direction mask for the radix-8/4 butterflies
-    bf3::Vec{8, T}               # W_3 twiddle for avx_column_butterfly3 (carries the direction)
-    tw::Vector{Vec{8, T}}        # tw[k+1] = W_n^k broadcast to W lanes, full length n
+    rot::Vec{L, T}               # direction mask for the radix-8/4 butterflies
+    bf3::Vec{L, T}               # W_3 twiddle for avx_column_butterfly3 (carries the direction)
+    tw::Vector{Vec{L, T}}        # tw[k+1] = W_n^k broadcast to W=L÷2 lanes, full length n
     rev::Vector{Int}             # generalized digit reversal, 0-based
-    GB::Int                      # groups (of W=4 cols) per cache block; tile holds n*GB Vec{8}
-    scratch::Vector{Vec{8, T}}   # tile: n*GB, reused per block
+    GB::Int                      # groups (of W=L÷2 cols) per cache block; tile holds n*GB Vec{L}
+    scratch::Vector{Vec{L, T}}   # tile: n*GB, reused per block
     sin::Vector{Complex{T}}      # length n, scalar-tail input gather
     sout::Vector{Complex{T}}     # length n, scalar-tail output
     stw::Vector{Complex{T}}      # length n, scalar twiddles W_n^k for the naive-DFT tail
@@ -321,28 +336,30 @@ end
 
 function BatchPlanMR(::Type{T}, n::Int; forward::Bool, BLK::Int = _default_blk(n)) where {T}
     @assert _is_smooth_2a3(n)
+    L = _batch_lanes(T)
     radices = _choose_radices_smooth(n)
-    tw = Vector{Vec{8, T}}(undef, n)
+    tw = Vector{Vec{L, T}}(undef, n)
     stw = Vector{Complex{T}}(undef, n)
     for k in 0:(n - 1)
         cr, ci = AvxRadix.compute_twiddle(k, n, forward)
-        tw[k + 1] = AvxRadix.avx_broadcast_complex8(T, cr, ci)
+        tw[k + 1] = _bcast_c(Vec{L, T}, cr, ci)
         stw[k + 1] = Complex{T}(cr, ci)
     end
     revrad = reverse(radices)
     rev = Int[_digitrev(r, revrad) for r in 0:(n - 1)]
     GB = max(1, BLK ÷ 4)
-    rot = forward ? AvxRadix._rot90_fwd8(T) : AvxRadix._rot90_inv8(T)
-    bf3 = AvxRadix.avx_broadcast_twiddle8(T, 1, 3, forward)
-    BatchPlanMR{T}(n, forward, radices, rot, bf3, tw, rev, GB,
-                   Vector{Vec{8, T}}(undef, n * GB),
-                   Vector{Complex{T}}(undef, n), Vector{Complex{T}}(undef, n), stw)
+    rot = _rot_mask(Vec{L, T}, forward)
+    b3r, b3i = AvxRadix.compute_twiddle(1, 3, forward)
+    bf3 = _bcast_c(Vec{L, T}, b3r, b3i)
+    BatchPlanMR{T, L}(n, forward, radices, rot, bf3, tw, rev, GB,
+                      Vector{Vec{L, T}}(undef, n * GB),
+                      Vector{Complex{T}}(undef, n), Vector{Complex{T}}(undef, n), stw)
 end
 
 # Batched radix-3 DIT stage: size-3 DFT of 3 row-vectors with scalar-broadcast twiddles, reusing
 # avx_column_butterfly3 (width-generic). Same shape as _radix8_stage! with factor 3.
-@inline function _radix3_stage!(sc::Vector{Vec{8, T}}, b0::Int, tw::Vector{Vec{8, T}},
-                                bf3::Vec{8, T}, n::Int, len::Int) where {T}
+@inline function _radix3_stage!(sc::Vector{Vec{L, T}}, b0::Int, tw::Vector{Vec{L, T}},
+                                bf3::Vec{L, T}, n::Int, len::Int) where {T, L}
     q = len ÷ 3
     step = n ÷ len
     @inbounds begin
@@ -365,8 +382,8 @@ end
     return nothing
 end
 
-@inline function _fft_group_mr!(sc::Vector{Vec{8, T}}, b0::Int, radices::Vector{Int},
-                                tw::Vector{Vec{8, T}}, rot::Vec{8, T}, bf3::Vec{8, T}, n::Int) where {T}
+@inline function _fft_group_mr!(sc::Vector{Vec{L, T}}, b0::Int, radices::Vector{Int},
+                                tw::Vector{Vec{L, T}}, rot::Vec{L, T}, bf3::Vec{L, T}, n::Int) where {T, L}
     len = 1
     @inbounds for f in radices
         len *= f
@@ -399,10 +416,10 @@ end
 end
 
 # Cache-blocked driver — identical structure to batched_fft8! (generic radices + generic scalar tail).
-function batched_fft_mr!(p::BatchPlanMR{T}, pc::Ptr{Complex{T}}, off::Int,
-                         inner::Int, outer::Int) where {T}
+function batched_fft_mr!(p::BatchPlanMR{T, L}, pc::Ptr{Complex{T}}, off::Int,
+                         inner::Int, outer::Int) where {T, L}
     n = p.n; sc = p.scratch; rev = p.rev; tw = p.tw; rot = p.rot; bf3 = p.bf3
-    radices = p.radices; GB = p.GB; W = 4
+    radices = p.radices; GB = p.GB; W = L >> 1
     sin = p.sin; sout = p.sout; stw = p.stw
     pt = reinterpret(Ptr{T}, pc)
     nvtot = inner ÷ W
@@ -416,7 +433,7 @@ function batched_fft_mr!(p::BatchPlanMR{T}, pc::Ptr{Complex{T}}, off::Int,
                 rr = rev[r + 1]; rin = r * inner
                 g = 0
                 while g < gb
-                    sc[g * n + rr + 1] = _ld8(pt, bcol + g * W + rin)
+                    sc[g * n + rr + 1] = _ldv(Vec{L, T}, pt, bcol + g * W + rin)
                     g += 1
                 end
             end
@@ -429,7 +446,7 @@ function batched_fft_mr!(p::BatchPlanMR{T}, pc::Ptr{Complex{T}}, off::Int,
                 rin = r * inner
                 g = 0
                 while g < gb
-                    _st8!(pt, bcol + g * W + rin, sc[g * n + r + 1])
+                    _stv!(pt, bcol + g * W + rin, sc[g * n + r + 1])
                     g += 1
                 end
             end
