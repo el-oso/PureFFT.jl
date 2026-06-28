@@ -141,3 +141,72 @@ end
         @test_opt target_modules=(PureFFT,) mul!(y, p, x)
     end
 end
+
+# ── Real N-D (rfft / irfft / brfft) ──────────────────────────────────────────
+# FFTW.jl shadows AbstractFFTs.plan_rfft/plan_brfft for StridedArrays, so we build PureFFT's
+# RealNDPlan directly via _pure_plan_rfft_nd / _pure_plan_brfft_nd (exactly as the c2c testitems do)
+# and use FFTW's rfft/irfft/brfft as the golden reference.
+@testitem "Real N-D rfft forward bit-exact vs FFTW" begin
+    using PureFFT, FFTW
+    tol(::Type{Float64})=1e-12; tol(::Type{Float32})=1f-4
+    # r2c dim = first(region) must be EVEN; order matters (NOT sorted). c2c rest may be any length.
+    cases = (((8,6), 1), ((8,6), 2), ((8,6), (1,2)), ((8,6), (2,1)),
+             ((6,4,8), (1,2,3)), ((6,4,8), (1,3)), ((4,6,8), 2),
+             ((6,5), 1), ((6,5), (1,2)), ((8,9), (1,2)), ((6,4), (2,1)))
+    for T in (Float64, Float32), (sz, region) in cases
+        x = randn(T, sz...)
+        Y = PureFFT._pure_plan_rfft_nd(x, region) * x
+        ref = rfft(x, region)
+        @test size(Y) == size(ref)
+        @test maximum(abs.(Y .- ref)) / maximum(abs.(ref)) < tol(T)
+    end
+    # Colon region == 1:ndims (FFTW.rfft can't take Colon, so reference with the range)
+    x = randn(Float64, 8,6,4)
+    @test maximum(abs.((PureFFT._pure_plan_rfft_nd(x, :) * x) .- rfft(x, 1:3))) / maximum(abs.(rfft(x,1:3))) < 1e-12
+end
+
+@testitem "Real N-D irfft/brfft bit-exact vs FFTW + round-trip" begin
+    using PureFFT, FFTW
+    tol(::Type{Float64})=1e-12; tol(::Type{Float32})=1f-4
+    cases = (((8,6), 1), ((8,6), 2), ((8,6), (1,2)), ((8,6), (2,1)),
+             ((6,4,8), (1,2,3)), ((6,4,8), (1,3)), ((4,6,8), 2),
+             ((6,5), (1,2)), ((8,9), (1,2)))
+    for T in (Float64, Float32), (sz, region) in cases
+        x = randn(T, sz...)
+        Y = rfft(x, region)                       # FFTW half-spectrum (same as ours, verified above)
+        rl = region isa Int ? region : first(region)
+        n = sz[rl]
+        # brfft (unnormalized) bit-exact vs FFTW
+        bb = PureFFT._pure_plan_brfft_nd(Y, n, region) * Y
+        @test maximum(abs.(bb .- brfft(Y, n, region))) / maximum(abs.(brfft(Y, n, region))) < tol(T)
+        # irfft (normalized via prefixed helper) round-trips AND matches FFTW.irfft
+        yb = PureFFT.pirfft(Y, n, region)
+        @test maximum(abs.(yb .- x)) / maximum(abs.(x)) < tol(T)
+        @test maximum(abs.(yb .- irfft(Y, n, region))) / maximum(abs.(x)) < tol(T)
+    end
+end
+
+@testitem "Real N-D AbstractFFTs derivation (ScaledPlan irfft) + mul!" begin
+    using PureFFT, FFTW, AbstractFFTs, LinearAlgebra
+    x = randn(Float64, 6,4,8)
+    region = (1,3); n = 6
+    pf = PureFFT._pure_plan_rfft_nd(x, region)
+    Y = Array{ComplexF64}(undef, AbstractFFTs.rfft_output_size(x, region))
+    mul!(Y, pf, x)                                   # forward mul!
+    @test maximum(abs.(Y .- rfft(x, region))) / maximum(abs.(rfft(x,region))) < 1e-12
+    # irfft derived from our plan_brfft through AbstractFFTs.ScaledPlan (the drop-in path)
+    pb = PureFFT._pure_plan_brfft_nd(Y, n, region)
+    sp = AbstractFFTs.ScaledPlan(pb, AbstractFFTs.normalization(Float64, AbstractFFTs.brfft_output_size(Y, n, region), region))
+    @test maximum(abs.((sp * Y) .- x)) / maximum(abs.(x)) < 1e-12
+    @test AbstractFFTs.fftdims(pf) == (1, 3)
+end
+
+@testitem "Real N-D error paths" begin
+    using PureFFT
+    @test_throws ArgumentError PureFFT._pure_plan_rfft_nd(randn(7,4), 1)        # odd r2c dim
+    @test_throws ArgumentError PureFFT._pure_plan_rfft_nd(randn(8,4), (1,3))    # dim 3 ∉ 1:2
+    @test_throws ArgumentError PureFFT._pure_plan_rfft_nd(randn(8,4), 3)        # r2c dim out of bounds
+    # brfft size guard: size(X, first(region)) must == n÷2+1
+    X = randn(ComplexF64, 5, 4)
+    @test_throws ArgumentError PureFFT._pure_plan_brfft_nd(X, 10, 1)            # 10÷2+1=6 ≠ 5
+end

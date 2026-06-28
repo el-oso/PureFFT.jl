@@ -42,5 +42,6 @@ include("r2r.jl")
 include("abstractfft.jl")
 include("ndim_batched.jl")
 include("ndim.jl")
+include("ndim_real.jl")
 
 end # module
