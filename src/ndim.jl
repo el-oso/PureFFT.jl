@@ -18,11 +18,20 @@ plan_inverse(p::NDPlan) = p.inverse
 # on a non-concrete field (CLAUDE.md rule 5). They form a heterogeneous NTuple in `plans` and are only
 # ever indexed with LITERAL indices inside the @generated apply (rule 1).
 #   Dim1Plan         — dim 1: each column is a unit-stride contiguous run, apply the 1-D plan in place.
+#   BatchedDim1      — dim 1, small F32 only: batch transforms ACROSS the trailing dims (fills the SIMD
+#                      width FFTW-style) — transpose-pack a chunk, run the batched kernel, transpose back.
 #   BatchedDim       — pow2 dim d>1: batched radix-8 column kernel, NO transpose (ndim_batched.jl).
 #   BatchedSmoothDim — 2^a·3^b dim d>1: batched mixed-radix (radix-3 + radix-8/4/2) kernel, NO transpose.
 #   TransposeDim     — other non-pow2 dim d>1: transpose → 1-D plan → transpose-back (the fallback).
 struct Dim1Plan{P}
     plan::P
+end
+# dim 1, batched across the trailing dims. bp is a BatchPlan8 (pow2 n1) or BatchPlanMR (2^a·3^b n1).
+struct BatchedDim1{T, BP}
+    bp::BP
+    stage::Vector{Complex{T}}    # n1 × M staging buffer (M = transforms per chunk), reused per chunk
+    n1::Int
+    M::Int                       # transforms per chunk (multiple of W=L÷2, ≤ outer)
 end
 struct BatchedDim{T, L}
     d::Int
@@ -52,9 +61,34 @@ end
 # 2^a·3^b d>1 → BatchedSmoothDim (mixed-radix batched, no transpose); else → TransposeDim. Each branch
 # returns a distinct CONCRETE type (the heterogeneous tuple's element types stay concrete ⇒ the
 # @generated apply specializes fully).
+# Route dim-1 to the batched-across-trailing-dims kernel ONLY where the per-column Dim1Plan underfills the
+# SIMD register AND batching beats the transpose-pack overhead. Both gates are Float32 only (F64 per-column
+# already ≥ parity) with ≥1 full vector group (outer ≥ W):
+#   • 2^a·3^b lengths (BatchPlanMR): per-column can't fill the F32 width (radix-3 codelets) ⇒ batching is a
+#     big win at any small n1 (measured 48³ 2.6×, 96³ 2.4×, 384² 1.6× on the dim-1 region). Cap n1 ≤ 384.
+#   • pow2 lengths (BatchPlan8): the radix-8 codelet ALREADY vectorizes F32 per single transform, so batching
+#     only helps small n1 with many trailing transforms (64³ 1.07×); for n1 ≥ 128 the extra transpose-pack
+#     traffic makes it a net loss (128² 0.92×, 256² 0.45×, 512² 0.31×). Cap pow2 at n1 ≤ 64.
+# Thresholds chosen by direct dim-1-region measurement (task 6o, scratchpad/dim1_measure.jl).
+@inline function _use_batched_dim1(::Type{T}, n1::Int, outer::Int) where {T}
+    # NB _is_smooth_2a3 is TRUE for pure pow2 too, so the smooth branch must exclude pow2 (else 256/512
+    # would route here and regress) — mirror _mk_dim's pow2-before-smooth precedence.
+    T === Float32 && outer >= (_batch_lanes(T) >> 1) &&
+        ((ispow2(n1) && n1 <= 64) || (!ispow2(n1) && _is_smooth_2a3(n1) && n1 <= 384))
+end
+
 function _mk_dim(::Type{Complex{T}}, d::Int, sz; inverse::Bool) where {T}
     if d == 1
-        Dim1Plan(plan_pfft(Complex{T}, sz[1]; inverse, variant=:fast))
+        n1 = sz[1]
+        outer = prod(@inbounds(sz[i]) for i in 2:length(sz); init=1)
+        if _use_batched_dim1(T, n1, outer)
+            W = _batch_lanes(T) >> 1
+            M = clamp((8192 ÷ n1) & ~(W - 1), W, outer)          # ~L2-resident chunk, multiple of W
+            bp = ispow2(n1) ? BatchPlan8(T, n1; forward=!inverse) : BatchPlanMR(T, n1; forward=!inverse)
+            BatchedDim1{T, typeof(bp)}(bp, Vector{Complex{T}}(undef, n1 * M), n1, M)
+        else
+            Dim1Plan(plan_pfft(Complex{T}, n1; inverse, variant=:fast))
+        end
     elseif ispow2(sz[d])
         BatchedDim(d, BatchPlan8(T, sz[d]; forward=!inverse))
     elseif _is_smooth_2a3(sz[d])
@@ -106,6 +140,37 @@ end
 @inline function _apply_dim!(pd::Dim1Plan, x::AbstractArray{Complex{T}}, sz, scratch) where {T}
     @inbounds for c in CartesianIndices(Base.tail(axes(x)))
         apply_unnormalized!(pd.plan, view(x, :, c))
+    end
+    return x
+end
+
+# dim 1, batched across the trailing dims (small F32). The per-column Dim1Plan FFTs ONE length-n1 transform
+# at a time, which cannot fill a 512-bit register for small F32 n1 (single-transform width floor → F64 speed;
+# task 6n). The width win comes from batching ACROSS transforms — exactly what the strided dims do. Here:
+# pack a chunk of m≤M consecutive transforms (n1×m) into the staging buffer as an m×n1 layout (a tuned
+# _transpose_block!), run the EXISTING batched kernel (inner=m, outer=1) on the now-contiguous batch, then
+# transpose the natural-order results back. The kernel's scalar tail handles the final m%W columns; the
+# outer%M last chunk is just a smaller m. Pointer-based + GC.@preserve, zero-alloc.
+@inline _batched_apply!(bp::BatchPlan8{T},  pc::Ptr{Complex{T}}, off, inner, outer) where {T} =
+    batched_fft8!(bp, pc, off, inner, outer)
+@inline _batched_apply!(bp::BatchPlanMR{T}, pc::Ptr{Complex{T}}, off, inner, outer) where {T} =
+    batched_fft_mr!(bp, pc, off, inner, outer)
+
+@inline function _apply_dim!(pd::BatchedDim1{T}, x::AbstractArray{Complex{T}}, sz, scratch) where {T}
+    n1 = pd.n1; M = pd.M; stage = pd.stage
+    _, _, outer = _dim_extents(1, sz)
+    es = sizeof(Complex{T})
+    GC.@preserve x stage begin
+        px = reinterpret(Ptr{Complex{T}}, pointer(x)); ps = pointer(stage)
+        t0 = 0
+        @inbounds while t0 < outer
+            m = min(M, outer - t0)
+            xb = px + t0 * n1 * es
+            _transpose_block!(ps, xb, n1, m)          # stage[col + m·r] = x[r + n1·col]   (n1×m → m×n1)
+            _batched_apply!(pd.bp, ps, 0, m, 1)        # batched length-n1 FFT of the m packed transforms
+            _transpose_block!(xb, ps, m, n1)          # x[r + n1·col] = stage[col + m·r]   (m×n1 → n1×m)
+            t0 += m
+        end
     end
     return x
 end

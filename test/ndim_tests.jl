@@ -40,6 +40,32 @@ end
     end
 end
 
+@testitem "N-D BatchedDim1 (batched dim-1, F32) bit-exact incl outer%W tail + inv" begin
+    using PureFFT, FFTW
+    tol = 1f-4
+    # n1 routed to BatchedDim1 for F32: 64 (pow2→BatchPlan8), 48/96 (smooth→BatchPlanMR). outer chosen
+    # to exercise the outer%W=8 tail (last chunk m not a multiple of W) and multi-chunk (outer>M).
+    cases = ((64, 19), (64, 200), (48, 11), (96, 13), (48, 3, 5))   # outer = ∏ trailing dims
+    for sz in cases
+        # confirm routing actually hit BatchedDim1 (else the test is vacuous)
+        pd = PureFFT._mk_dim(ComplexF32, 1, sz; inverse=false)
+        @test pd isa PureFFT.BatchedDim1
+        x = randn(ComplexF32, sz...)
+        p = PureFFT._pure_plan_fft_nd(x, (1,); inverse=false)
+        y = copy(x); PureFFT.apply_unnormalized!(p, y)
+        ref = fft(x, 1)
+        @test maximum(abs.(y .- ref))/maximum(abs.(ref)) < tol
+        # inverse round-trip through the batched dim-1 path
+        pinv = PureFFT._pure_plan_fft_nd(x, (1,); inverse=true)
+        z = copy(y); PureFFT.apply_unnormalized!(pinv, z)
+        @test maximum(abs.(z ./ sz[1] .- x)) < tol
+    end
+    # F64 same shapes must NOT route to BatchedDim1 (stay per-column Dim1Plan)
+    @test PureFFT._mk_dim(ComplexF64, 1, (64, 19); inverse=false) isa PureFFT.Dim1Plan
+    # large pow2 n1 stays per-column even for F32 (batched loses there)
+    @test PureFFT._mk_dim(ComplexF32, 1, (256, 256); inverse=false) isa PureFFT.Dim1Plan
+end
+
 @testitem "N-D public API: mul!/dispatch/column-tiling (PureFFT path)" begin
     using PureFFT, FFTW, LinearAlgebra
     tol(::Type{Float64})=1e-12; tol(::Type{Float32})=1f-4
@@ -104,7 +130,9 @@ end
              ((8,16),(1,2)),      # dim2 n_d=16 pow2  → BatchedDim
              ((4,8,16),(2,3)),    # dim2 n_d=8, dim3 n_d=16 pow2 → BatchedDim (both d>1)
              ((8,48),(1,2)),      # dim2 n_d=48=2^4·3 → BatchedSmoothDim (mixed-radix batched)
-             ((4,8,24),(2,3)))    # dim2 n_d=8 pow2, dim3 n_d=24=2^3·3 smooth → mixed routing
+             ((4,8,24),(2,3)),    # dim2 n_d=8 pow2, dim3 n_d=24=2^3·3 smooth → mixed routing
+             ((64,19),(1,)),      # dim1 n1=64 F32 → BatchedDim1 (pow2), outer%W tail (F64 → Dim1Plan)
+             ((48,13),(1,)))      # dim1 n1=48 F32 → BatchedDim1 (smooth), outer%W tail
     for T in (Float64, Float32), (sz, region) in cases
         x = randn(Complex{T}, sz...); y = similar(x)
         p = PureFFT._pure_plan_fft_nd(x, region; inverse=false)
