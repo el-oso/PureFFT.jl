@@ -121,6 +121,18 @@ end
     end
 end
 
+@testitem "DST-II (RODFT10) bit-exact vs FFTW + naive (F64+F32, even+odd N)" begin
+    using PureFFT, FFTW, ErrorTypes
+    tol(::Type{Float64})=1e-12; tol(::Type{Float32})=1f-4
+    naive_dst2(x) = [2*sum(x[j+1]*sin(pi*(2j+1)*(k+1)/(2length(x))) for j in 0:length(x)-1) for k in 0:length(x)-1]
+    for T in (Float64, Float32), n in (1,2,3,4,5,8,9,16,17,32)   # even N → real-FFT route, odd N → complex fallback
+        x = randn(T, n)
+        y = unwrap(PureFFT.tryr2r(x, RODFT10))
+        @test maximum(abs.(y .- FFTW.r2r(x, FFTW.RODFT10)))/max(1,maximum(abs.(x))*n) < tol(T)
+        @test maximum(abs.(y .- T.(naive_dst2(Float64.(x)))))/max(1,maximum(abs.(x))*n) < tol(T)  # independent ref
+    end
+end
+
 @testitem "DCT-II parity vs FFTW ≥ 0.96× (even N)" tags=[:perf] begin
     using PureFFT, FFTW, BenchmarkTools, Statistics, LinearAlgebra
     # `Pkg.test` runs with `--check-bounds=yes`, which overrides @inbounds in PureFFT's Julia

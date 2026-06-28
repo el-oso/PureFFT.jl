@@ -181,6 +181,68 @@ function _apply!(p::R2RPlan{REDFT01_T, T, P}, y::AbstractVector{T}, x::AbstractV
     return y
 end
 
+# ── DST-II (RODFT10) — sine sibling of DCT-II, via (−1)ʲ pre-sign + reversed output ──
+# FFTW RODFT10 (unnormalized): y_k = 2·Σ_j x_j·sin(π(2j+1)(k+1)/(2N)), k=0..N-1.
+# Reduction to DCT-II: sin(π(2j+1)(k+1)/2N) = (−1)ʲ·cos(π(2j+1)(N−1−k)/2N) (use k'=N−1−k;
+# sin(π(2j+1)/2)=(−1)ʲ, cos(π(2j+1)/2)=0). So  DST-II_k(x) = DCT-II_{N−1−k}((−1)ʲ x_j):
+# run REDFT10's exact machinery (same Makhoul reorder, same post-twiddle _dct_post_tw) with the
+# odd-index samples NEGATED (the tail), then REVERSE the output (y'_k → y_{N−1−k}). Both routes
+# (even-N real FFT, odd-N complex fallback) mirror REDFT10 with those two changes. No inv yet
+# (DST-III / RODFT01 is Task 4).
+function _build_r2r(::RODFT10_T, ::Type{T}, n::Int) where {T}
+    n >= 1 || return Result{R2RPlan, R2RError}(Err(R2RError(ERR_SIZE_TOO_SMALL, "RODFT10 needs n≥1")))
+    if iseven(n)
+        inner = plan_prfft(T, n)                       # length-n real FFT
+        post  = _dct_post_tw(T, n)                     # W_k = e^{−iπk/2N} (shared with DCT-II)
+        rbuf  = Vector{T}(undef, n)
+        cbuf  = Vector{Complex{T}}(undef, n ÷ 2 + 1)
+        plan  = R2RPlan{RODFT10_T, T, typeof(inner)}(n, inner, Complex{T}[], post, rbuf, cbuf)
+        return Result{R2RPlan, R2RError}(Ok(plan))
+    else
+        return _build_r2r_dst2_odd(T, n)
+    end
+end
+
+# odd-N complex-FFT fallback (mirrors _build_r2r_dct2_odd): full complex spectrum, ~2× slower.
+function _build_r2r_dst2_odd(::Type{T}, n::Int) where {T}
+    inner = plan_pfft(Complex{T}, n; variant = :fast, inverse = false)
+    post  = _dct_post_tw(T, n)
+    cbuf  = Vector{Complex{T}}(undef, n)               # full complex spectrum
+    plan  = R2RPlan{RODFT10_T, T, typeof(inner)}(n, inner, Complex{T}[], post, T[], cbuf)
+    return Result{R2RPlan, R2RError}(Ok(plan))
+end
+
+# Apply (even N): Makhoul reorder with odd samples NEGATED → real FFT → reversed DCT-II output.
+function _apply!(p::R2RPlan{RODFT10_T, T, P}, y::AbstractVector{T}, x::AbstractVector{<:Real}) where {T, P <: RealFFTPlan}
+    n = p.n; m = n ÷ 2; v = p.rbuf; V = p.cbuf; W = p.post
+    @inbounds for j in 0:(m - 1)
+        v[j + 1] = T(x[2j + 1])       # even-index samples up front
+        v[n - j] = -T(x[2j + 2])      # odd-index samples NEGATED, reversed into the tail
+    end
+    apply_rfft!(p.inner, v, V)                          # V[1..m+1] = half-spectrum
+    @inbounds for k in 0:(n - 1)
+        Vk = k <= m ? V[k + 1] : conj(V[n - k + 1])
+        y[n - k] = T(2) * real(W[k + 1] * Vk)           # reversed output: DCT-II_k → DST-II_{N−1−k}
+    end
+    return y
+end
+
+# Apply (odd N): inner is a complex plan (P<:AbstractFFTPlan). Same reorder/negate, full-spectrum FFT.
+function _apply!(p::R2RPlan{RODFT10_T, T, P}, y::AbstractVector{T}, x::AbstractVector{<:Real}) where {T, P <: AbstractFFTPlan}
+    n = p.n; V = p.cbuf; W = p.post
+    @inbounds for j in 0:((n - 1) ÷ 2)
+        V[j + 1] = Complex{T}(T(x[2j + 1]), zero(T))    # even-index samples ascending into the front
+    end
+    @inbounds for j in 0:(n ÷ 2 - 1)
+        V[n - j] = Complex{T}(-T(x[2j + 2]), zero(T))   # odd-index samples NEGATED, reversed into the tail
+    end
+    apply_unnormalized!(p.inner, V)
+    @inbounds for k in 0:(n - 1)
+        y[n - k] = T(2) * real(W[k + 1] * V[k + 1])     # reversed output
+    end
+    return y
+end
+
 # ── DCT-IV (REDFT11) — size-N complex-FFT route (Makhoul-IV) ─────────────────
 # FFTW REDFT11 (unnormalized): y_k = 2·Σ_j x_j·cos(π(2j+1)(2k+1)/(4N)), k=0..N-1.
 # Reduction (any N, even or odd): use the DCT-II even/odd reorder WITH A SIGN FLIP on the
