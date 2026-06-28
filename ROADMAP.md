@@ -94,25 +94,37 @@ Status + planned work. This is the canonical, checked-in roadmap (human- and age
   one (digit-reversed gather/scatter cancels the width gain) — the monolith port, not a wider base, was the
   answer. Minor follow-up: the n=64/128 fused in-register kernels are still Float64-only (those F32 sizes
   already clear the gate via the W=8 tree / radix4-AVX).
-- **N-dimensional (2-D/3-D) FFT — DONE for complex (c2c); 14/16 benchmarked shapes ≥ 0.96× FFTW** (branch
-  `feat/ndim-fft`). Full FFTW generality (any rank, any `region`), drop-in via AbstractFFTs + prefixed `pfft`.
-  Separable on the ≥FFTW 1-D kernels, but fast via: (1) a **batched-strided kernel** (`src/ndim_batched.jl`) —
-  each strided dim FFTs by vectorizing *across the contiguous batch*, **no transpose** (the transpose-per-dim
-  path sat at ~0.25×; this is the big lever); (2) **`BatchedDim1`** gather-pack to fill the SIMD width on the
-  contiguous dim for small Float32 shapes; (3) **F32 512-bit batch widening** (`Vec{16,Float32}`); (4) a 1-D
-  **planner fix** admitting single-factor-of-3 sizes (48/96/384 = 2ᵏ·3 — a `p3≥2` guard was dumping them on a
-  slow generic path; now routed to the fast mixed-radix kernels, beating FFTW — this also lifts 1-D
-  non-pow2). Hot path dispatch-free + zero-alloc + trim-safe (`@generated`-over-rank apply, concrete per-dim
-  descriptors). Bit-exact vs FFTW; full suite green.
-  - **OPEN — `128×128` small-square** (F64 0.78, F32 ~0.92): a 256 KB L2-resident compute-bound square where
-    FFTW's hand-tuned fused 2-D codelet wins; PureFFT's batched length-128 codelet is ~2× slower per pass and
-    fused/transpose alternatives are slower (verified, tasks 6m/6t). Needs a dedicated FFTW-class length-128
-    contiguous-batched codelet — niche; the only sub-gate shape.
-  - **Remaining (not blocking c2c):** real N-D (`rfft`/`irfft` over arrays) per the spec follow-up; batched
-    non-pow2 radix-5/7 + Rader for 5/7-smooth & prime dims (the `2^a·3` smooth case is done); `512²`-class
-    large-inner strided could use FFTW's buffered/tiled transpose (currently passes at ~0.98, near gate).
-  - Spec: `docs/superpowers/specs/2026-06-27-ndim-fft-design.md`; plan:
-    `docs/superpowers/plans/2026-06-27-ndim-fft-complex.md`.
+- **N-dimensional (2-D/3-D) FFT — DONE (complex + real); 23/24 benchmarked complex shapes ≥ 0.96× FFTW**
+  (branch `feat/ndim-fft`, ~32 commits, full suite green). Full FFTW generality (any rank, any `region`),
+  drop-in via AbstractFFTs + prefixed `pfft`/`prfft`. A pure **"beat rustfft"** win — rustfft has no N-D.
+  Separable on the ≥FFTW 1-D kernels, but fast via:
+  1. a **batched-strided kernel** (`src/ndim_batched.jl`) — each strided dim FFTs by vectorizing *across the
+     contiguous batch*, **no transpose** (the transpose-per-dim path sat at ~0.25×; the big lever);
+  2. **`BatchedDim1`** gather-pack — fills the SIMD width on the contiguous dim for small shapes;
+  3. **F32 512-bit batch widening** (`Vec{16,Float32}`);
+  4. **batched radix-3/5/7** + a **1-D planner fix** (single-factor-of-3/5/7 sizes were on a slow generic
+     path; admitting them — plus new **B16/B32 leaves, `MR7` radix-7, `avx_transpose7`/`_rbf15`/`_rbf16`** —
+     routes them to the fast kernels, *beating* FFTW; this also lifted **1-D non-pow2**: n=96 0.65→1.28,
+     112/160/224/240 → 1.19–1.46);
+  5. **dedicated fused codelets** for the small compute-bound squares: length-128 (8×16, F32) and length-240
+     (16×15, both precisions).
+  Hot path dispatch-free + zero-alloc + trim-safe (`@generated`-over-rank apply, concrete per-dim descriptors).
+  Bit-exact vs FFTW.
+  - **Real N-D (`rfft`/`irfft`/`brfft`)** — done (`src/ndim_real.jl`): r2c along `first(region)` + c2c rest on
+    the proven complex engine, batched r2c (forward zero-alloc). F32 pow2 + F64 512² clear the gate; F64
+    small/non-pow2 rfft floor on the narrow-F64 real-codelet (below).
+  - **OPEN — the one genuine floor: F64 `128×128`** (0.78–0.81): a 256 KB L2-resident *compute-bound* square
+    where FFTW's hand-tuned `n1fv_128` wins at narrow (4-wide) F64 AVX. **Five** measured structural NO-GOs
+    (6m/6t/6u/6x/7b: amortized dim-1, fused/transpose sandwich, radix-16, dedicated 8×16 codelet, radix4avx
+    transpose). The F32 version of the 8×16 codelet *does* clear F32 128² (pays off at AVX-512 width). Same
+    ceiling caps F64 rfft small shapes (256²/64³ ≈ 0.78–0.84) — confirmed by a no-gain recombine opt (7e).
+    Beating it needs a hand-written FFTW-class length-128 F64 codelet — niche.
+  - **At-gate within noise:** F64 64³ (≈0.93–0.99) and 512² (≈0.96–1.01) — bandwidth-bound; a register
+    codelet is infeasible at n=512 (sub-DFTs exceed the zmm file).
+  - **Remaining (not blocking):** Rader for **prime** dims (smooth is done); a fused real N-D pass for F64
+    rfft small shapes.
+  - Spec: `docs/superpowers/specs/2026-06-27-ndim-fft-design.md`; bench: `bench/run_compare_ndim.jl` +
+    `bench/run_compare_rndim.jl`.
 - **Multi-threading** — single-thread only (deliberate for the kernel investigation; a real library wants
   threads).
 - **`autoplan` returns a 7-member `Union`, not a concrete type** — runtime kernel selection (the
