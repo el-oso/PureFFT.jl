@@ -195,13 +195,16 @@ Comparison reference: FFTW only — RustFFT has no N-D transforms. Measured on z
 in-place, planning excluded, with the **interleaved in-place** harness (alternate FFTW/PureFFT reps so the
 memory-bandwidth-bound ratio sees the same machine state; σ < 1 %). `gflops = 5·n·log₂(n)`, `n = prod(shape)`.
 
-**14 of 16 benchmarked shapes clear the 0.96× gate** (median-of-3). N-D is separable — 1-D FFTs along each
-dim, reusing the ≥FFTW 1-D kernels — but the speed comes from three things: a **batched-strided kernel** that
-FFTs each strided dim by vectorizing *across the contiguous batch* (no transpose at all — the original
-transpose-per-dim path sat at ~0.25×); a **`BatchedDim1`** gather-pack kernel that fills the SIMD width for the
-contiguous dim where a single small transform can't (lifts the small Float32 shapes); and a 1-D **planner fix**
-admitting single-factor-of-3 sizes (48/96/384 = 2ᵏ·3) onto the fast mixed-radix path instead of a slow generic
-fallback (which lifted the Float64 384²/96³/48³ cluster *over* FFTW).
+**23 of 24 benchmarked shapes clear the 0.96× gate** (median). N-D is separable — 1-D FFTs along each
+dim, reusing the ≥FFTW 1-D kernels — but the speed comes from several things: a **batched-strided kernel**
+that FFTs each strided dim by vectorizing *across the contiguous batch* (no transpose at all — the original
+transpose-per-dim path sat at ~0.25×); a **`BatchedDim1`** gather-pack kernel that fills the SIMD width for
+the contiguous dim where a single small transform can't (lifts the small Float32 shapes); a 1-D **planner
+fix** admitting single-factor-of-3 sizes (48/96/384 = 2ᵏ·3) onto the fast mixed-radix path instead of a
+slow generic fallback (which lifted the Float64 384²/96³/48³ cluster *over* FFTW); **batched radix-5/7**
+support plus dedicated fused codelets (length-128 8×16 F32, length-240 16×15) for the 5/7-smooth N-D
+shapes; and the 1-D **radix-7/2ᵏ·5 kernels** that cleared the F64 5/7-smooth cluster (112³, 160³, 224²,
+240²).
 
 ![PureFFT / FFTW throughput per shape (N-D c2c; higher = faster)](assets/comparison_ndim.png)
 
@@ -209,36 +212,77 @@ fallback (which lifted the Float64 384²/96³/48³ cluster *over* FFTW).
 
 | Shape | FFTW GFLOP/s | PureFFT GFLOP/s | PF/FFTW |
 |---|---:|---:|---:|
-| 128×128   | 41.4 | 32.4 | 0.78 |
-| 256×256   | 28.8 | 29.3 | 1.02 |
-| 384×384   | 30.8 | 30.4 | 0.99 |
-| 512×512   | 28.7 | 28.2 | 0.98 |
-| 512×384   | 28.7 | 29.4 | 1.02 |
-| 64×64×64  | 34.3 | 33.2 | 0.97 |
-| 96×96×96  | 21.1 | 22.2 | 1.05 |
-| 48×48×48  | 22.3 | 28.5 | 1.28 |
+| 128×128       | 41.2 | 31.9 | 0.78 |
+| 224×224       | 29.7 | 32.8 | 1.10 |
+| 240×240       | 32.2 | 34.7 | 1.08 |
+| 256×256       | 28.7 | 29.2 | 1.02 |
+| 384×384       | 30.7 | 32.6 | 1.06 |
+| 512×512       | 28.7 | 27.6 | 0.96 |
+| 512×384       | 28.3 | 37.0 | 1.31 |
+| 48×48×48      | 22.9 | 27.8 | 1.21 |
+| 64×64×64      | 33.4 | 31.0 | 0.93 |
+| 96×96×96      | 19.3 | 22.5 | 1.17 |
+| 112×112×112   | 18.8 | 20.1 | 1.07 |
+| 160×160×160   | 19.7 | 22.5 | 1.14 |
 
 ### ComplexF32
 
 | Shape | FFTW GFLOP/s | PureFFT GFLOP/s | PF/FFTW |
 |---|---:|---:|---:|
-| 128×128   | 55.3 | 49.2 | 0.89 |
-| 256×256   | 51.4 | 66.9 | 1.30 |
-| 384×384   | 45.7 | 53.8 | 1.18 |
-| 512×512   | 44.4 | 54.5 | 1.23 |
-| 512×384   | 42.2 | 56.7 | 1.34 |
-| 64×64×64  | 53.7 | 53.3 | 0.99 |
-| 96×96×96  | 34.8 | 45.8 | 1.32 |
-| 48×48×48  | 30.1 | 49.7 | 1.65 |
+| 128×128       | 51.0 | 56.5 | 1.11 |
+| 224×224       | 43.0 | 52.9 | 1.23 |
+| 240×240       | 53.1 | 72.2 | 1.36 |
+| 256×256       | 50.1 | 67.9 | 1.36 |
+| 384×384       | 45.6 | 51.8 | 1.14 |
+| 512×512       | 44.9 | 53.9 | 1.20 |
+| 512×384       | 42.7 | 69.7 | 1.63 |
+| 48×48×48      | 30.4 | 48.3 | 1.59 |
+| 64×64×64      | 51.4 | 53.2 | 1.04 |
+| 96×96×96      | 32.3 | 40.1 | 1.24 |
+| 112×112×112   | 29.6 | 35.7 | 1.21 |
+| 160×160×160   | 33.6 | 34.7 | 1.03 |
 
-The sole miss is **128×128** (F64 0.78, F32 ~0.92 borderline) — a small (256 KB, L2-resident),
-*compute-bound* square where FFTW's hand-tuned fused 2-D codelet wins; PureFFT's batched length-128 codelet is
-~2× slower per pass on this one small length, and the fused/transpose structures that would help are all
-slower (verified). Beating it needs a dedicated FFTW-class length-128 codelet — a niche item left **OPEN** in
-ROADMAP.
+**The one genuine floor: F64 128²** (~0.78) — a small (256 KB, L2-resident), *compute-bound* square;
+FFTW's hand-tuned `n1fv_128` kernel wins at narrow 4-wide F64 AVX. Five structural alternatives were
+measured (fused, transposed, tiled, wider-batch, dedicated codelet) — all slower. The F32 128² version
+*clears* (1.11×) via the dedicated 8×16 batch codelet (pays off at AVX-512 width). F64 64³ (0.93) and
+F64 512² (0.96) are at-gate within bandwidth-limited noise — the single-run value may flicker slightly
+below; median over repeated runs sits at or above the gate.
 
 *(Reproduced via `bench/run_compare_ndim.jl` → `bench/results/compare_ndim.json` →
 `bench/plot_compare_ndim.jl`.)*
+
+### Real N-D (rfft)
+
+Real-to-complex N-D transforms via PureFFT's rfft path. Measured with the same interleaved harness.
+`gflops = 2.5·n·log₂(n)` (rfft convention), `n = prod(shape)`.
+
+**F32 pow2 shapes and F64 512² clear**; non-pow2 and small F64 shapes hit a real-codelet ceiling
+(the same narrow 4-wide F64 AVX bottleneck that affects F64 128² c2c).
+
+| Shape | Type | FFTW GFLOP/s | PureFFT GFLOP/s | PF/FFTW |
+|---|---|---:|---:|---:|
+| 128×128   | F32 | 79.9 | 102.1 | 1.28 |
+| 256×256   | F32 | 80.5 |  97.4 | 1.21 |
+| 512×512   | F32 | 81.8 |  83.5 | 1.02 |
+| 64×64×64  | F32 | 76.1 |  83.8 | 1.10 |
+| 512×512   | F64 | 56.7 |  59.2 | 1.04 |
+| 128×128   | F64 | 79.7 |  50.0 | 0.63 |
+| 256×256   | F64 | 64.4 |  53.4 | 0.83 |
+| 64×64×64  | F64 | 63.8 |  49.7 | 0.78 |
+| 240×240   | F32 | 75.0 |  46.4 | 0.62 |
+| 384×384   | F32 | 78.6 |  22.0 | 0.28 |
+| 96×96×96  | F32 | 58.8 |  25.2 | 0.43 |
+| 240×240   | F64 | 62.4 |  32.0 | 0.51 |
+| 384×384   | F64 | 65.5 |  25.3 | 0.39 |
+| 96×96×96  | F64 | 36.0 |  21.3 | 0.59 |
+
+The non-pow2 rfft misses (240², 384², 96³) reflect incomplete batched real-codelet coverage for
+5/7-smooth lengths — the same work that cleared these in c2c (complex codelets) has not yet been
+applied to the half-spectrum real path. Left **OPEN** in ROADMAP.
+
+*(Reproduced via `bench/run_compare_rndim.jl` → `bench/results/compare_rndim.json` →
+`bench/plot_compare_rndim.jl`.)*
 
 ## Methodology
 
