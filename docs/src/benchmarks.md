@@ -191,9 +191,17 @@ authoritative measurement.
 
 ## N-dimensional FFT
 
-Comparison reference: FFTW only — RustFFT has no N-D transforms.
-Measured on znver5, single-thread, in-place, planning excluded, 400 samples.
-`gflops = 5·n·log₂(n)` with `n = prod(shape)`.
+Comparison reference: FFTW only — RustFFT has no N-D transforms. Measured on znver5, single-thread,
+in-place, planning excluded, with the **interleaved in-place** harness (alternate FFTW/PureFFT reps so the
+memory-bandwidth-bound ratio sees the same machine state; σ < 1 %). `gflops = 5·n·log₂(n)`, `n = prod(shape)`.
+
+**14 of 16 benchmarked shapes clear the 0.96× gate** (median-of-3). N-D is separable — 1-D FFTs along each
+dim, reusing the ≥FFTW 1-D kernels — but the speed comes from three things: a **batched-strided kernel** that
+FFTs each strided dim by vectorizing *across the contiguous batch* (no transpose at all — the original
+transpose-per-dim path sat at ~0.25×); a **`BatchedDim1`** gather-pack kernel that fills the SIMD width for the
+contiguous dim where a single small transform can't (lifts the small Float32 shapes); and a 1-D **planner fix**
+admitting single-factor-of-3 sizes (48/96/384 = 2ᵏ·3) onto the fast mixed-radix path instead of a slow generic
+fallback (which lifted the Float64 384²/96³/48³ cluster *over* FFTW).
 
 ![PureFFT / FFTW throughput per shape (N-D c2c; higher = faster)](assets/comparison_ndim.png)
 
@@ -201,32 +209,33 @@ Measured on znver5, single-thread, in-place, planning excluded, 400 samples.
 
 | Shape | FFTW GFLOP/s | PureFFT GFLOP/s | PF/FFTW |
 |---|---:|---:|---:|
-| 128×128   | 39.0 |  10.1 | 0.259 |
-| 256×256   | 29.6 |   7.1 | 0.240 |
-| 512×512   | 24.8 |   7.6 | 0.304 |
-| 384×384   | 29.2 |  10.9 | 0.374 |
-| 512×384   | 24.4 |   9.0 | 0.369 |
-| 64×64×64  | 31.9 |   9.7 | 0.303 |
-| 96×96×96  | 21.2 |   6.9 | 0.323 |
-| 48×48×48  | 22.2 |   6.9 | 0.311 |
+| 128×128   | 41.4 | 32.4 | 0.78 |
+| 256×256   | 28.8 | 29.3 | 1.02 |
+| 384×384   | 30.8 | 30.4 | 0.99 |
+| 512×512   | 28.7 | 28.2 | 0.98 |
+| 512×384   | 28.7 | 29.4 | 1.02 |
+| 64×64×64  | 34.3 | 33.2 | 0.97 |
+| 96×96×96  | 21.1 | 22.2 | 1.05 |
+| 48×48×48  | 22.3 | 28.5 | 1.28 |
 
 ### ComplexF32
 
 | Shape | FFTW GFLOP/s | PureFFT GFLOP/s | PF/FFTW |
 |---|---:|---:|---:|
-| 128×128   | 27.3 | 28.2 | 1.034 |
-| 256×256   | 37.9 | 17.1 | 0.451 |
-| 512×512   | 46.3 |  8.1 | 0.175 |
-| 384×384   | 46.3 | 23.3 | 0.504 |
-| 512×384   | 41.9 | 11.9 | 0.284 |
-| 64×64×64  | 49.1 | 10.1 | 0.206 |
-| 96×96×96  | 33.0 |  5.2 | 0.159 |
-| 48×48×48  | 30.6 | 10.2 | 0.332 |
+| 128×128   | 55.3 | 49.2 | 0.89 |
+| 256×256   | 51.4 | 66.9 | 1.30 |
+| 384×384   | 45.7 | 53.8 | 1.18 |
+| 512×512   | 44.4 | 54.5 | 1.23 |
+| 512×384   | 42.2 | 56.7 | 1.34 |
+| 64×64×64  | 53.7 | 53.3 | 0.99 |
+| 96×96×96  | 34.8 | 45.8 | 1.32 |
+| 48×48×48  | 30.1 | 49.7 | 1.65 |
 
-All shapes are below the 0.96× gate, with the sole exception of ComplexF32 128×128 (1.034×).
-The gap is structural: the current N-D path applies 1-D transforms along each dimension
-separated by a cache-blocked generic transpose, whereas FFTW plans a single optimized
-multi-dimensional pass. This is an **OPEN** performance item — see ROADMAP for next steps.
+The sole miss is **128×128** (F64 0.78, F32 ~0.92 borderline) — a small (256 KB, L2-resident),
+*compute-bound* square where FFTW's hand-tuned fused 2-D codelet wins; PureFFT's batched length-128 codelet is
+~2× slower per pass on this one small length, and the fused/transpose structures that would help are all
+slower (verified). Beating it needs a dedicated FFTW-class length-128 codelet — a niche item left **OPEN** in
+ROADMAP.
 
 *(Reproduced via `bench/run_compare_ndim.jl` → `bench/results/compare_ndim.json` →
 `bench/plot_compare_ndim.jl`.)*
