@@ -17,15 +17,20 @@ plan_inverse(p::NDPlan) = p.inverse
 # dispatches on the descriptor type (multiple methods of `_apply_dim!`), so the hot path never branches
 # on a non-concrete field (CLAUDE.md rule 5). They form a heterogeneous NTuple in `plans` and are only
 # ever indexed with LITERAL indices inside the @generated apply (rule 1).
-#   Dim1Plan     — dim 1: each column is a unit-stride contiguous run, apply the 1-D plan in place.
-#   BatchedDim   — pow2 dim d>1: batched radix-8 column kernel, NO transpose (ndim_batched.jl).
-#   TransposeDim — non-pow2 dim d>1: transpose → 1-D plan → transpose-back (the fallback).
+#   Dim1Plan         — dim 1: each column is a unit-stride contiguous run, apply the 1-D plan in place.
+#   BatchedDim       — pow2 dim d>1: batched radix-8 column kernel, NO transpose (ndim_batched.jl).
+#   BatchedSmoothDim — 2^a·3^b dim d>1: batched mixed-radix (radix-3 + radix-8/4/2) kernel, NO transpose.
+#   TransposeDim     — other non-pow2 dim d>1: transpose → 1-D plan → transpose-back (the fallback).
 struct Dim1Plan{P}
     plan::P
 end
 struct BatchedDim{T}
     d::Int
     bp::BatchPlan8{T}
+end
+struct BatchedSmoothDim{T}
+    d::Int
+    bp::BatchPlanMR{T}
 end
 struct TransposeDim{P}
     d::Int
@@ -44,13 +49,16 @@ function _canon_region(r, N::Int)
 end
 
 # Route one transformed dim to its descriptor: dim-1 → Dim1Plan; pow2 d>1 → BatchedDim (no transpose);
-# else → TransposeDim. Each branch returns a distinct CONCRETE type (the heterogeneous tuple's element
-# types stay concrete ⇒ the @generated apply specializes fully).
+# 2^a·3^b d>1 → BatchedSmoothDim (mixed-radix batched, no transpose); else → TransposeDim. Each branch
+# returns a distinct CONCRETE type (the heterogeneous tuple's element types stay concrete ⇒ the
+# @generated apply specializes fully).
 function _mk_dim(::Type{Complex{T}}, d::Int, sz; inverse::Bool) where {T}
     if d == 1
         Dim1Plan(plan_pfft(Complex{T}, sz[1]; inverse, variant=:fast))
     elseif ispow2(sz[d])
         BatchedDim(d, BatchPlan8(T, sz[d]; forward=!inverse))
+    elseif _is_smooth_2a3(sz[d])
+        BatchedSmoothDim(d, BatchPlanMR(T, sz[d]; forward=!inverse))
     else
         TransposeDim(d, plan_pfft(Complex{T}, sz[d]; inverse, variant=:fast))
     end
@@ -67,7 +75,7 @@ function _pure_plan_fft_nd(x::AbstractArray{Complex{T}, N}, region; inverse::Boo
     # allocates (Task 5 gate). `maximum(sz[d])` floors it so the buffer is never empty.
     nscratch = maximum(sz[d] for d in dims)
     for d in dims
-        (d == 1 || ispow2(sz[d])) && continue
+        (d == 1 || ispow2(sz[d]) || _is_smooth_2a3(sz[d])) && continue   # batched dims own their tiles
         nscratch = max(nscratch, prod(sz[1:d-1]) * sz[d])
     end
     NDPlan{T, D, typeof(plans), N}(dims, plans, sz, Vector{Complex{T}}(undef, nscratch), inverse)
@@ -112,7 +120,17 @@ end
     return x
 end
 
-# non-pow2 d>1 (incl. the rare leading-singleton inner==1, handled as an identity copy): transpose path.
+# 2^a·3^b d>1: batched mixed-radix column kernel, no transpose. Pointer-based + GC.@preserve, zero-alloc.
+@inline function _apply_dim!(pd::BatchedSmoothDim{T}, x::AbstractArray{Complex{T}}, sz, scratch) where {T}
+    inner, n_d, outer = _dim_extents(pd.d, sz)
+    GC.@preserve x begin
+        pc = reinterpret(Ptr{Complex{T}}, pointer(x))
+        batched_fft_mr!(pd.bp, pc, 0, inner, outer)
+    end
+    return x
+end
+
+# other non-pow2 d>1 (incl. the rare leading-singleton inner==1, handled as an identity copy): transpose.
 @inline function _apply_dim!(pd::TransposeDim, x::AbstractArray{Complex{T}}, sz, scratch) where {T}
     inner, n_d, outer = _dim_extents(pd.d, sz)
     _apply_dim_transpose!(pd.plan, x, inner, n_d, outer, scratch)

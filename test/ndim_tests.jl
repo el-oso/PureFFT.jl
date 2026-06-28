@@ -27,7 +27,10 @@ end
 @testitem "N-D c2c full generality bit-exact vs FFTW" begin
     using PureFFT, FFTW
     tol(::Type{Float64})=1e-12; tol(::Type{Float32})=1f-4
-    cases = (((8,5), 2), ((8,5), (1,2)), ((6,4,5), 3), ((6,4,5), (1,3)), ((6,4,5), (1,2,3)), ((4,4,4,4), (2,4)))
+    cases = (((8,5), 2), ((8,5), (1,2)), ((6,4,5), 3), ((6,4,5), (1,3)), ((6,4,5), (1,2,3)), ((4,4,4,4), (2,4)),
+             # 2^a·3^b strided dims route to BatchedSmoothDim (mixed-radix batched, no transpose):
+             ((4,48), 2), ((8,96), 2), ((8,8,24), 3), ((4,12,8), 2), ((9,16), 2),   # n_d=48,96,24,12,9
+             ((3,48), 2), ((6,96), 2), ((4,4,48), (2,3)))                            # scalar/partial tails + inv-free
     for T in (Float64, Float32), (sz, region) in cases
         x = randn(Complex{T}, sz...)
         p = PureFFT._pure_plan_fft_nd(x, region; inverse=false)
@@ -59,7 +62,7 @@ end
 @testitem "N-D inv/plan_inv round-trip (PureFFT path)" begin
     using PureFFT, FFTW
     tol(::Type{Float64})=1e-12; tol(::Type{Float32})=1f-4
-    for T in (Float64, Float32), (sz, region) in (((8,5), (1,2)), ((6,4,5), (1,3)))
+    for T in (Float64, Float32), (sz, region) in (((8,5), (1,2)), ((6,4,5), (1,3)), ((8,96), (1,2)), ((4,4,48), (2,3)))
         x = randn(Complex{T}, sz...)
         pf = PureFFT._pure_plan_fft_nd(x, region; inverse=false)
         # inv(pf) returns _NDScaledPlan wrapping inverse NDPlan scaled by 1/∏sz[region]
@@ -99,7 +102,9 @@ end
     cases = (((8,5),(1,2)),       # dim2 n_d=5 non-pow2 → TransposeDim
              ((6,4,5),(1,3)),     # dim3 n_d=5 non-pow2 → TransposeDim
              ((8,16),(1,2)),      # dim2 n_d=16 pow2  → BatchedDim
-             ((4,8,16),(2,3)))    # dim2 n_d=8, dim3 n_d=16 pow2 → BatchedDim (both d>1)
+             ((4,8,16),(2,3)),    # dim2 n_d=8, dim3 n_d=16 pow2 → BatchedDim (both d>1)
+             ((8,48),(1,2)),      # dim2 n_d=48=2^4·3 → BatchedSmoothDim (mixed-radix batched)
+             ((4,8,24),(2,3)))    # dim2 n_d=8 pow2, dim3 n_d=24=2^3·3 smooth → mixed routing
     for T in (Float64, Float32), (sz, region) in cases
         x = randn(Complex{T}, sz...); y = similar(x)
         p = PureFFT._pure_plan_fft_nd(x, region; inverse=false)
