@@ -217,6 +217,41 @@ function _apply!(p::R2RPlan{REDFT11_T, T, P}, y::AbstractVector{T}, x::AbstractV
     return y
 end
 
+# ── DST-IV (RODFT11) — size-N complex-FFT route, sine sibling of DCT-IV ───────
+# FFTW RODFT11 (unnormalized): y_k = 2·Σ_j x_j·sin(π(2j+1)(2k+1)/(4N)), k=0..N-1.
+# Same machinery as REDFT11 (identical pre/post twiddles, size-N complex FFT). The post-twiddled
+# spectrum is S_k = post_k·FFT(v·pre)_k = Σ_p v_p·e^{−iπ(4p+1)(2k+1)/4N} for any reordered v. With
+# the DCT-IV reorder but the EVEN (front) samples ALSO negated — v_m = −x_{2m} at p=m, v_{N−1−m} =
+# −x_{2m+1} at p=N−1−m — the imaginary part folds both groups into +Σ_j x_j sin(π(2j+1)(2k+1)/4N):
+#   y_k = 2·Im(post_k · FFT(v·pre)_k).  (Re would give the DCT-IV cosine; Im is the sine variant.)
+# No index reversal needed — the front sign-flip is what makes Im the all-+ sine sum. Self-inverse:
+# RODFT11·RODFT11 = 2N·I (like REDFT11).
+function _build_r2r(::RODFT11_T, ::Type{T}, n::Int) where {T}
+    n >= 1 || return Result{R2RPlan, R2RError}(Err(R2RError(ERR_SIZE_TOO_SMALL, "RODFT11 needs n≥1")))
+    inner = plan_pfft(Complex{T}, n; variant = :fast, inverse = false)
+    pre   = Complex{T}[cispi(-T(p) / T(n))         for p in 0:(n - 1)]   # e^{−iπ p /N}
+    post  = Complex{T}[cispi(-T(2k + 1) / T(4n))   for k in 0:(n - 1)]   # e^{−iπ(2k+1)/4N}
+    cbuf  = Vector{Complex{T}}(undef, n)
+    plan  = R2RPlan{RODFT11_T, T, typeof(inner)}(n, inner, pre, post, T[], cbuf)
+    return Result{R2RPlan, R2RError}(Ok(plan))
+end
+
+# Apply: reorder+negate x → pre-twiddled complex buffer, length-n complex FFT, y_k = 2·Im(post_k·C_k).
+function _apply!(p::R2RPlan{RODFT11_T, T, P}, y::AbstractVector{T}, x::AbstractVector{<:Real}) where {T, P <: AbstractFFTPlan}
+    n = p.n; c = p.cbuf
+    @inbounds for m in 0:((n + 1) ÷ 2 - 1)            # even samples NEGATED into the front
+        c[m + 1] = p.pre[m + 1] * (-T(x[2m + 1]))
+    end
+    @inbounds for m in 0:(n ÷ 2 - 1)                  # odd samples negated, reversed into the tail
+        c[n - m] = p.pre[n - m] * (-T(x[2m + 2]))
+    end
+    apply_unnormalized!(p.inner, c)                   # size-N FFT
+    @inbounds for k in 0:(n - 1)
+        y[k + 1] = T(2) * imag(p.post[k + 1] * c[k + 1])
+    end
+    return y
+end
+
 # Generic apply entry + tryr2r (per-kind _apply! dispatched on the plan's K).
 function tryr2r(x::AbstractVector{<:Real}, kind::R2RKind)
     r = tryplan_r2r(x, kind)
@@ -294,3 +329,9 @@ function Base.inv(p::R2RPlan{REDFT11_T, T}) where {T}
     return ScaledR2RPlan(ip, T(1) / (2 * p.n))
 end
 Base.:\(p::R2RPlan{REDFT11_T}, x::AbstractVector) = inv(p) * x
+# RODFT11 is self-inverse up to 2N: RODFT11·RODFT11 = 2N·I ⇒ inv(RODFT11) = (1/2N)·RODFT11.
+function Base.inv(p::R2RPlan{RODFT11_T, T}) where {T}
+    ip = plan_r2r(Vector{T}(undef, p.n), RODFT11)
+    return ScaledR2RPlan(ip, T(1) / (2 * p.n))
+end
+Base.:\(p::R2RPlan{RODFT11_T}, x::AbstractVector) = inv(p) * x

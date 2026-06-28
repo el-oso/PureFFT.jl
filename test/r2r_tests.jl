@@ -102,6 +102,25 @@ end
     end
 end
 
+@testitem "DST-IV (RODFT11) bit-exact vs FFTW + naive + self-inverse (F64+F32)" begin
+    using PureFFT, FFTW, ErrorTypes
+    tol(::Type{Float64})=1e-12; tol(::Type{Float32})=1f-4
+    naive_dst4(x) = [2*sum(x[j+1]*sin(pi*(2j+1)*(2k+1)/(4length(x))) for j in 0:length(x)-1) for k in 0:length(x)-1]
+    for T in (Float64, Float32), n in (1,2,3,4,5,8,9,16,17,32)
+        x = randn(T, n)
+        y = unwrap(PureFFT.tryr2r(x, RODFT11))
+        @test maximum(abs.(y .- FFTW.r2r(x, FFTW.RODFT11)))/max(1,maximum(abs.(x))*n) < tol(T)
+        @test maximum(abs.(y .- T.(naive_dst4(Float64.(x)))))/max(1,maximum(abs.(x))*n) < tol(T)  # independent ref
+        # RODFT11 self-inverse up to 2N
+        @test maximum(abs.(unwrap(PureFFT.tryr2r(y, RODFT11)) .- 2n .* x))/max(1,maximum(abs.(x))*n) < tol(T)
+    end
+    # inv / \ : self-inverse with 1/2N scale recovers x
+    for T in (Float64, Float32), n in (4, 8, 17)
+        x = randn(T, n); p = plan_r2r(x, RODFT11)
+        @test maximum(abs.((p \ (p*x)) .- x))/max(1,maximum(abs.(x))) < tol(T)
+    end
+end
+
 @testitem "DCT-II parity vs FFTW ≥ 0.96× (even N)" tags=[:perf] begin
     using PureFFT, FFTW, BenchmarkTools, Statistics, LinearAlgebra
     # `Pkg.test` runs with `--check-bounds=yes`, which overrides @inbounds in PureFFT's Julia

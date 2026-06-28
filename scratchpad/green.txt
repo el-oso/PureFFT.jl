@@ -1,0 +1,223 @@
+     Testing PureFFT
+┌ Warning: Entry in manifest at "/home/el_oso/Documents/claude/PureFFT.jl/test" for package "SciMLPublic" differs from that in "/home/el_oso/Documents/claude/PureFFT.jl/Manifest.toml"
+└ @ Pkg.Operations ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Pkg/src/Operations.jl:2262
+┌ Warning: Entry in manifest at "/home/el_oso/Documents/claude/PureFFT.jl/test" for package "Static" differs from that in "/home/el_oso/Documents/claude/PureFFT.jl/Manifest.toml"
+└ @ Pkg.Operations ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Pkg/src/Operations.jl:2262
+┌ Warning: Entry in manifest at "/home/el_oso/Documents/claude/PureFFT.jl/test" for package "CommonWorldInvalidations" differs from that in "/home/el_oso/Documents/claude/PureFFT.jl/Manifest.toml"
+└ @ Pkg.Operations ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Pkg/src/Operations.jl:2262
+      Status `/tmp/jl_LSfoGx/Project.toml`
+  [621f4979] AbstractFFTs v1.5.0
+  [9b6a8646] AllocCheck v0.2.6
+  [4c88cf16] Aqua v0.8.16
+  [6e4b80f9] BenchmarkTools v1.8.0
+  [7f495686] ErrorTypes v0.5.2
+  [7a1cc6ca] FFTW v1.10.0
+  [c3a54625] JET v0.11.5
+  [4bd8a7c1] PureFFT v0.1.0 `~/Documents/claude/PureFFT.jl`
+  [817f1d60] ReTestItems v1.35.1
+  [10745b16] Statistics v1.11.1
+  [0e98b4f4] StrictMode v0.3.1 `https://github.com/el-oso/StrictMode.jl#master`
+  [f940d764] TrimCheck v0.1.4
+  [37e2e46d] LinearAlgebra v1.12.0
+  [8dfed614] Test v1.11.0
+      Status `/tmp/jl_LSfoGx/Manifest.toml`
+  [621f4979] AbstractFFTs v1.5.0
+  [9b6a8646] AllocCheck v0.2.6
+  [4c88cf16] Aqua v0.8.16
+  [6e4b80f9] BenchmarkTools v1.8.0
+  [fa961155] CEnum v0.5.0
+  [2a0fbf3d] CPUSummary v0.2.7
+  [da1fd8a2] CodeTracking v3.0.2
+  [f70d9fcc] CommonWorldInvalidations v1.1.0
+  [34da2185] Compat v4.18.1
+  [807dbc54] Compiler v0.1.1
+  [adafc99b] CpuId v0.3.1
+  [7f495686] ErrorTypes v0.5.2
+  [e2ba6199] ExprTools v0.1.10
+  [7a1cc6ca] FFTW v1.10.0
+  [61eb1bfa] GPUCompiler v1.22.7
+  [615f187c] IfElse v0.1.1
+  [c3a54625] JET v0.11.5
+  [692b3bcd] JLLWrappers v1.8.0
+  [682c06a0] JSON v1.6.1
+⌅ [aa1ae85d] JuliaInterpreter v0.10.12
+  [70703baa] JuliaSyntax v1.0.2
+  [929cbde3] LLVM v9.10.0
+⌃ [6f1432cf] LoweredCodeUtils v3.6.2
+  [d8e11817] MLStyle v0.4.17
+  [1914dd2f] MacroTools v0.5.16
+⌃ [bac558e1] OrderedCollections v2.0.0
+  [69de0a69] Parsers v2.8.6
+  [aea7be01] PrecompileTools v1.3.4
+  [21216c6a] Preferences v1.5.2
+  [92933f4c] ProgressMeter v1.11.0
+  [4bd8a7c1] PureFFT v0.1.0 `~/Documents/claude/PureFFT.jl`
+  [817f1d60] ReTestItems v1.35.1
+  [189a3867] Reexport v1.2.2
+  [295af30f] Revise v3.15.1
+  [fdea26ae] SIMD v3.7.2
+  [431bcebd] SciMLPublic v1.2.1
+  [6c6a2e73] Scratch v1.3.0
+  [aedffcd0] Static v1.4.2
+  [10745b16] Statistics v1.11.1
+  [0e98b4f4] StrictMode v0.3.1 `https://github.com/el-oso/StrictMode.jl#master`
+  [ec057cc2] StructUtils v2.8.2
+  [1e6cf692] TestEnv v1.103.6
+  [e689c965] Tracy v0.1.6
+  [f940d764] TrimCheck v0.1.4
+  [c7a3f1e2] TypeContracts v0.13.1
+  [f5851436] FFTW_jll v3.3.12+0
+  [1d5cc7b8] IntelOpenMP_jll v2025.2.0+0
+  [dad2f222] LLVMExtra_jll v0.0.43+1
+  [ad6e5548] LibTracyClient_jll v0.13.1+0
+  [856f044c] MKL_jll v2025.2.0+0
+  [1317d2d5] oneTBB_jll v2022.3.0+0
+  [0dad84c5] ArgTools v1.1.2
+  [56f22d72] Artifacts v1.11.0
+  [2a0f44e3] Base64 v1.11.0
+  [8bf52ea8] CRC32c v1.11.0
+  [ade2ca70] Dates v1.11.0
+  [8ba89e20] Distributed v1.11.0
+  [f43a241f] Downloads v1.7.0
+  [7b1f6079] FileWatching v1.11.0
+  [b77e0a4c] InteractiveUtils v1.11.0
+  [ac6e5ff7] JuliaSyntaxHighlighting v1.12.0
+  [4af54fe1] LazyArtifacts v1.11.0
+  [b27032c2] LibCURL v0.6.4
+  [76f85450] LibGit2 v1.11.0
+  [8f399da3] Libdl v1.11.0
+  [37e2e46d] LinearAlgebra v1.12.0
+  [56ddb016] Logging v1.11.0
+  [d6f4376e] Markdown v1.11.0
+  [ca575930] NetworkOptions v1.3.0
+  [44cfe95a] Pkg v1.12.1
+  [de0858da] Printf v1.11.0
+  [9abbd945] Profile v1.11.0
+  [3fa0cd96] REPL v1.11.0
+  [9a3f8284] Random v1.11.0
+  [ea8e919c] SHA v0.7.0
+  [9e88b42a] Serialization v1.11.0
+  [6462fe0b] Sockets v1.11.0
+  [f489334b] StyledStrings v1.11.0
+  [fa267f1f] TOML v1.0.3
+  [a4e569a6] Tar v1.10.0
+  [8dfed614] Test v1.11.0
+  [cf7118a7] UUIDs v1.11.0
+  [4ec0a83e] Unicode v1.11.0
+  [e66e0078] CompilerSupportLibraries_jll v1.3.0+1
+  [deac9b47] LibCURL_jll v8.15.0+0
+  [e37daf67] LibGit2_jll v1.9.0+0
+  [29816b5a] LibSSH2_jll v1.11.3+1
+  [14a3606d] MozillaCACerts_jll v2025.11.4
+  [4536629a] OpenBLAS_jll v0.3.29+0
+  [458c3c95] OpenSSL_jll v3.5.4+0
+  [83775a58] Zlib_jll v1.3.1+2
+  [8e850b90] libblastrampoline_jll v5.15.0+0
+  [8e850ede] nghttp2_jll v1.64.0+1
+  [3f19e933] p7zip_jll v17.7.0+0
+        Info Packages marked with ⌃ and ⌅ have new versions available. Those with ⌃ may be upgradable, but those with ⌅ are restricted by compatibility constraints from upgrading.
+Precompiling for configuration --code-coverage=none --color=auto --check-bounds=yes --warn-overwrite=yes --depwarn=yes --inline=yes --startup-file=no --track-allocation=none
+   2899.8 ms  ✓ PureFFT
+  1 dependency successfully precompiled in 3 seconds. 94 already precompiled.
+     Testing Running tests...
+[ Info: Scanning for test items in project `PureFFT` at paths: /home/el_oso/Documents/claude/PureFFT.jl
+[ Info: Finished scanning for test items in 1.3 seconds.
+[ Info: Scheduling 47 tests on pid 1740204
+16:23:51 | maxrss  3.4% | mem 46.9% | START ( 1/47) test item "NDPlan builds + region canonicalization" at test/ndim_tests.jl:1
+16:23:59 | maxrss  3.4% | mem 47.1% | DONE  ( 1/47) test item "NDPlan builds + region canonicalization" 7.6 secs (99.9% compile, 1.1% recompile, 0.7% GC), 18.26 M allocs (905.920 MB)
+16:23:59 | maxrss  3.4% | mem 47.1% | START ( 2/47) test item "N-D c2c along dim 1 bit-exact vs FFTW" at test/ndim_tests.jl:13
+16:24:12 | maxrss  3.8% | mem 47.0% | DONE  ( 2/47) test item "N-D c2c along dim 1 bit-exact vs FFTW" 12.9 secs (99.8% compile, 0.3% recompile, 0.9% GC), 24.35 M allocs (1.174 GB)
+16:24:12 | maxrss  3.8% | mem 47.0% | START ( 3/47) test item "N-D c2c full generality bit-exact vs FFTW" at test/ndim_tests.jl:27
+16:24:23 | maxrss  3.8% | mem 47.2% | DONE  ( 3/47) test item "N-D c2c full generality bit-exact vs FFTW" 11.4 secs (99.8% compile, <0.1% recompile, 0.7% GC), 15.47 M allocs (722.593 MB)
+16:24:23 | maxrss  3.8% | mem 47.2% | START ( 4/47) test item "N-D 5/7-smooth gate shapes bit-exact vs FFTW (fwd+inv)" at test/ndim_tests.jl:48
+16:24:36 | maxrss  4.5% | mem 47.4% | DONE  ( 4/47) test item "N-D 5/7-smooth gate shapes bit-exact vs FFTW (fwd+inv)" 12.4 secs (89.4% compile, 2.3% GC), 26.77 M allocs (2.063 GB)
+16:24:36 | maxrss  4.5% | mem 47.4% | START ( 5/47) test item "N-D prime strided dims (batched Rader) bit-exact vs FFTW (fwd+inv)" at test/ndim_tests.jl:69
+16:24:58 | maxrss  4.5% | mem 47.7% | DONE  ( 5/47) test item "N-D prime strided dims (batched Rader) bit-exact vs FFTW (fwd+inv)" 21.9 secs (96.3% compile, 1.2% GC), 52.01 M allocs (2.461 GB)
+16:24:58 | maxrss  4.5% | mem 47.7% | START ( 6/47) test item "N-D batched Rader hot path: dispatch-free + zero-alloc" at test/ndim_tests.jl:94
+16:25:10 | maxrss  4.5% | mem 49.3% | DONE  ( 6/47) test item "N-D batched Rader hot path: dispatch-free + zero-alloc" 12.2 secs (91.1% compile, 33.3% recompile, 1.1% GC), 25.22 M allocs (1.215 GB)
+16:25:10 | maxrss  4.5% | mem 49.3% | START ( 7/47) test item "N-D BatchedDim1 (batched dim-1, F32) bit-exact incl outer%W tail + inv" at test/ndim_tests.jl:106
+16:25:10 | maxrss  4.5% | mem 49.3% | DONE  ( 7/47) test item "N-D BatchedDim1 (batched dim-1, F32) bit-exact incl outer%W tail + inv" 0.1 secs (90.5% compile, 46.0% recompile), 124.88 K allocs (8.431 MB)
+16:25:10 | maxrss  4.5% | mem 49.3% | START ( 8/47) test item "N-D public API: mul!/dispatch/column-tiling (PureFFT path)" at test/ndim_tests.jl:132
+16:25:10 | maxrss  4.5% | mem 49.3% | DONE  ( 8/47) test item "N-D public API: mul!/dispatch/column-tiling (PureFFT path)" 0.4 secs (97.8% compile, 10.6% recompile), 727.10 K allocs (38.062 MB)
+16:25:10 | maxrss  4.5% | mem 49.3% | START ( 9/47) test item "N-D inv/plan_inv round-trip (PureFFT path)" at test/ndim_tests.jl:151
+16:25:11 | maxrss  4.5% | mem 49.3% | DONE  ( 9/47) test item "N-D inv/plan_inv round-trip (PureFFT path)" 0.8 secs (99.2% compile), 1.26 M allocs (64.728 MB)
+16:25:11 | maxrss  4.5% | mem 49.3% | START (10/47) test item "N-D mul! DimensionMismatch guard" at test/ndim_tests.jl:162
+16:25:11 | maxrss  4.5% | mem 49.3% | DONE  (10/47) test item "N-D mul! DimensionMismatch guard" <0.1 secs (74.7% compile), 5.21 K allocs (299.928 KB)
+16:25:11 | maxrss  4.5% | mem 49.3% | START (11/47) test item "pfft(::AbstractArray, dims) correctness" at test/ndim_tests.jl:172
+16:25:11 | maxrss  4.5% | mem 49.3% | DONE  (11/47) test item "pfft(::AbstractArray, dims) correctness" 0.1 secs (96.0% compile, 41.6% GC), 51.92 K allocs (2.719 MB)
+16:25:11 | maxrss  4.5% | mem 49.3% | START (12/47) test item "N-D c2c hot path: dispatch-free + zero-alloc" at test/ndim_tests.jl:184
+16:25:13 | maxrss  4.5% | mem 49.5% | DONE  (12/47) test item "N-D c2c hot path: dispatch-free + zero-alloc" 2.1 secs (75.5% compile, 0.8% GC), 8.66 M allocs (398.497 MB)
+16:25:13 | maxrss  4.5% | mem 49.5% | START (13/47) test item "Real N-D rfft forward bit-exact vs FFTW" at test/ndim_tests.jl:215
+16:25:19 | maxrss  4.5% | mem 49.5% | DONE  (13/47) test item "Real N-D rfft forward bit-exact vs FFTW" 5.1 secs (99.7% compile, <0.1% recompile, 0.4% GC), 6.65 M allocs (337.460 MB)
+16:25:19 | maxrss  4.5% | mem 49.5% | START (14/47) test item "Real N-D irfft/brfft bit-exact vs FFTW + round-trip" at test/ndim_tests.jl:234
+16:25:26 | maxrss  4.5% | mem 49.4% | DONE  (14/47) test item "Real N-D irfft/brfft bit-exact vs FFTW + round-trip" 7.8 secs (99.8% compile, 0.5% GC), 14.03 M allocs (706.776 MB)
+16:25:26 | maxrss  4.5% | mem 49.4% | START (15/47) test item "Real N-D AbstractFFTs derivation (ScaledPlan irfft) + mul!" at test/ndim_tests.jl:255
+16:25:26 | maxrss  4.5% | mem 49.4% | DONE  (15/47) test item "Real N-D AbstractFFTs derivation (ScaledPlan irfft) + mul!" 0.2 secs (96.5% compile), 82.75 K allocs (4.209 MB)
+16:25:26 | maxrss  4.5% | mem 49.4% | START (16/47) test item "Real N-D error paths" at test/ndim_tests.jl:270
+16:25:27 | maxrss  4.5% | mem 49.4% | DONE  (16/47) test item "Real N-D error paths" <0.1 secs (68.6% compile), 4.52 K allocs (250.512 KB)
+16:25:27 | maxrss  4.5% | mem 49.4% | START (17/47) test item "Real N-D batched dim-1 r2c/c2r bit-exact + zero-alloc" at test/ndim_tests.jl:283
+16:25:33 | maxrss  4.5% | mem 49.3% | DONE  (17/47) test item "Real N-D batched dim-1 r2c/c2r bit-exact + zero-alloc" 6.2 secs (99.5% compile, 0.5% GC), 7.28 M allocs (350.379 MB)
+16:25:33 | maxrss  4.5% | mem 49.3% | START (18/47) test item "Stage 1: radix-2 baseline" at test/purefft_tests.jl:14
+16:25:35 | maxrss  4.5% | mem 49.2% | DONE  (18/47) test item "Stage 1: radix-2 baseline" 2.3 secs (93.2% compile, 2.2% recompile, 2.2% GC), 6.05 M allocs (306.606 MB)
+16:25:35 | maxrss  4.5% | mem 49.2% | START (19/47) test item "Stage 2: mixed-radix" at test/purefft_tests.jl:44
+16:25:36 | maxrss  4.5% | mem 49.2% | DONE  (19/47) test item "Stage 2: mixed-radix" 0.5 secs (95.5% compile, 1.5% GC), 673.06 K allocs (34.987 MB)
+16:25:36 | maxrss  4.5% | mem 49.2% | START (20/47) test item "Stage 3: staged radix-2" at test/purefft_tests.jl:70
+16:25:36 | maxrss  4.5% | mem 49.2% | DONE  (20/47) test item "Stage 3: staged radix-2" 0.3 secs (96.7% compile), 429.33 K allocs (24.878 MB)
+16:25:36 | maxrss  4.5% | mem 49.2% | START (21/47) test item "Stage 4: cache-oblivious recursive" at test/purefft_tests.jl:82
+16:25:36 | maxrss  4.5% | mem 49.2% | DONE  (21/47) test item "Stage 4: cache-oblivious recursive" 0.2 secs (78.4% compile, 3.3% GC), 153.75 K allocs (35.370 MB)
+16:25:36 | maxrss  4.5% | mem 49.2% | START (22/47) test item "Stage 5: SoA recursive" at test/purefft_tests.jl:93
+16:25:36 | maxrss  4.5% | mem 49.2% | DONE  (22/47) test item "Stage 5: SoA recursive" 0.1 secs (64.5% compile, 6.6% GC), 104.65 K allocs (39.093 MB)
+16:25:36 | maxrss  4.5% | mem 49.2% | START (23/47) test item "Stage 7: cache-blocked four-step" at test/purefft_tests.jl:104
+16:25:36 | maxrss  4.5% | mem 49.2% | DONE  (23/47) test item "Stage 7: cache-blocked four-step" 0.3 secs (27.2% compile, 24.7% GC), 106.11 K allocs (152.644 MB)
+16:25:36 | maxrss  4.5% | mem 49.2% | START (24/47) test item "Radix4 variants" at test/purefft_tests.jl:115
+16:25:37 | maxrss  4.5% | mem 49.3% | DONE  (24/47) test item "Radix4 variants" 0.4 secs (21.5% compile, 17.0% GC), 129.66 K allocs (361.505 MB)
+16:25:37 | maxrss  4.5% | mem 49.3% | START (25/47) test item "Stage 8: Bluestein (chirp-Z, arbitrary n)" at test/purefft_tests.jl:127
+16:25:37 | maxrss  4.5% | mem 49.3% | DONE  (25/47) test item "Stage 8: Bluestein (chirp-Z, arbitrary n)" <0.1 secs (78.6% compile, 2.9% GC), 103.12 K allocs (16.291 MB)
+16:25:37 | maxrss  4.5% | mem 49.3% | START (26/47) test item "Stage 9: dynamic mixed-radix codelet" at test/purefft_tests.jl:138
+16:26:24 | maxrss  4.5% | mem 48.1% | DONE  (26/47) test item "Stage 9: dynamic mixed-radix codelet" 46.9 secs (99.8% compile, <0.1% recompile, 0.9% GC), 75.29 M allocs (3.194 GB)
+16:26:24 | maxrss  4.5% | mem 48.1% | START (27/47) test item "Stage 10: four-step batched-codelet executor" at test/purefft_tests.jl:188
+16:29:06 | maxrss  4.5% | mem 41.9% | DONE  (27/47) test item "Stage 10: four-step batched-codelet executor" 161.6 secs (99.3% compile, <0.1% recompile, 1.1% GC), 315.87 M allocs (14.389 GB)
+16:29:06 | maxrss  4.5% | mem 41.9% | START (28/47) test item "Stage 11: Rader's algorithm (prime sizes)" at test/purefft_tests.jl:272
+16:30:04 | maxrss  4.5% | mem 41.9% | DONE  (28/47) test item "Stage 11: Rader's algorithm (prime sizes)" 58.6 secs (97.9% compile, 0.9% GC), 103.59 M allocs (4.714 GB)
+16:30:04 | maxrss  4.5% | mem 41.9% | START (29/47) test item "JET optimization check (hot path is dispatch-free)" at test/purefft_tests.jl:295
+16:30:04 | maxrss  4.5% | mem 41.9% | DONE  (29/47) test item "JET optimization check (hot path is dispatch-free)" 0.4 secs (4.3% compile, 2.5% GC), 3.28 M allocs (149.854 MB)
+16:30:04 | maxrss  4.5% | mem 41.9% | START (30/47) test item "interface_trait duck-typed pfft!" at test/purefft_tests.jl:304
+16:30:05 | maxrss  4.5% | mem 41.8% | DONE  (30/47) test item "interface_trait duck-typed pfft!" 0.2 secs (97.0% compile), 213.47 K allocs (11.145 MB)
+16:30:05 | maxrss  4.5% | mem 41.8% | START (31/47) test item "autotuned :fast" at test/purefft_tests.jl:322
+16:30:05 | maxrss  4.5% | mem 41.8% | DONE  (31/47) test item "autotuned :fast" 0.6 secs (82.9% compile, 1.0% GC), 1.21 M allocs (87.491 MB)
+16:30:05 | maxrss  4.5% | mem 41.8% | START (32/47) test item "real-input rfft/irfft" at test/purefft_tests.jl:334
+16:30:10 | maxrss  4.5% | mem 41.8% | DONE  (32/47) test item "real-input rfft/irfft" 5.2 secs (88.1% compile, 1.6% GC), 7.21 M allocs (460.510 MB)
+16:30:10 | maxrss  4.5% | mem 41.8% | START (33/47) test item "AbstractFFTs plan interface" at test/purefft_tests.jl:361
+16:30:14 | maxrss  4.5% | mem 42.1% | DONE  (33/47) test item "AbstractFFTs plan interface" 3.8 secs (89.7% compile, 0.4% GC), 5.95 M allocs (277.836 MB)
+16:30:14 | maxrss  4.5% | mem 42.1% | START (34/47) test item "TrimCheck trim-safety (hot path)" at test/purefft_tests.jl:394
+16:31:08 | maxrss  4.5% | mem 42.0% | DONE  (34/47) test item "TrimCheck trim-safety (hot path)" 53.5 secs (10.1% compile, <0.1% recompile, <0.1% GC), 13.49 M allocs (700.012 MB)
+16:31:08 | maxrss  4.5% | mem 42.0% | START (35/47) test item "Performance regression (relative to FFTW)" at test/purefft_tests.jl:419
+16:31:13 | maxrss  4.5% | mem 41.9% | DONE  (35/47) test item "Performance regression (relative to FFTW)" 4.8 secs (40.9% compile, 17.6% recompile, 6.7% GC), 3.66 M allocs (1.545 GB)
+16:31:13 | maxrss  4.5% | mem 41.9% | START (36/47) test item "public API edges: tiny n, strided views, inference, ldiv!" at test/purefft_tests.jl:440
+16:31:19 | maxrss  4.5% | mem 41.9% | DONE  (36/47) test item "public API edges: tiny n, strided views, inference, ldiv!" 6.0 secs (98.8% compile, 4.9% recompile, 0.4% GC), 12.52 M allocs (570.007 MB)
+16:31:19 | maxrss  4.5% | mem 41.9% | START (37/47) test item "Aqua project quality" at test/purefft_tests.jl:476
+16:31:30 | maxrss  4.8% | mem 43.8% | DONE  (37/47) test item "Aqua project quality" 11.3 secs (68.5% compile, 5.6% recompile, 1.2% GC), 22.02 M allocs (1.209 GB)
+16:31:30 | maxrss  4.8% | mem 43.8% | START (38/47) test item "r2r kinds + error type defined" at test/r2r_tests.jl:1
+16:31:30 | maxrss  4.8% | mem 43.8% | DONE  (38/47) test item "r2r kinds + error type defined" <0.1 secs (83.1% compile), 16.09 K allocs (807.248 KB)
+16:31:30 | maxrss  4.8% | mem 43.8% | START (39/47) test item "tryplan_r2r returns Err for unsupported kind" at test/r2r_tests.jl:13
+16:31:30 | maxrss  4.8% | mem 43.8% | DONE  (39/47) test item "tryplan_r2r returns Err for unsupported kind" <0.1 secs (96.2% compile), 46.22 K allocs (2.442 MB)
+16:31:30 | maxrss  4.8% | mem 43.8% | START (40/47) test item "DCT-II (REDFT10) bit-exact vs FFTW + naive (even N)" at test/r2r_tests.jl:18
+16:31:44 | maxrss  4.8% | mem 42.8% | DONE  (40/47) test item "DCT-II (REDFT10) bit-exact vs FFTW + naive (even N)" 14.1 secs (99.4% compile, 0.5% GC), 29.73 M allocs (1.358 GB)
+16:31:44 | maxrss  4.8% | mem 42.8% | START (41/47) test item "DCT-II (REDFT10) odd-N bit-exact vs FFTW" at test/r2r_tests.jl:31
+16:31:47 | maxrss  4.8% | mem 42.7% | DONE  (41/47) test item "DCT-II (REDFT10) odd-N bit-exact vs FFTW" 2.7 secs (98.9% compile, 0.2% recompile, 0.6% GC), 5.48 M allocs (252.943 MB)
+16:31:47 | maxrss  4.8% | mem 42.7% | START (42/47) test item "DCT-III (REDFT01) bit-exact vs FFTW + II↔III round-trip" at test/r2r_tests.jl:42
+16:31:48 | maxrss  4.8% | mem 42.6% | DONE  (42/47) test item "DCT-III (REDFT01) bit-exact vs FFTW + II↔III round-trip" 1.4 secs (97.8% compile), 1.48 M allocs (77.111 MB)
+16:31:48 | maxrss  4.8% | mem 42.6% | START (43/47) test item "r2r/dct throwing API + orthonormal dct/idct + inv/\\" at test/r2r_tests.jl:56
+16:31:50 | maxrss  4.8% | mem 42.6% | DONE  (43/47) test item "r2r/dct throwing API + orthonormal dct/idct + inv/\\" 1.5 secs (97.2% compile, 5.8% recompile, 1.1% GC), 3.11 M allocs (162.334 MB)
+16:31:50 | maxrss  4.8% | mem 42.6% | START (44/47) test item "r2r hot path: zero-alloc + dispatch-free" at test/r2r_tests.jl:80
+16:31:50 | maxrss  4.8% | mem 42.6% | DONE  (44/47) test item "r2r hot path: zero-alloc + dispatch-free" 0.3 secs (45.8% compile, 6.4% GC), 2.20 M allocs (103.072 MB)
+16:31:50 | maxrss  4.8% | mem 42.6% | START (45/47) test item "DCT-IV (REDFT11) bit-exact vs FFTW + self-inverse" at test/r2r_tests.jl:91
+16:31:51 | maxrss  4.8% | mem 42.6% | DONE  (45/47) test item "DCT-IV (REDFT11) bit-exact vs FFTW + self-inverse" 0.6 secs (97.8% compile), 765.37 K allocs (39.639 MB)
+16:31:51 | maxrss  4.8% | mem 42.6% | START (46/47) test item "DCT-II parity vs FFTW ≥ 0.96× (even N)" at test/r2r_tests.jl:105
+16:32:29 | maxrss  5.7% | mem 42.6% | DONE  (46/47) test item "DCT-II parity vs FFTW ≥ 0.96× (even N)" 38.2 secs (1.6% compile, 7.7% GC), 18.81 M allocs (37.164 GB)
+16:32:29 | maxrss  5.7% | mem 42.6% | START (47/47) test item "StrictMode dogfood: PureFFT declares its perf guarantees" at test/strictmode_tests.jl:9
+16:33:00 | maxrss  5.7% | mem 42.7% | DONE  (47/47) test item "StrictMode dogfood: PureFFT declares its perf guarantees" 31.1 secs (94.0% compile, 0.2% recompile, 1.2% GC), 73.87 M allocs (3.491 GB)
+[ Tests Completed: 47/47 test items were run.
+Test Summary: | Pass  Broken  Total     Time
+PureFFT       | 1682       6   1688  9m09.2s
+     Testing PureFFT tests passed 
