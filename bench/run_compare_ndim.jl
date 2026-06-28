@@ -44,6 +44,10 @@ const SHAPES = [
     ("64×64×64",  (64, 64, 64),   "3d_pow2"),
     ("96×96×96",  (96, 96, 96),   "3d_nonpow2"),
     ("48×48×48",  (48, 48, 48),   "3d_pow2"),
+    ("240×240",   (240, 240),      "2d_nonpow2"),    # 2^4·3·5 — radix-5 batched (Task 6w)
+    ("224×224",   (224, 224),      "2d_nonpow2"),    # 2^5·7   — radix-7 batched
+    ("160×160×160", (160, 160, 160), "3d_nonpow2"),  # 2^5·5   — radix-5 batched
+    ("112×112×112", (112, 112, 112), "3d_nonpow2"),  # 2^4·7   — radix-7 batched
 ]
 
 println("N-D complex FFT: FFTW vs PureFFT (F64 + F32)  |  $(Sys.CPU_NAME)\n")

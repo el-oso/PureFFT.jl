@@ -30,13 +30,39 @@ end
     cases = (((8,5), 2), ((8,5), (1,2)), ((6,4,5), 3), ((6,4,5), (1,3)), ((6,4,5), (1,2,3)), ((4,4,4,4), (2,4)),
              # 2^a·3^b strided dims route to BatchedSmoothDim (mixed-radix batched, no transpose):
              ((4,48), 2), ((8,96), 2), ((8,8,24), 3), ((4,12,8), 2), ((9,16), 2),   # n_d=48,96,24,12,9
-             ((3,48), 2), ((6,96), 2), ((4,4,48), (2,3)))                            # scalar/partial tails + inv-free
+             ((3,48), 2), ((6,96), 2), ((4,4,48), (2,3)),                            # scalar/partial tails + inv-free
+             # 2^a·3^b·5^c·7^d strided dims (radix-5/7 batched stages, Task 6w):
+             ((4,40), 2), ((8,160), 2), ((4,4,20), 3), ((4,56), 2), ((8,112), 2), ((4,4,28), 3),  # radix-5 / radix-7
+             ((6,30), 2), ((4,70), 2), ((8,240), 2),                                 # mixed 2·3·5 / 2·5·7 / 2^4·3·5
+             ((5,40), 2), ((7,56), 2))                                               # inner%4≠0 scalar tails
     for T in (Float64, Float32), (sz, region) in cases
         x = randn(Complex{T}, sz...)
         p = PureFFT._pure_plan_fft_nd(x, region; inverse=false)
         y = copy(x); PureFFT.apply_unnormalized!(p, y)
         ref = fft(x, region)
         @test maximum(abs.(y .- ref))/maximum(abs.(ref)) < tol(T)
+    end
+end
+
+@testitem "N-D 5/7-smooth gate shapes bit-exact vs FFTW (fwd+inv)" begin
+    using PureFFT, FFTW
+    tol(::Type{Float64})=1e-12; tol(::Type{Float32})=1f-4
+    # The 5/7-smooth N-D shapes that previously fell to the slow transpose path (Task 6w targets).
+    # region = all dims so EVERY strided dim exercises a radix-5/7 batched stage.
+    cases = ((240,240), (224,224), (160,160,160), (112,112,112))
+    for T in (Float64, Float32), sz in cases
+        region = ntuple(identity, length(sz))
+        # confirm the strided dims route to BatchedSmoothDim (else the test wouldn't exercise radix-5/7)
+        @test PureFFT._mk_dim(Complex{T}, 2, sz; inverse=false) isa PureFFT.BatchedSmoothDim
+        x = randn(Complex{T}, sz...)
+        pf = PureFFT._pure_plan_fft_nd(x, region; inverse=false)
+        y = copy(x); PureFFT.apply_unnormalized!(pf, y)
+        ref = fft(x, region)
+        @test maximum(abs.(y .- ref))/maximum(abs.(ref)) < tol(T)
+        # inverse round-trip (unnormalized bfft ∘ fft = ∏n)
+        pi = PureFFT._pure_plan_fft_nd(x, region; inverse=true)
+        z = copy(y); PureFFT.apply_unnormalized!(pi, z)
+        @test maximum(abs.(z ./ prod(sz) .- x))/maximum(abs.(x)) < tol(T)
     end
 end
 
@@ -131,6 +157,8 @@ end
              ((4,8,16),(2,3)),    # dim2 n_d=8, dim3 n_d=16 pow2 → BatchedDim (both d>1)
              ((8,48),(1,2)),      # dim2 n_d=48=2^4·3 → BatchedSmoothDim (mixed-radix batched)
              ((4,8,24),(2,3)),    # dim2 n_d=8 pow2, dim3 n_d=24=2^3·3 smooth → mixed routing
+             ((8,40),(1,2)),      # dim2 n_d=40=2^3·5 → BatchedSmoothDim (radix-5 batched)
+             ((8,56),(1,2)),      # dim2 n_d=56=2^3·7 → BatchedSmoothDim (radix-7 batched)
              ((64,19),(1,)),      # dim1 n1=64 F32 → BatchedDim1 (pow2), outer%W tail (F64 → Dim1Plan)
              ((48,13),(1,)))      # dim1 n1=48 F32 → BatchedDim1 (smooth), outer%W tail
     for T in (Float64, Float32), (sz, region) in cases

@@ -284,31 +284,32 @@ function batched_fft8!(p::BatchPlan8{T, L}, pc::Ptr{Complex{T}}, off::Int,
 end
 
 # ==============================================================================================
-# MIXED-RADIX (2^a·3^b) batched-strided kernel. Generalizes BatchPlan8 above by adding a batched
-# RADIX-3 DIT stage that reuses AvxRadix.avx_column_butterfly3's tuned size-3 algebra on 3 row-
+# MIXED-RADIX (2^a·3^b·5^c·7^d) batched-strided kernel. Generalizes BatchPlan8 above by adding batched
+# RADIX-3/5/7 DIT stages that reuse AvxRadix.avx_column_butterfly3/5/7's tuned size-r algebra on r row-
 # VECTORS (each W=4 complex across the contiguous inner batch) with scalar-broadcast twiddles.
-# Validated bit-exact in scratchpad/batched_nonpow2_proto.jl (Task 6h). The radix-8/4/2 stages and
-# the cache-blocked driver structure are shared verbatim with the pow2 kernel above; only the
-# radix-3 stage + factorization (3s first, then the pow2 cleanup) and the generic scalar tail are new.
-# Structured so radix-5/7 stages can be slotted into _choose_radices_smooth / _fft_group_mr! later
-# (YAGNI — only radix-3 built now, the class the planner routes here).
+# Radix-3 validated bit-exact in scratchpad/batched_nonpow2_proto.jl (Task 6h); radix-5/7 added Task 6w
+# (5/7-smooth N-D shapes: 240²/224²/160³/112³). The radix-8/4/2 stages and the cache-blocked driver
+# structure are shared verbatim with the pow2 kernel above; only the radix-3/5/7 stages + factorization
+# (7s, 5s, 3s, then the pow2 cleanup) and the generic scalar tail are new.
 # ==============================================================================================
 
-# n = 2^a·3^b is "smooth" for this kernel ⇔ dividing out all factors of 3 leaves a power of two.
-# (Pure pow2 is caught earlier by the BatchedDim route, so reaching this means b ≥ 1.)
+# n = 2^a·3^b·5^c·7^d is "smooth" for this kernel ⇔ dividing out all factors of 7,5,3 leaves a power of
+# two. (Pure pow2 is caught earlier by the BatchedDim route, so reaching this means c+b+d ≥ 1.)
 function _is_smooth_2a3(n::Int)
     n < 1 && return false
-    while n % 3 == 0; n ÷= 3; end
+    for p in (7, 5, 3); while n % p == 0; n ÷= p; end; end
     return ispow2(n)
 end
 
-# Factor n into stages: all 3s first, then the pow2 cleanup (2 or 4 so the remaining log2 ≡ 0 mod 3),
-# then radix-8s. Any factor order is valid for self-sorting DIT as long as digitrev uses it reversed.
+# Factor n into stages: all 7s, then 5s, then 3s, then the pow2 cleanup (2 or 4 so the remaining log2 ≡ 0
+# mod 3), then radix-8s. Any factor order is valid for self-sorting DIT as long as digitrev uses it reversed.
 function _choose_radices_smooth(n::Int)
     rad = Int[]
     m = n
+    while m % 7 == 0; push!(rad, 7); m ÷= 7; end
+    while m % 5 == 0; push!(rad, 5); m ÷= 5; end
     while m % 3 == 0; push!(rad, 3); m ÷= 3; end
-    @assert ispow2(m) "non-(2^a·3^b) size $n unsupported by the smooth batched kernel"
+    @assert ispow2(m) "non-(2^a·3^b·5^c·7^d) size $n unsupported by the smooth batched kernel"
     log2m = trailing_zeros(m); r = log2m % 3
     if r == 1
         push!(rad, 2); log2m -= 1
@@ -325,6 +326,11 @@ struct BatchPlanMR{T, L}
     radices::Vector{Int}         # stage order (smallest len first); e.g. n=384 -> [3,2,8,8]
     rot::Vec{L, T}               # direction mask for the radix-8/4 butterflies
     bf3::Vec{L, T}               # W_3 twiddle for avx_column_butterfly3 (carries the direction)
+    bf5_0::Vec{L, T}             # W_5^1 / W_5^2 twiddles for avx_column_butterfly5
+    bf5_1::Vec{L, T}
+    bf7_0::Vec{L, T}             # W_7^1 / W_7^2 / W_7^3 twiddles for avx_column_butterfly7
+    bf7_1::Vec{L, T}
+    bf7_2::Vec{L, T}
     tw::Vector{Vec{L, T}}        # tw[k+1] = W_n^k broadcast to W=L÷2 lanes, full length n
     rev::Vector{Int}             # generalized digit reversal, 0-based
     GB::Int                      # groups (of W=L÷2 cols) per cache block; tile holds n*GB Vec{L}
@@ -351,7 +357,10 @@ function BatchPlanMR(::Type{T}, n::Int; forward::Bool, BLK::Int = _default_blk(n
     rot = _rot_mask(Vec{L, T}, forward)
     b3r, b3i = AvxRadix.compute_twiddle(1, 3, forward)
     bf3 = _bcast_c(Vec{L, T}, b3r, b3i)
-    BatchPlanMR{T, L}(n, forward, radices, rot, bf3, tw, rev, GB,
+    _bc(idx, len) = _bcast_c(Vec{L, T}, AvxRadix.compute_twiddle(idx, len, forward)...)
+    BatchPlanMR{T, L}(n, forward, radices, rot, bf3,
+                      _bc(1, 5), _bc(2, 5), _bc(1, 7), _bc(2, 7), _bc(3, 7),
+                      tw, rev, GB,
                       Vector{Vec{L, T}}(undef, n * GB),
                       Vector{Complex{T}}(undef, n), Vector{Complex{T}}(undef, n), stw)
 end
@@ -382,8 +391,70 @@ end
     return nothing
 end
 
+# Batched radix-5 DIT stage: size-5 DFT of 5 row-vectors with scalar-broadcast twiddles, reusing
+# avx_column_butterfly5 (width-generic). bf5_0/bf5_1 = W_5^1 / W_5^2 twiddles.
+@inline function _radix5_stage!(sc::Vector{Vec{L, T}}, b0::Int, tw::Vector{Vec{L, T}},
+                                bf5_0::Vec{L, T}, bf5_1::Vec{L, T}, n::Int, len::Int) where {T, L}
+    q = len ÷ 5
+    step = n ÷ len
+    @inbounds begin
+        start = 0
+        while start < n
+            j = 0
+            while j < q
+                js = j * step
+                base = b0 + start + j
+                v0 = sc[base + 1]
+                v1 = AvxRadix.avx_mul_complex(sc[base + q + 1],  tw[js + 1])
+                v2 = AvxRadix.avx_mul_complex(sc[base + 2q + 1], tw[2js + 1])
+                v3 = AvxRadix.avx_mul_complex(sc[base + 3q + 1], tw[3js + 1])
+                v4 = AvxRadix.avx_mul_complex(sc[base + 4q + 1], tw[4js + 1])
+                o = AvxRadix.avx_column_butterfly5(v0, v1, v2, v3, v4, bf5_0, bf5_1)
+                sc[base + 1] = o[1]; sc[base + q + 1] = o[2]; sc[base + 2q + 1] = o[3]
+                sc[base + 3q + 1] = o[4]; sc[base + 4q + 1] = o[5]
+                j += 1
+            end
+            start += len
+        end
+    end
+    return nothing
+end
+
+# Batched radix-7 DIT stage: size-7 DFT of 7 row-vectors, reusing avx_column_butterfly7 (width-generic).
+@inline function _radix7_stage!(sc::Vector{Vec{L, T}}, b0::Int, tw::Vector{Vec{L, T}},
+                                bf7_0::Vec{L, T}, bf7_1::Vec{L, T}, bf7_2::Vec{L, T},
+                                n::Int, len::Int) where {T, L}
+    q = len ÷ 7
+    step = n ÷ len
+    @inbounds begin
+        start = 0
+        while start < n
+            j = 0
+            while j < q
+                js = j * step
+                base = b0 + start + j
+                v0 = sc[base + 1]
+                v1 = AvxRadix.avx_mul_complex(sc[base + q + 1],  tw[js + 1])
+                v2 = AvxRadix.avx_mul_complex(sc[base + 2q + 1], tw[2js + 1])
+                v3 = AvxRadix.avx_mul_complex(sc[base + 3q + 1], tw[3js + 1])
+                v4 = AvxRadix.avx_mul_complex(sc[base + 4q + 1], tw[4js + 1])
+                v5 = AvxRadix.avx_mul_complex(sc[base + 5q + 1], tw[5js + 1])
+                v6 = AvxRadix.avx_mul_complex(sc[base + 6q + 1], tw[6js + 1])
+                o = AvxRadix.avx_column_butterfly7(v0, v1, v2, v3, v4, v5, v6, bf7_0, bf7_1, bf7_2)
+                sc[base + 1] = o[1]; sc[base + q + 1] = o[2]; sc[base + 2q + 1] = o[3]; sc[base + 3q + 1] = o[4]
+                sc[base + 4q + 1] = o[5]; sc[base + 5q + 1] = o[6]; sc[base + 6q + 1] = o[7]
+                j += 1
+            end
+            start += len
+        end
+    end
+    return nothing
+end
+
 @inline function _fft_group_mr!(sc::Vector{Vec{L, T}}, b0::Int, radices::Vector{Int},
-                                tw::Vector{Vec{L, T}}, rot::Vec{L, T}, bf3::Vec{L, T}, n::Int) where {T, L}
+                                tw::Vector{Vec{L, T}}, rot::Vec{L, T}, bf3::Vec{L, T},
+                                bf5_0::Vec{L, T}, bf5_1::Vec{L, T},
+                                bf7_0::Vec{L, T}, bf7_1::Vec{L, T}, bf7_2::Vec{L, T}, n::Int) where {T, L}
     len = 1
     @inbounds for f in radices
         len *= f
@@ -393,6 +464,10 @@ end
             _radix4_stage!(sc, b0, tw, rot, n, len)
         elseif f == 3
             _radix3_stage!(sc, b0, tw, bf3, n, len)
+        elseif f == 5
+            _radix5_stage!(sc, b0, tw, bf5_0, bf5_1, n, len)
+        elseif f == 7
+            _radix7_stage!(sc, b0, tw, bf7_0, bf7_1, bf7_2, n, len)
         else
             _radix2_stage!(sc, b0, tw, n, len)
         end
@@ -419,6 +494,7 @@ end
 function batched_fft_mr!(p::BatchPlanMR{T, L}, pc::Ptr{Complex{T}}, off::Int,
                          inner::Int, outer::Int) where {T, L}
     n = p.n; sc = p.scratch; rev = p.rev; tw = p.tw; rot = p.rot; bf3 = p.bf3
+    bf5_0 = p.bf5_0; bf5_1 = p.bf5_1; bf7_0 = p.bf7_0; bf7_1 = p.bf7_1; bf7_2 = p.bf7_2
     radices = p.radices; GB = p.GB; W = L >> 1
     sin = p.sin; sout = p.sout; stw = p.stw
     pt = reinterpret(Ptr{T}, pc)
@@ -439,7 +515,7 @@ function batched_fft_mr!(p::BatchPlanMR{T, L}, pc::Ptr{Complex{T}}, off::Int,
             end
             g = 0
             while g < gb
-                _fft_group_mr!(sc, g * n, radices, tw, rot, bf3, n)
+                _fft_group_mr!(sc, g * n, radices, tw, rot, bf3, bf5_0, bf5_1, bf7_0, bf7_1, bf7_2, n)
                 g += 1
             end
             for r in 0:(n - 1)                  # scatter natural order back

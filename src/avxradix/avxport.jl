@@ -170,6 +170,33 @@ end
     (output0, output1, output2, output3, output4)
 end
 
+# ---- column_butterfly7, width-generic ----
+# Same odd-prime real-FFT structure as column_butterfly5, with 3 conjugate pairs (1,6)(2,5)(3,4) and
+# tw0=W7^1, tw1=W7^2, tw2=W7^3 (broadcast complex). Coefficient of pair m in output k is W7^{mk}: cos via
+# symmetry cos(2πj/7)=cos(2π(7-j)/7); sin flips sign for the conjugate half (indices 4,5,6). Verified
+# bit-exact vs a reference DFT (scratchpad/bf7check.jl, max-err ~1e-14, fwd+inv).
+@inline function avx_column_butterfly7(r1, r2, r3, r4, r5, r6, r7, tw0, tw1, tw2)
+    sum1, diff6 = avx_butterfly2(r2, r7)
+    sum2, diff5 = avx_butterfly2(r3, r6)
+    sum3, diff4 = avx_butterfly2(r4, r5)
+    rot = _rot90_inv(r1)
+    rot6 = avx_rotate90(diff6, rot); rot5 = avx_rotate90(diff5, rot); rot4 = avx_rotate90(diff4, rot)
+    output0 = avx_add(r1, avx_add(avx_add(sum1, sum2), sum3))
+    t0r, t0i = avx_duplicate_complex(tw0)
+    t1r, t1i = avx_duplicate_complex(tw1)
+    t2r, t2i = avx_duplicate_complex(tw2)
+    re1 = avx_fmadd(t2r, sum3, avx_fmadd(t1r, sum2, avx_fmadd(t0r, sum1, r1)))   # k=1: cos1,cos2,cos3
+    re2 = avx_fmadd(t0r, sum3, avx_fmadd(t2r, sum2, avx_fmadd(t1r, sum1, r1)))   # k=2: cos2,cos3,cos1
+    re3 = avx_fmadd(t1r, sum3, avx_fmadd(t0r, sum2, avx_fmadd(t2r, sum1, r1)))   # k=3: cos3,cos1,cos2
+    im1 = avx_fmadd(t2i, rot4, avx_fmadd(t1i, rot5, avx_mul(t0i, rot6)))         # k=1: +s1,+s2,+s3
+    im2 = avx_fnmadd(t0i, rot4, avx_fnmadd(t2i, rot5, avx_mul(t1i, rot6)))       # k=2: +s2,-s3,-s1
+    im3 = avx_fmadd(t1i, rot4, avx_fnmadd(t0i, rot5, avx_mul(t2i, rot6)))        # k=3: +s3,-s1,+s2
+    output1, output6 = avx_butterfly2(re1, im1)
+    output2, output5 = avx_butterfly2(re2, im2)
+    output3, output4 = avx_butterfly2(re3, im3)
+    (output0, output1, output2, output3, output4, output5, output6)
+end
+
 # column_butterfly4: rotation = make_rotation90(FFT direction) — _ROT90_FWD for forward.
 @inline function avx_column_butterfly4(r1, r2, r3, r4, rotation)
     mid0, mid2 = avx_butterfly2(r1, r3)

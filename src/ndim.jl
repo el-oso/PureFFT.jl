@@ -21,7 +21,7 @@ plan_inverse(p::NDPlan) = p.inverse
 #   BatchedDim1      — dim 1, small F32 only: batch transforms ACROSS the trailing dims (fills the SIMD
 #                      width FFTW-style) — transpose-pack a chunk, run the batched kernel, transpose back.
 #   BatchedDim       — pow2 dim d>1: batched radix-8 column kernel, NO transpose (ndim_batched.jl).
-#   BatchedSmoothDim — 2^a·3^b dim d>1: batched mixed-radix (radix-3 + radix-8/4/2) kernel, NO transpose.
+#   BatchedSmoothDim — 2^a·3^b·5^c·7^d dim d>1: batched mixed-radix (radix-3/5/7 + radix-8/4/2) kernel, NO transpose.
 #   TransposeDim     — other non-pow2 dim d>1: transpose → 1-D plan → transpose-back (the fallback).
 struct Dim1Plan{P}
     plan::P
@@ -58,7 +58,7 @@ function _canon_region(r, N::Int)
 end
 
 # Route one transformed dim to its descriptor: dim-1 → Dim1Plan; pow2 d>1 → BatchedDim (no transpose);
-# 2^a·3^b d>1 → BatchedSmoothDim (mixed-radix batched, no transpose); else → TransposeDim. Each branch
+# 2^a·3^b·5^c·7^d d>1 → BatchedSmoothDim (mixed-radix batched, no transpose); else → TransposeDim. Each branch
 # returns a distinct CONCRETE type (the heterogeneous tuple's element types stay concrete ⇒ the
 # @generated apply specializes fully).
 # Route dim-1 to the batched-across-trailing-dims kernel ONLY where the per-column Dim1Plan underfills the
