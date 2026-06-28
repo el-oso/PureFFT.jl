@@ -57,6 +57,19 @@ end
     @inbounds for f in 0:(length(inp) ÷ 18 - 1); butterfly18!(out, inp, 18f, k.tw, k.bf3, k.bf3lo); end
 end
 
+# ---- leaf: Butterfly8 (2x4 single-FFT; register-only, no scratch). The 2^3 leaf the high-power-5
+# route needs: 1000=MR5^3(B8), 5000=MR5^4(B8). Faithful port of rustfft Butterfly8Avx64. ----
+struct B8 <: Kernel
+    n::Int; tw::NTuple{2, V4f}; rot::V4f
+end
+B8(fwd::Bool) = B8(8, bf8_twiddles(fwd), fwd ? _ROT90_FWD : _ROT90_INV)
+@inline function proc_ip!(k::B8, buf, scr)
+    @inbounds for f in 0:(length(buf) ÷ 8 - 1); butterfly8!(buf, buf, 8f, k.tw, k.rot); end
+end
+@inline function proc_oop!(k::B8, out, inp, scr)
+    @inbounds for f in 0:(length(inp) ÷ 8 - 1); butterfly8!(out, inp, 8f, k.tw, k.rot); end
+end
+
 # ---- leaf: Butterfly16 (4x4, two-phase; needs scratch ≥ its length) ----
 struct B16 <: Kernel
     n::Int; tw::Vector{V4f}; rot::V4f

@@ -63,6 +63,7 @@ _build_tree(base::Kernel, radixes, fwd::Bool) = RPlan(foldl((k, r) -> _wrap(r, k
 # scheme: monolithic B256/B512 base (by e mod 3, so the leftover is a clean product of 8s + at most one 4,
 # no radix-2) + a radix-8/4 chain. Used by the pure-pow2 (e≥8) route AND the single-factor-of-3 route below.
 function _pow2_kernel(e::Int, fwd::Bool)
+    e == 3 && return B8(fwd)
     e == 4 && return B16(fwd)
     e == 5 && return B32(fwd)
     e == 6 && return B64(fwd)
@@ -89,11 +90,14 @@ function plan_tree(n::Int, fwd::Bool=true)
         return isnothing(inner) ? nothing : RPlan(MR7(inner, fwd))
     end
     p7 == 0 || return nothing                           # 7^2+ / 7·(3,5) unsupported → fall back
-    # ---- single factor of 5 (2^a·5): carry the lone 5 in ONE radix-5 pass (MR5) over a pow2 leaf.
-    # 80=MR5(B16), 160=MR5(B32), 320=MR5(B64), 1280=MR5(B256). (B32 leaf supplies the 2^5 block.)
-    if p5 == 1 && p3 == 0
+    # ---- 2^a·5^m (any power of 5, no 3s): pow2 leaf (B8/B16/B32/B64/B256/B512 — must be EVEN to carry
+    # all the 2s) + m radix-5 passes (MR5). MR5's inner length M is always even, so the chain composes.
+    # 80=MR5(B16), 160=MR5(B32), 1000=MR5³(B8), 2000=MR5³(B16), 10000=MR5⁴(B16). p2<3 has no pow2 leaf
+    # (no B2/B4) ⇒ falls back; pure 5^m (p2=0, odd) can't use the even-M SIMD path either.
+    if p5 >= 1 && p3 == 0
         inner = _pow2_kernel(p2, fwd)
-        return isnothing(inner) ? nothing : RPlan(MR5(inner, fwd))
+        isnothing(inner) && return nothing
+        return RPlan(foldl((k, _) -> MR5(k, fwd), 1:p5; init = inner))
     end
     # ---- 2^a·3·5 (lone 3 and lone 5): pow2 leaf + one radix-3 then one radix-5 pass.
     # 240=MR5(MR3(B16)), 480=MR5(MR3(B32)), 960=MR5(MR3(B64)).

@@ -62,6 +62,24 @@ function butterfly36!(out, inp, base::Int, tw::NTuple{15, V4f}, tw3::V4f)  # out
     avx_store_complex!(out, base + 4, o2[1]); avx_store_complex!(out, base + 10, o2[2]); avx_store_complex!(out, base + 16, o2[3]); avx_store_complex!(out, base + 22, o2[4]); avx_store_complex!(out, base + 28, o2[5]); avx_store_complex!(out, base + 34, o2[6])
 end
 
+# ===== Butterfly8: 2x4 single-FFT leaf (faithful port of rustfft Butterfly8Avx64) =====
+# col bf2 down a 4x2 array + twiddle, transpose_4x2_to_2x4, col bf4 across. Register-only (no scratch).
+# twiddles = gen_butterfly_twiddles_interleaved_columns!(2,4,0): chunk(x,1,8) for x in (0,2).
+bf8_twiddles(fwd) = (avx_mixedradix_twiddle_chunk(0, 1, 8, fwd), avx_mixedradix_twiddle_chunk(2, 1, 8, fwd))
+function butterfly8!(out, inp, base::Int, tw::NTuple{2, V4f}, rot::V4f)  # out===inp ⇒ in-place ok
+    @inbounds begin
+        row0 = avx_load_complex(inp, base); row1 = avx_load_complex(inp, base + 2)
+        row2 = avx_load_complex(inp, base + 4); row3 = avx_load_complex(inp, base + 6)
+        mid0, mid2 = avx_butterfly2(row0, row2)
+        mid1, mid3 = avx_butterfly2(row1, row3)
+        t0 = avx_transpose_2x2(mid0, avx_mul_complex(mid2, tw[1]))   # transpose_4x2_to_2x4 = 2× transpose_2x2
+        t1 = avx_transpose_2x2(mid1, avx_mul_complex(mid3, tw[2]))
+        o = avx_column_butterfly4(t0[1], t0[2], t1[1], t1[2], rot)
+        avx_store_complex!(out, base, o[1]); avx_store_complex!(out, base + 2, o[2])
+        avx_store_complex!(out, base + 4, o[3]); avx_store_complex!(out, base + 6, o[4])
+    end
+end
+
 # ===== Butterfly16: 4x4, two-phase (faithful scale-down of butterfly64! 8x8 → 4x4) =====
 # phase1: col bf4 + twiddle + transpose4 → scr;  phase2: row bf4 (scr → out). needs scratch ≥ its length.
 # twiddles: chunk(cs*2, r, 16) for cs in 0:1, r in 1:3 → 6 entries, index 3cs+r (mirrors bf64_twiddles).
