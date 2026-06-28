@@ -62,7 +62,8 @@ function _pure_plan_rfft_nd(x::AbstractArray{<:Real, N}, region) where {N}
         _pure_plan_fft_nd(Array{Complex{Tr}}(undef, cplxsz), rest; inverse = false)
     dims = (d, rest...)
     outer = _prod_after(realsz, d)
-    bd1 = _use_batched_rdim1(Tr, d, n ÷ 2, outer) ? _build_batched_rdim1(Tr, n, outer) : nothing
+    bd1 = !_use_batched_rdim1(Tr, d, n ÷ 2, outer) ? nothing :
+        _use_percol_rdim1(Tr, n ÷ 2) ? _build_percol_rdim1(Tr, n) : _build_batched_rdim1(Tr, n, outer)
     return RealNDPlan{Tr, Tr, length(dims), typeof(rplan), typeof(cplan), N, typeof(bd1)}(
         d, n, rplan, cplan, dims, realsz, cplxsz, false, one(Tr), bd1)
 end
@@ -90,7 +91,9 @@ function _rfft_core!(p::RealNDPlan{T, Tr}, Y::AbstractArray, x::AbstractArray) w
     d = p.d; n = p.n; rsz = p.realsz; h = n ÷ 2 + 1
     inner = _prod_before(rsz, d); outer = _prod_after(rsz, d)
     xf = eltype(x) === Tr ? x : Tr.(x)
-    if !isnothing(p.bd1) && xf isa Array && Y isa Array   # fast batched dim-1 path (d==1, contiguous)
+    if p.bd1 isa PercolRDim1 && xf isa Array && Y isa Array   # fast per-column dim-1 path (F64 pow2)
+        _rfft_dim1_percol!(p.bd1, p.rplan, Y, xf, outer)
+    elseif !isnothing(p.bd1) && xf isa Array && Y isa Array   # fast batched dim-1 path (d==1, contiguous)
         _rfft_dim1_batched!(p.bd1, Y, xf, outer)
     else
         xr = reshape(xf, inner, n, outer)
@@ -171,6 +174,88 @@ function _build_batched_rdim1(::Type{Tr}, n::Int, outer::Int) where {Tr}
     sgn = Vec{L, Tr}(ntuple(k -> iseven(k) ? -one(Tr) : one(Tr), Val(L)))  # ntuple is 1-based: imag lanes → -1
     return BatchedRDim1{Tr, L, typeof(bp)}(bp, m, h, M, Vector{Complex{Tr}}(undef, m * M),
                                            Vector{Complex{Tr}}(undef, h * M), cf, sgn, tw)
+end
+
+# ── Per-column dim-1 r2c (the optimized F64 path) ─────────────────────────────
+# The batched-transpose path above (BatchedRDim1) pays TWO full matrix transposes (pack + unpack) and
+# runs the *batched* complex FFT(m). For F64 those transposes are a large relative cost because the FFT is
+# only half-length (m = n/2) — measured 0.50–0.64× FFTW (the c2c-rest already BEATS FFTW; the whole F64
+# rfft deficit is here). The complex N-D engine learned the same lesson and routes F64 dim-1 to a
+# per-column (NO transpose) 1-D FFT — the radix-8 codelet already fills the F64 register for a single
+# transform, so per-column FFT(m) runs at ~0.88–1.2× FFTW vs the transpose path's ~0.3–0.46×. So for
+# F64 pow2 m we mirror that: per column, (1) copy-pack the real column (== m complex, free reinterpret)
+# into the rplan's scratch, (2) run ONE per-column complex FFT(m) reusing the tuned 1-D `rplan.inner`
+# (NO transpose), (3) a within-column VECTORIZED half-complex recombine (reverse-shuffle pairs bin k with
+# conj(bin m-k), W complex/Vec) → Y. Bit-exact with the batched path (≤1.4e-15). F32 and smooth-m keep
+# the batched path (F32 pow2 clears the gate there; smooth m=120 measured slower per-column).
+struct PercolRDim1{Tr, L}
+    m::Int                       # n÷2
+    h::Int                       # m+1
+    cf::Vector{Complex{Tr}}      # cf[k+1] = W_n^k · (0,-0.5): folds xo's 1/(2i) + twiddle (contiguous, vload'd)
+    tw::Vector{Complex{Tr}}      # W_n^k, k=0..m (scalar c-tail)
+    sgn::Vec{L, Tr}              # conjugation mask [1,-1,1,-1,…]
+end
+
+@inline _use_percol_rdim1(::Type{Tr}, m::Int) where {Tr} = Tr === Float64 && ispow2(m)
+
+function _build_percol_rdim1(::Type{Tr}, n::Int) where {Tr}
+    m = n ÷ 2; h = m + 1; L = _batch_lanes(Tr)
+    tw = _rfft_twiddles(Tr, n)
+    cf = Vector{Complex{Tr}}(undef, m + 1)
+    @inbounds for k in 0:m
+        cf[k + 1] = tw[k + 1] * Complex{Tr}(zero(Tr), Tr(-0.5))
+    end
+    sgn = Vec{L, Tr}(ntuple(k -> isodd(k) ? one(Tr) : -one(Tr), Val(L)))  # imag lanes (even, 1-based) → -1
+    return PercolRDim1{Tr, L}(m, h, cf, tw, sgn)
+end
+
+# Within-column vectorized half-complex recombine: zc (m complex, FFT'd, contiguous) → outc (h complex).
+# Reproduces apply_rfft! step-3/4 W complex at a time WITHIN one column: pairs bin k with conj(bin m-k)
+# via a reverse-shuffle (no transpose). Boundary k=0,m scalar; k=1..m-1 vectorized + scalar c-tail.
+@inline function _recombine_col!(::Type{Vec{L, T}}, pZ::Ptr{T}, pO::Ptr{T}, m::Int,
+                                 cf::Vector{Complex{T}}, tw::Vector{Complex{T}}, sgn::Vec{L, T}) where {L, T}
+    W = L >> 1; half = T(0.5)
+    pZc = reinterpret(Ptr{Complex{T}}, pZ); pOc = reinterpret(Ptr{Complex{T}}, pO)
+    pCf = reinterpret(Ptr{T}, pointer(cf))
+    rev = Val(ntuple(j -> (W - 1 - (j - 1) >> 1) * 2 + (isodd(j) ? 0 : 1), Val(L)))  # reverse W complex lanes
+    @inbounds begin
+        z0 = unsafe_load(pZc, 1)                                  # boundary k=0, k=m (real)
+        unsafe_store!(pOc, Complex{T}(real(z0) + imag(z0), zero(T)), 1)
+        unsafe_store!(pOc, Complex{T}(real(z0) - imag(z0), zero(T)), m + 1)
+        k = 1
+        while k + W - 1 <= m - 1
+            fwd = _ldv(Vec{L, T}, pZ, k)
+            cjm = shufflevector(_ldv(Vec{L, T}, pZ, m - k - W + 1), rev) * sgn  # conj(z[m-k..m-k-W+1])
+            xe = (fwd + cjm) * half
+            _stv!(pO, k, xe + AvxRadix.avx_mul_complex(fwd - cjm, _ldv(Vec{L, T}, pCf, k)))
+            k += W
+        end
+        while k <= m - 1                                          # scalar c-tail
+            zk = unsafe_load(pZc, k + 1); zmk = conj(unsafe_load(pZc, m - k + 1))
+            xe = (zk + zmk) * half
+            xo = (zk - zmk) * Complex{T}(zero(T), T(-0.5))
+            unsafe_store!(pOc, xe + tw[k + 1] * xo, k + 1)
+            k += 1
+        end
+    end
+    return nothing
+end
+
+# Per-column r2c on dim 1: copy-pack column → per-column complex FFT(m) (no transpose) → recombine → Y.
+function _rfft_dim1_percol!(pc::PercolRDim1{T, L}, rplan, Y::AbstractArray, x::AbstractArray, outer::Int) where {T, L}
+    m = pc.m; h = pc.h; z = rplan.zbuf
+    GC.@preserve x Y z pc begin
+        pxc = reinterpret(Ptr{Complex{T}}, pointer(x))           # x (n×outer real) viewed as (m×outer) complex
+        pYc = reinterpret(Ptr{Complex{T}}, pointer(Y))           # Y (h×outer) complex
+        pz = reinterpret(Ptr{T}, pointer(z))
+        es = sizeof(Complex{T})
+        @inbounds for o in 0:(outer - 1)
+            unsafe_copyto!(pointer(z), pxc + o * m * es, m)       # pack: copy real column (= m complex, free)
+            apply_unnormalized!(rplan.inner, z)                  # per-column complex FFT(m), in place
+            _recombine_col!(Vec{L, T}, pz, reinterpret(Ptr{T}, pYc + o * h * es), m, pc.cf, pc.tw, pc.sgn)
+        end
+    end
+    return Y
 end
 
 # Vectorized half-complex recombine of a transpose-packed, FFT'd block B → half-spectrum Yb. Both are
