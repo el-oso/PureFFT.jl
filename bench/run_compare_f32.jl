@@ -7,6 +7,9 @@
 using BenchmarkTools, Statistics, Printf, Dates
 import FFTW, RustFFT, PureFFT, JSON
 
+include(joinpath(@__DIR__, "pin_check.jl"))
+assert_pinned()        # warn loudly if the bench core's clock drifted unpinned (silent reset poisons medians)
+
 gflops(n, t) = 5 * n * log2(n) / t / 1.0e9
 relspread(t) = (quantile(t, 0.84) - quantile(t, 0.16)) / 2 / median(t)
 const SAMPLES = 1000

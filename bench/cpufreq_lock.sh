@@ -18,6 +18,7 @@
 #   taskset -c 2 julia -O3 --project=bench bench/plot_compare.jl
 #   sudo bench/cpufreq_lock.sh restore    # back to normal turbo
 #   bench/cpufreq_lock.sh status          # (no sudo) show governor/boost/freq
+#   bench/cpufreq_lock.sh check            # (no sudo) exit 0 if pinned, 1 if not — preflight for gate benches
 #
 # Also for clean numbers (no sudo, your responsibility): close other CPU users, and don't run anything on
 # core 2's SMT sibling (core 8 here — `cat /sys/devices/system/cpu/cpu2/topology/thread_siblings_list`),
@@ -58,5 +59,14 @@ case "${1:-status}" in
         for f in $MAX_GLOB; do echo "$HW_MAX" > "$f"; done
         echo "Restored (boost on, full range):"; status ;;
     status) status ;;
-    *) echo "usage: $0 {pin <MHz>|lock|restore|status}" >&2; exit 2 ;;
+    check)                                               # no-sudo preflight: exit 0 if pinned, 1 if not
+        lo=$(cat /sys/devices/system/cpu/cpu2/cpufreq/scaling_min_freq)
+        hi=$(cat /sys/devices/system/cpu/cpu2/cpufreq/scaling_max_freq)
+        if [ "$lo" = "$hi" ]; then
+            echo "PINNED: cpu2 at $((lo / 1000)) MHz (min==max)"
+        else
+            echo "NOT PINNED: cpu2 min=$((lo / 1000)) max=$((hi / 1000)) MHz — run 'sudo $0 pin 4500' before gate benchmarks" >&2
+            exit 1
+        fi ;;
+    *) echo "usage: $0 {pin <MHz>|lock|restore|status|check}" >&2; exit 2 ;;
 esac

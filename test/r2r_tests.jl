@@ -256,22 +256,26 @@ end
     # Small odd primes/prime-powers/composites — the inner sizes feeding DCT-I/DST-I. All previously
     # mis-routed to Bluestein/recursive (0.23–0.69×); now on the AVX odd-prime radix tree. These clear
     # 0.96× (fair env). The 5²/7² prime-powers 25/49/125/625 — once a 0.84–0.93× floor — now ROOT on the
-    # packed B25/B49 codelets and clear COMFORTABLY (≈1.4–2.4×), the core win of this work.
-    # Remaining floors (FFTW's dedicated fused codelet for the size genuinely wins; tracked, never hidden):
+    # packed B25/B49 codelets and clear COMFORTABLY (≈1.4–2.4×), the core win of this work. 1000=2³·5³ also
+    # clears (≈1.20× pinned, MR5³(B8)) — it was mis-marked a floor from an unpinned measurement (the pinned
+    # 3000-sample median is 1.20, confirmed across repeated runs).
+    # Remaining floors (FFTW's dedicated fused codelet genuinely wins; tracked, never hidden — EVERY lever tried):
     #  - 7/13: pure primes — FFTW tiny hand-codelet; BP leaf is still PureFFT's best.
-    #  - 250=2·5³ (≈0.95×), 500=4·5³ (≈0.80×), 1000=2³·5³ (≈0.91×), 2000=2⁴·5³ (≈0.88×): the radix-5-heavy
-    #    2^a·5³ family. FFTW ships extremely fast codelets here (500 in ~622ns). BOTH routes measured per
-    #    size — the chosen tree is the fastest PureFFT route, e.g. 500: MR2²(MR5(B25))=0.76 beats
-    #    MR5²(MR2²(BP5))=0.51; 1000: MR5³(B8)=0.92 beats MR2³(MR5(B25))=0.73; 2000: MR5³(B16)=0.88 beats
-    #    MR2(MR5³(B8))=0.71 and the B25 route MR2⁴(MR5(B25))=0.58. (Big lift from the broken baseline:
-    #    250 0.54→0.95, 500 0.59→0.80; 1000/2000 ~unchanged at their pre-existing pow2-leaf-chain floor.)
+    #  - 250=2·5³ (≈0.93×), 500=4·5³ (≈0.81×), 2000=2⁴·5³ (≈0.83×): the radix-5-heavy 2^a·5³ family
+    #    (pinned 4500 MHz, 3000-sample median; big lift from the broken routing baseline 250 0.54→0.93,
+    #    500 0.59→0.81). BOTH routes measured (the AVX tree beats Recursive). Two structural levers were
+    #    built-and-measured and BOTH disproven: (1) the "pad the odd-M radix-5 tail to Vec-aligned" trick —
+    #    that tail is only +3% of the transform (M=24→25: 107.6→111.3ns), can't close a 20-40% gap; (2) a
+    #    monolithic B125 (5³) codelet to mimic FFTW's fused codelet — LLVM spills it to a 704 B stack frame /
+    #    10 ymm spills (vs MR5(B25)'s 128 B / 3), so it REGRESSES every size (125 1.50→1.37). FFTW's genfft
+    #    hand-schedules these to spill minimally; no PureFFT lever beats it. Genuine floor, fully investigated.
     med(b) = median(b.times)
     ratio(n) = (x = randn(ComplexF64, n);
         pp = plan_pfft(ComplexF64, n); pf = FFTW.plan_fft!(copy(x); flags = FFTW.MEASURE);
         med(@benchmark $pf * y setup = (y = copy($x))) / med(@benchmark PureFFT.apply_unnormalized!($pp, z) setup = (z = copy($x))))
     pass = (11, 17, 19, 23, 33, 35, 45, 55, 63, 65, 77, 91, 95, 129,    # clear the gate
-            25, 49, 125, 625)                                           # 5²/7² powers via B25/B49 codelets
-    floor_sizes = (7, 13, 250, 500, 1000, 2000)                         # FFTW codelet / radix-5-heavy floor (tracked)
+            25, 49, 125, 625, 1000)                                     # 5²/7² powers via B25/B49 codelets; 1000=MR5³(B8)
+    floor_sizes = (7, 13, 250, 500, 2000)                               # FFTW codelet / radix-5-heavy 2^a·5³ floor (tracked)
     if Base.JLOptions().check_bounds == 0
         for n in pass; @test ratio(n) ≥ 0.96; end
         for n in floor_sizes; @test_broken ratio(n) ≥ 0.96; end

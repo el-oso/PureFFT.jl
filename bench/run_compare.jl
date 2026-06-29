@@ -16,11 +16,16 @@ import FFTW, RustFFT, PureFFT
 using BenchmarkTools, Printf, Statistics, Dates
 import JSON
 
+include(joinpath(@__DIR__, "pin_check.jl"))
+assert_pinned()        # warn loudly if the bench core's clock drifted unpinned — a silent pin reset
+                       # (e.g. suspend/replug) poisons the medians; no sample count fixes clock noise
+
 FFTW.set_num_threads(1)
 
 gflops(n, t) = 5 * n * log2(n) / t / 1.0e9
 
-const SAMPLES = 300    # ≥ this many measurements per size for a stable median + tight spread
+const SAMPLES = 1000   # ≥ this many measurements per size for a stable median (300 was too noisy for the
+                       # larger sizes — it mis-read 1000 as 0.91× when the pinned truth is 1.20×)
 const SECONDS = 4      # per-point cap
 const MAXSAVE = 2000   # cap saved samples per (size, method) — well above SAMPLES
 

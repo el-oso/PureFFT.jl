@@ -15,6 +15,9 @@ import FFTW, JSON
 using PureFFT
 const ErrorTypes = PureFFT.ErrorTypes
 
+include(joinpath(@__DIR__, "pin_check.jl"))
+assert_pinned()        # warn loudly if the bench core's clock drifted unpinned (silent reset poisons medians)
+
 FFTW.set_num_threads(1)
 
 gflops(n, t) = 5 * n * log2(n) / t / 1.0e9
