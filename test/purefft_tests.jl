@@ -219,7 +219,9 @@ end
     @testset "faithful rust-port plan (AvxMixedRadixPlan)" begin
         @test isnothing(PureFFT.AvxMixedRadixPlan(ComplexF64, 97))     # prime → outside coverage
         @test isnothing(PureFFT.AvxMixedRadixPlan(ComplexF32, 1080))   # Float64-only port
-        for n in (720, 1080, 1440, 11520)
+        # 25=5²/49=7² (B25/B49 bases); 125=MR5(B25), 625=MR5²(B25), 343=MR7(B49); 250=2·5³ & 500=4·5³
+        # (MR2 over the odd 5-power core); 1000/2000 = 2^a·5³ pow2-leaf chains.
+        for n in (720, 1080, 1440, 11520, 25, 49, 125, 250, 500, 625, 1000, 2000, 343)
             p = PureFFT.AvxMixedRadixPlan(ComplexF64, n)
             @test p isa PureFFT.AvxMixedRadixPlan
             x = randn(ComplexF64, n)

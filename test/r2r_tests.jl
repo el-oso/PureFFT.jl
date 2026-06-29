@@ -255,16 +255,23 @@ end
     using PureFFT, FFTW, BenchmarkTools, Statistics
     # Small odd primes/prime-powers/composites — the inner sizes feeding DCT-I/DST-I. All previously
     # mis-routed to Bluestein/recursive (0.23–0.69×); now on the AVX odd-prime radix tree. These clear
-    # 0.96× (fair env). The very smallest pure-prime / pure-prime-power sizes (7, 13, 25, 49, 125) sit
-    # at a documented FFTW tiny-hand-codelet floor (0.77–0.93×) — the tree is still the best PureFFT
-    # kernel for them (2–4× over Bluestein/CodeletPlan), and every DCT-I/DST-I transform that USES them
-    # clears the gate (above) — so they are tracked as @test_broken, not skipped or hidden.
+    # 0.96× (fair env). The 5²/7² prime-powers 25/49/125/625 — once a 0.84–0.93× floor — now ROOT on the
+    # packed B25/B49 codelets and clear COMFORTABLY (≈1.4–2.4×), the core win of this work.
+    # Remaining floors (FFTW's dedicated fused codelet for the size genuinely wins; tracked, never hidden):
+    #  - 7/13: pure primes — FFTW tiny hand-codelet; BP leaf is still PureFFT's best.
+    #  - 250=2·5³ (≈0.95×), 500=4·5³ (≈0.80×), 1000=2³·5³ (≈0.91×), 2000=2⁴·5³ (≈0.88×): the radix-5-heavy
+    #    2^a·5³ family. FFTW ships extremely fast codelets here (500 in ~622ns). BOTH routes measured per
+    #    size — the chosen tree is the fastest PureFFT route, e.g. 500: MR2²(MR5(B25))=0.76 beats
+    #    MR5²(MR2²(BP5))=0.51; 1000: MR5³(B8)=0.92 beats MR2³(MR5(B25))=0.73; 2000: MR5³(B16)=0.88 beats
+    #    MR2(MR5³(B8))=0.71 and the B25 route MR2⁴(MR5(B25))=0.58. (Big lift from the broken baseline:
+    #    250 0.54→0.95, 500 0.59→0.80; 1000/2000 ~unchanged at their pre-existing pow2-leaf-chain floor.)
     med(b) = median(b.times)
     ratio(n) = (x = randn(ComplexF64, n);
         pp = plan_pfft(ComplexF64, n); pf = FFTW.plan_fft!(copy(x); flags = FFTW.MEASURE);
         med(@benchmark $pf * y setup = (y = copy($x))) / med(@benchmark PureFFT.apply_unnormalized!($pp, z) setup = (z = copy($x))))
-    pass = (11, 17, 19, 23, 33, 35, 45, 55, 63, 65, 77, 91, 95, 129)   # clear the gate
-    floor_sizes = (7, 13, 25, 49, 125)                                  # FFTW tiny-codelet floor (tracked)
+    pass = (11, 17, 19, 23, 33, 35, 45, 55, 63, 65, 77, 91, 95, 129,    # clear the gate
+            25, 49, 125, 625)                                           # 5²/7² powers via B25/B49 codelets
+    floor_sizes = (7, 13, 250, 500, 1000, 2000)                         # FFTW codelet / radix-5-heavy floor (tracked)
     if Base.JLOptions().check_bounds == 0
         for n in pass; @test ratio(n) ≥ 0.96; end
         for n in floor_sizes; @test_broken ratio(n) ≥ 0.96; end
