@@ -9,14 +9,19 @@
 @inline _S8(b, i, v) = avx_store_complex8!(b, i, v)
 @inline _LP(b, i) = avx_load_partial2(b, i)        # 2-complex (Vec4) load, zero-padded to Vec8
 @inline _SP(b, i, v) = avx_store_partial2!(b, i, v) # store low 2 complex of a Vec8
+@inline _LP1(b, i) = avx_load_partial1(b, i)       # 1-complex load (v2=0 odd-M rem=1)
+@inline _SP1(b, i, v) = avx_store_partial1!(b, i, v)
+@inline _LP3(b, i) = avx_load_partial3(b, i)       # 3-complex load (v2=0 odd-M rem=3)
+@inline _SP3(b, i, v) = avx_store_partial3!(b, i, v)
 bf64_tw_w8(::Type{T}, fwd) where {T} = Vec{8, T}[avx_mixedradix_twiddle_chunk8(T, cs * 4, r, 64, fwd) for cs in 0:1 for r in 1:7]
 function mr_twiddles_w8(::Type{T}, R, M, n, fwd) where {T}
     tw = Vec{8, T}[avx_mixedradix_twiddle_chunk8(T, c * 4, y, n, fwd) for c in 0:(M ÷ 4 - 1) for y in 1:(R - 1)]
-    # v2=1 (2·odd) sizes leave rem = M mod 4 = 2 leftover columns per pass: append ONE extra twiddle chunk
-    # per harmonic covering columns [M-2, M-1] (lanes 0-3 valid; lanes 4-7 = unused cols M, M+1). No-op for
+    # Partial-column sizes leave rem = M mod 4 ∈ {1,2,3} leftover columns per pass (v2=1 ⇒ rem=2; v2=0 odd
+    # ⇒ rem∈{1,3}): append ONE extra twiddle chunk per harmonic covering columns [M-rem .. M-1]. No-op for
     # the ÷4-clean kernels (M%4==0) ⇒ byte-identical twiddle tables, no F64/green-size regression.
-    if M % 4 == 2
-        for y in 1:(R - 1); push!(tw, avx_mixedradix_twiddle_chunk8(T, M - 2, y, n, fwd)); end
+    rem = M % 4
+    if rem != 0
+        for y in 1:(R - 1); push!(tw, avx_mixedradix_twiddle_chunk8(T, M - rem, y, n, fwd)); end
     end
     tw
 end
@@ -60,11 +65,23 @@ end
     if M % 4 == 2; @inbounds begin; ib = o + (M-2); tc = (M ÷ 4) * 8   # rem=2 tail: 2 leftover columns (v2=1)
         r = avx_column_butterfly9(_LP(buf,ib), _LP(buf,ib+M), _LP(buf,ib+2M), _LP(buf,ib+3M), _LP(buf,ib+4M), _LP(buf,ib+5M), _LP(buf,ib+6M), _LP(buf,ib+7M), _LP(buf,ib+8M), tw1, tw2, tw3, bf3)
         _SP(buf, ib, r[1]); Base.Cartesian.@nexprs 8 j -> _SP(buf, ib + j*M, avx_mul_complex(tw[tc+j], r[j+1])); end; end
+    if M % 4 == 1; @inbounds begin; ib = o + (M-1); tc = (M ÷ 4) * 8   # rem=1 tail (v2=0 odd-M)
+        r = avx_column_butterfly9(_LP1(buf,ib), _LP1(buf,ib+M), _LP1(buf,ib+2M), _LP1(buf,ib+3M), _LP1(buf,ib+4M), _LP1(buf,ib+5M), _LP1(buf,ib+6M), _LP1(buf,ib+7M), _LP1(buf,ib+8M), tw1, tw2, tw3, bf3)
+        _SP1(buf, ib, r[1]); Base.Cartesian.@nexprs 8 j -> _SP1(buf, ib + j*M, avx_mul_complex(tw[tc+j], r[j+1])); end; end
+    if M % 4 == 3; @inbounds begin; ib = o + (M-3); tc = (M ÷ 4) * 8   # rem=3 tail (v2=0 odd-M)
+        r = avx_column_butterfly9(_LP3(buf,ib), _LP3(buf,ib+M), _LP3(buf,ib+2M), _LP3(buf,ib+3M), _LP3(buf,ib+4M), _LP3(buf,ib+5M), _LP3(buf,ib+6M), _LP3(buf,ib+7M), _LP3(buf,ib+8M), tw1, tw2, tw3, bf3)
+        _SP3(buf, ib, r[1]); Base.Cartesian.@nexprs 8 j -> _SP3(buf, ib + j*M, avx_mul_complex(tw[tc+j], r[j+1])); end; end
 end
 @inline function _trans9_w8!(out, oo, buf, o, ::Val{M}) where {M}
     @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c; ob = oo + 36c
         t = avx_transpose9_packed(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), _L8(buf,ib+3M), _L8(buf,ib+4M), _L8(buf,ib+5M), _L8(buf,ib+6M), _L8(buf,ib+7M), _L8(buf,ib+8M))
         Base.Cartesian.@nexprs 9 k -> _S8(out, ob + 4(k-1), t[k]); end
+    if M % 4 == 1; @inbounds begin; ib = o + (M-1); ob = oo + (M-1)*9   # R=9 valid: 2 full Vec8 + 1 Vec1
+        t = avx_transpose9_packed(_LP1(buf,ib), _LP1(buf,ib+M), _LP1(buf,ib+2M), _LP1(buf,ib+3M), _LP1(buf,ib+4M), _LP1(buf,ib+5M), _LP1(buf,ib+6M), _LP1(buf,ib+7M), _LP1(buf,ib+8M))
+        _S8(out, ob, t[1]); _S8(out, ob+4, t[2]); _SP1(out, ob+8, t[3]); end; end
+    if M % 4 == 3; @inbounds begin; ib = o + (M-3); ob = oo + (M-3)*9   # 3R=27 valid: 6 full Vec8 + 1 Vec3
+        t = avx_transpose9_packed(_LP3(buf,ib), _LP3(buf,ib+M), _LP3(buf,ib+2M), _LP3(buf,ib+3M), _LP3(buf,ib+4M), _LP3(buf,ib+5M), _LP3(buf,ib+6M), _LP3(buf,ib+7M), _LP3(buf,ib+8M))
+        _S8(out, ob, t[1]); _S8(out, ob+4, t[2]); _S8(out, ob+8, t[3]); _S8(out, ob+12, t[4]); _S8(out, ob+16, t[5]); _S8(out, ob+20, t[6]); _SP3(out, ob+24, t[7]); end; end
     if M % 4 == 2; @inbounds begin; ib = o + (M-2); ob = oo + (M-2)*9   # 2R=18 valid complex: 4 full Vec8 + 1 Vec4
         t = avx_transpose9_packed(_LP(buf,ib), _LP(buf,ib+M), _LP(buf,ib+2M), _LP(buf,ib+3M), _LP(buf,ib+4M), _LP(buf,ib+5M), _LP(buf,ib+6M), _LP(buf,ib+7M), _LP(buf,ib+8M))
         _S8(out, ob, t[1]); _S8(out, ob+4, t[2]); _S8(out, ob+8, t[3]); _S8(out, ob+12, t[4]); _SP(out, ob+16, t[5]); end; end
@@ -76,6 +93,12 @@ end
     if M % 4 == 2; @inbounds begin; ib = o + (M-2); tc = (M ÷ 4) * 4   # rem=2 tail: 2 leftover columns (v2=1)
         r = avx_column_butterfly5(_LP(buf,ib), _LP(buf,ib+M), _LP(buf,ib+2M), _LP(buf,ib+3M), _LP(buf,ib+4M), t0, t1)
         _SP(buf, ib, r[1]); Base.Cartesian.@nexprs 4 j -> _SP(buf, ib + j*M, avx_mul_complex(tw[tc+j], r[j+1])); end; end
+    if M % 4 == 1; @inbounds begin; ib = o + (M-1); tc = (M ÷ 4) * 4   # rem=1 tail (v2=0 odd-M)
+        r = avx_column_butterfly5(_LP1(buf,ib), _LP1(buf,ib+M), _LP1(buf,ib+2M), _LP1(buf,ib+3M), _LP1(buf,ib+4M), t0, t1)
+        _SP1(buf, ib, r[1]); Base.Cartesian.@nexprs 4 j -> _SP1(buf, ib + j*M, avx_mul_complex(tw[tc+j], r[j+1])); end; end
+    if M % 4 == 3; @inbounds begin; ib = o + (M-3); tc = (M ÷ 4) * 4   # rem=3 tail (v2=0 odd-M)
+        r = avx_column_butterfly5(_LP3(buf,ib), _LP3(buf,ib+M), _LP3(buf,ib+2M), _LP3(buf,ib+3M), _LP3(buf,ib+4M), t0, t1)
+        _SP3(buf, ib, r[1]); Base.Cartesian.@nexprs 4 j -> _SP3(buf, ib + j*M, avx_mul_complex(tw[tc+j], r[j+1])); end; end
 end
 @inline function _trans5_w8!(out, oo, buf, o, ::Val{M}) where {M}
     @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c; ob = oo + 20c
@@ -84,6 +107,12 @@ end
     if M % 4 == 2; @inbounds begin; ib = o + (M-2); ob = oo + (M-2)*5   # 2R=10 valid complex: 2 full Vec8 + 1 Vec4
         t = avx_transpose5_packed(_LP(buf,ib), _LP(buf,ib+M), _LP(buf,ib+2M), _LP(buf,ib+3M), _LP(buf,ib+4M))
         _S8(out, ob, t[1]); _S8(out, ob+4, t[2]); _SP(out, ob+8, t[3]); end; end
+    if M % 4 == 1; @inbounds begin; ib = o + (M-1); ob = oo + (M-1)*5   # R=5 valid: 1 full Vec8 + 1 Vec1
+        t = avx_transpose5_packed(_LP1(buf,ib), _LP1(buf,ib+M), _LP1(buf,ib+2M), _LP1(buf,ib+3M), _LP1(buf,ib+4M))
+        _S8(out, ob, t[1]); _SP1(out, ob+4, t[2]); end; end
+    if M % 4 == 3; @inbounds begin; ib = o + (M-3); ob = oo + (M-3)*5   # 3R=15 valid: 3 full Vec8 + 1 Vec3
+        t = avx_transpose5_packed(_LP3(buf,ib), _LP3(buf,ib+M), _LP3(buf,ib+2M), _LP3(buf,ib+3M), _LP3(buf,ib+4M))
+        _S8(out, ob, t[1]); _S8(out, ob+4, t[2]); _S8(out, ob+8, t[3]); _SP3(out, ob+12, t[4]); end; end
 end
 # radix-7 (the lone factor of 7: 2^k·7 sizes 112/224/448, base ÷4 so M stays ÷4 — no partial column),
 # PLUS the v2=1 rem=2 tail so 2·7^k sizes (98=2·7², …) route here (DST-I n=48 wraps inner 98).
@@ -94,6 +123,12 @@ end
     if M % 4 == 2; @inbounds begin; ib = o + (M-2); tc = (M ÷ 4) * 6   # rem=2 tail: 2 leftover columns (v2=1)
         r = avx_column_butterfly7(_LP(buf,ib), _LP(buf,ib+M), _LP(buf,ib+2M), _LP(buf,ib+3M), _LP(buf,ib+4M), _LP(buf,ib+5M), _LP(buf,ib+6M), t0, t1, t2)
         _SP(buf, ib, r[1]); Base.Cartesian.@nexprs 6 j -> _SP(buf, ib + j*M, avx_mul_complex(tw[tc+j], r[j+1])); end; end
+    if M % 4 == 1; @inbounds begin; ib = o + (M-1); tc = (M ÷ 4) * 6   # rem=1 tail: 1 leftover column (v2=0 odd-M)
+        r = avx_column_butterfly7(_LP1(buf,ib), _LP1(buf,ib+M), _LP1(buf,ib+2M), _LP1(buf,ib+3M), _LP1(buf,ib+4M), _LP1(buf,ib+5M), _LP1(buf,ib+6M), t0, t1, t2)
+        _SP1(buf, ib, r[1]); Base.Cartesian.@nexprs 6 j -> _SP1(buf, ib + j*M, avx_mul_complex(tw[tc+j], r[j+1])); end; end
+    if M % 4 == 3; @inbounds begin; ib = o + (M-3); tc = (M ÷ 4) * 6   # rem=3 tail: 3 leftover columns (v2=0 odd-M)
+        r = avx_column_butterfly7(_LP3(buf,ib), _LP3(buf,ib+M), _LP3(buf,ib+2M), _LP3(buf,ib+3M), _LP3(buf,ib+4M), _LP3(buf,ib+5M), _LP3(buf,ib+6M), t0, t1, t2)
+        _SP3(buf, ib, r[1]); Base.Cartesian.@nexprs 6 j -> _SP3(buf, ib + j*M, avx_mul_complex(tw[tc+j], r[j+1])); end; end
 end
 @inline function _trans7_w8!(out, oo, buf, o, ::Val{M}) where {M}
     @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c; ob = oo + 28c
@@ -102,6 +137,12 @@ end
     if M % 4 == 2; @inbounds begin; ib = o + (M-2); ob = oo + (M-2)*7   # 2R=14 valid complex: 3 full Vec8 + 1 Vec4
         t = avx_transpose7_packed(_LP(buf,ib), _LP(buf,ib+M), _LP(buf,ib+2M), _LP(buf,ib+3M), _LP(buf,ib+4M), _LP(buf,ib+5M), _LP(buf,ib+6M))
         _S8(out, ob, t[1]); _S8(out, ob+4, t[2]); _S8(out, ob+8, t[3]); _SP(out, ob+12, t[4]); end; end
+    if M % 4 == 1; @inbounds begin; ib = o + (M-1); ob = oo + (M-1)*7   # R=7 valid complex: 1 full Vec8 + 1 Vec(3)
+        t = avx_transpose7_packed(_LP1(buf,ib), _LP1(buf,ib+M), _LP1(buf,ib+2M), _LP1(buf,ib+3M), _LP1(buf,ib+4M), _LP1(buf,ib+5M), _LP1(buf,ib+6M))
+        _S8(out, ob, t[1]); _SP3(out, ob+4, t[2]); end; end
+    if M % 4 == 3; @inbounds begin; ib = o + (M-3); ob = oo + (M-3)*7   # 3R=21 valid complex: 5 full Vec8 + 1 Vec(1)
+        t = avx_transpose7_packed(_LP3(buf,ib), _LP3(buf,ib+M), _LP3(buf,ib+2M), _LP3(buf,ib+3M), _LP3(buf,ib+4M), _LP3(buf,ib+5M), _LP3(buf,ib+6M))
+        _S8(out, ob, t[1]); _S8(out, ob+4, t[2]); _S8(out, ob+8, t[3]); _S8(out, ob+12, t[4]); _S8(out, ob+16, t[5]); _SP1(out, ob+20, t[6]); end; end
 end
 # radix-4 (covers the leftover 2s that radix-8/12 can't, so the W=8 tree spans ALL pow2 — needed for the
 # F32 pow2 path, where the W4 monolith is unavailable). 3 twiddles/column; transpose4 = one 4×4 reg block.
@@ -124,6 +165,12 @@ end
     if M % 4 == 2; @inbounds begin; ib = o + (M-2); tc = (M ÷ 4) * 2   # rem=2 tail: 2 leftover columns (v2=1)
         r = avx_column_butterfly3(_LP(buf,ib), _LP(buf,ib+M), _LP(buf,ib+2M), bf3)
         _SP(buf, ib, r[1]); Base.Cartesian.@nexprs 2 j -> _SP(buf, ib + j*M, avx_mul_complex(tw[tc+j], r[j+1])); end; end
+    if M % 4 == 1; @inbounds begin; ib = o + (M-1); tc = (M ÷ 4) * 2   # rem=1 tail (v2=0 odd-M)
+        r = avx_column_butterfly3(_LP1(buf,ib), _LP1(buf,ib+M), _LP1(buf,ib+2M), bf3)
+        _SP1(buf, ib, r[1]); Base.Cartesian.@nexprs 2 j -> _SP1(buf, ib + j*M, avx_mul_complex(tw[tc+j], r[j+1])); end; end
+    if M % 4 == 3; @inbounds begin; ib = o + (M-3); tc = (M ÷ 4) * 2   # rem=3 tail (v2=0 odd-M)
+        r = avx_column_butterfly3(_LP3(buf,ib), _LP3(buf,ib+M), _LP3(buf,ib+2M), bf3)
+        _SP3(buf, ib, r[1]); Base.Cartesian.@nexprs 2 j -> _SP3(buf, ib + j*M, avx_mul_complex(tw[tc+j], r[j+1])); end; end
 end
 @inline function _trans3_w8!(out, oo, buf, o, ::Val{M}) where {M}
     @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c; ob = oo + 12c
@@ -132,6 +179,12 @@ end
     if M % 4 == 2; @inbounds begin; ib = o + (M-2); ob = oo + (M-2)*3   # 2R=6 valid complex: 1 full Vec8 + 1 Vec4
         t = avx_transpose3_packed(_LP(buf,ib), _LP(buf,ib+M), _LP(buf,ib+2M))
         _S8(out, ob, t[1]); _SP(out, ob+4, t[2]); end; end
+    if M % 4 == 1; @inbounds begin; ib = o + (M-1); ob = oo + (M-1)*3   # R=3 valid: 1 Vec3
+        t = avx_transpose3_packed(_LP1(buf,ib), _LP1(buf,ib+M), _LP1(buf,ib+2M))
+        _SP3(out, ob, t[1]); end; end
+    if M % 4 == 3; @inbounds begin; ib = o + (M-3); ob = oo + (M-3)*3   # 3R=9 valid: 2 full Vec8 + 1 Vec1
+        t = avx_transpose3_packed(_LP3(buf,ib), _LP3(buf,ib+M), _LP3(buf,ib+2M))
+        _S8(out, ob, t[1]); _S8(out, ob+4, t[2]); _SP1(out, ob+8, t[3]); end; end
 end
 
 # ---- W=8 kernel types (reuse Kernel/RPlan/applyplan! + the proc_ip!/proc_oop! alternation) ----
@@ -143,6 +196,17 @@ B64W8(fwd::Bool) = B64W8(Float64, fwd)
 B64W8(::Type{T}, fwd::Bool) where {T} = B64W8{T}(64, bf64_tw_w8(T, fwd), fwd ? _rot90_fwd8(T) : _rot90_inv8(T))
 @inline proc_ip!(k::B64W8, buf, scr) = (@inbounds for f in 0:(length(buf) ÷ 64 - 1); butterfly64_w8!(buf, buf, scr, 64f, k.tw, k.rot); end)
 @inline proc_oop!(k::B64W8, out, inp, scr) = (@inbounds for f in 0:(length(inp) ÷ 64 - 1); butterfly64_w8!(out, inp, out, 64f, k.tw, k.rot); end)
+
+# Butterfly1 at W8 — identity leaf (size-1 DFT = no-op). The base for v2=0 odd prime-power sizes: a size-P
+# prime DFT is built as MR{P}W8 with M=1 (the rem=1 partial-column tail does the single P-point butterfly),
+# so 49=7²=MR7(MR7(B1)), 9=MR9(B1), 25=MR5(MR5(B1)), etc. — no strided-gather leaf needed.
+struct B1W8{T} <: Kernel
+    n::Int
+end
+keltype(::B1W8{T}) where {T} = T
+B1W8(::Type{T}, fwd::Bool) where {T} = B1W8{T}(1)
+@inline proc_ip!(k::B1W8, buf, scr) = nothing
+@inline proc_oop!(k::B1W8, out, inp, scr) = (out === inp || copyto!(out, inp); nothing)
 
 # Butterfly2 at W8 — the v2=1 (2·odd) base: a size-2 DFT [a,b] → [a+b, a-b] (no twiddles, fwd≡inv). Packs
 # 2 instances (4 complex) per Vec{8}; one leftover instance (count = n/2 = odd for 2·odd sizes) handled by a
@@ -524,12 +588,24 @@ end
 # 3) + radix-5. Unlocks 2^k·{3,5,3·5} F32 non-pow2 sizes (48/80/96/160/192/240/384/480/720…). Purely
 # additive (only reached when the main solver returns nothing), so it can't change any existing W=8 tree.
 function _plan_tree_w8_small(::Type{T}, n::Int, fwd::Bool) where {T}
-    iseven(n) || return nothing
+    n >= 1 || return nothing
     v2 = 0; t = n; while t % 2 == 0; t ÷= 2; v2 += 1; end
     v3 = 0; while t % 3 == 0; t ÷= 3; v3 += 1; end
     v5 = 0; while t % 5 == 0; t ÷= 5; v5 += 1; end
     v7 = 0; while t % 7 == 0; t ÷= 7; v7 += 1; end
     t == 1 || return nothing                                # not 2·3·5·7-smooth
+    if v2 == 0                                              # pure odd: padding-trick (B1 base, M=1 ⇒ rem∈{1,3})
+        # Odd {3,5,7}-smooth via the B1 identity leaf + odd-M rem∈{1,3} tails on MR9/MR3/MR5/MR7 — every
+        # inner length is odd ⇒ rem ∈ {1,3} at every pass. Clears the odd prime-powers (9/25/49/27/45/63/
+        # 75/81/343…) and the keystone 49=7² (= rfft-98 inner → r2r DST-I n=48). n=1 unsupported here.
+        n == 1 && return nothing
+        k0::Kernel = B1W8(T, fwd)
+        for _ in 1:(v3 ÷ 2); k0 = MR9W8(k0, fwd); end       # radix-9 (pairs of 3), then lone 3, then 5/7 —
+        isodd(v3) && (k0 = MR3W8(k0, fwd))                  # same innermost→outermost order as the v2=1 path
+        for _ in 1:v5; k0 = MR5W8(k0, fwd); end             # (measured faster than pushing the lone 3 outermost)
+        for _ in 1:v7; k0 = MR7W8(k0, fwd); end
+        return RPlan(k0)
+    end
     if v2 == 1                                              # 2·odd: rem = M mod 4 = 2 uniformly (partial cols)
         k1::Kernel = B2W8(T, fwd)                           # B2 base (the lone factor of 2)
         for _ in 1:(v3 ÷ 2); k1 = MR9W8(k1, fwd); end       # radix-9 per pair of 3s (preferred; fewer passes)

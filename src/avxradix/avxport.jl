@@ -561,6 +561,28 @@ end
 @inline function avx_store_partial2!(x::AbstractVector{Complex{Float32}}, i::Int, v::V8f32)
     GC.@preserve x vstore(shufflevector(v, Val((0, 1, 2, 3))), reinterpret(Ptr{Float32}, pointer(x)) + i * 8)
 end
+# Partial 1-complex (Vec{2,Float32}=8 bytes) and 3-complex (Vec4+Vec2) load/store for the v2=0 odd-M
+# partial-column path (rem = M mod 4 ∈ {1,3}). Same zero-padded-to-Vec8 / partial-store idiom as partial2;
+# load reads EXACTLY rem complex (no overread past the buffer end).
+@inline function avx_load_partial1(x::AbstractVector{Complex{Float32}}, i::Int)
+    v2 = GC.@preserve x vload(Vec{2, Float32}, reinterpret(Ptr{Float32}, pointer(x)) + i * 8)
+    shufflevector(v2, zero(v2), Val((0, 1, 2, 3, 2, 3, 2, 3)))   # [c0, 0, 0, 0]
+end
+@inline function avx_store_partial1!(x::AbstractVector{Complex{Float32}}, i::Int, v::V8f32)
+    GC.@preserve x vstore(shufflevector(v, Val((0, 1))), reinterpret(Ptr{Float32}, pointer(x)) + i * 8)
+end
+@inline function avx_load_partial3(x::AbstractVector{Complex{Float32}}, i::Int)
+    p = reinterpret(Ptr{Float32}, pointer(x))
+    lo = GC.@preserve x vload(Vec{4, Float32}, p + i * 8)          # cplx 0,1
+    hi = GC.@preserve x vload(Vec{2, Float32}, p + (i + 2) * 8)    # cplx 2
+    hi4 = shufflevector(hi, zero(hi), Val((0, 1, 2, 3)))           # [c2, 0]
+    shufflevector(lo, hi4, Val((0, 1, 2, 3, 4, 5, 6, 7)))         # [c0, c1, c2, 0]
+end
+@inline function avx_store_partial3!(x::AbstractVector{Complex{Float32}}, i::Int, v::V8f32)
+    p = reinterpret(Ptr{Float32}, pointer(x))
+    GC.@preserve x vstore(shufflevector(v, Val((0, 1, 2, 3))), p + i * 8)          # cplx 0,1
+    GC.@preserve x vstore(shufflevector(v, Val((4, 5))), p + (i + 2) * 8)          # cplx 2
+end
 
 # ============================================================================================
 # Float32 8-complex path: V16f32 = Vec{16,Float32} = one 512-bit (zmm) register = 8 interleaved
