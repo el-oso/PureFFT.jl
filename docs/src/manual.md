@@ -128,7 +128,7 @@ What FFTW offers that PureFFT does **not** (yet). None of these block the common
 | **Split-complex arrays** (`fftw_plan_guru_split_dft`) | ✗ | Interleaved `Complex` only (some kernels are SoA internally, not exposed). |
 | **r2r `R2HC` / `HC2R`** (half-complex) | ✗ | Use `rfft`/`irfft` (r2c/c2r) for real FFTs; the in-place half-complex format isn't provided. |
 | **r2r `DHT`** (discrete Hartley) | ✗ | Not implemented. |
-| **Multi-threading** | ✗ | Single-threaded (the top remaining ROADMAP item). |
+| **Multi-threading** | ✗ | Single-threaded (a planned ROADMAP item, deferred below the flagship codelet-generator research). |
 | **Distributed memory (MPI)** | ✗ | Out of scope. |
 | **`long double` / `__float128` precision** | ✗ | `Float64` and `Float32` only. |
 | **C / Fortran callable** | n/a | Julia-native; call from Julia or via `AbstractFFTs`. |

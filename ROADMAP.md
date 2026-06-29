@@ -189,7 +189,9 @@ against FFTW's original target. **Scope it deliberately** (its own brainstorm/sp
   - Spec: `docs/superpowers/specs/2026-06-27-ndim-fft-design.md`; bench: `bench/run_compare_ndim.jl` +
     `bench/run_compare_rndim.jl`.
 - **Multi-threading** — single-thread only (deliberate for the kernel investigation; a real library wants
-  threads).
+  threads). **DEFERRED below the ⭐ flagship codelet generator** (user priority): MT is catch-up
+  (FFTW/Rust already have it; mechanical), whereas the codelet generator is the Julia-unique
+  differentiator. Pick MT up after the generator, or when a concrete large-transform workload demands it.
 - **`autoplan` returns a 7-member `Union`, not a concrete type** — runtime kernel selection (the
   plan-constructor exception to "concrete returns"; one dispatch per `apply`, amortized over the transform).
   The pow2 `AutoPlan{T, typeof(best)}` wrapper widens its `T`, putting a bare `AutoPlan` in the union —
