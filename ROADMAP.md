@@ -24,6 +24,33 @@ Status + planned work. This is the canonical, checked-in roadmap (human- and age
 
 ## Open / planned
 
+### ⭐ MUST DO — flagship research: a Julia-native codelet generator (the "genfft analogue")
+
+**The single highest-leverage direction for PureFFT, and one only Julia can take.** FFTW's `genfft` is an
+OCaml program that generates C codelets **at FFTW build time**; RustFFT generates **at compile time**.
+Neither can synthesise a new specialised kernel for a size it didn't anticipate — they fall back to general
+routines. **Julia can, via `@generated` (and runtime codegen): specialise per size *on first use*.** PureFFT
+already exploits a limited form (the `@generated` codelets); this item is to build the full analogue:
+
+> symbolic DFT → operation **DAG** → algebraic simplify + **CSE** (incl. genfft's DAG-transposition trick) →
+> **register-pressure-minimising schedule** → emit a Julia `Expr` — generating an optimally-scheduled
+> straight-line codelet for **any** size on first use, ideally **batch-vectorised** (`vrank`-style, SIMD
+> across the sub-transform batch — see the batch-vectorisation item under "Non-pow2" below).
+
+**Why it's valuable:** (1) arbitrary-size codelet coverage — primes / prime-powers / awkward sizes get a real
+codelet instead of a Bluestein/recursive fallback (the strongest, clearest Julia-only win); (2) symbolic
+CSE/simplification can cut flops below a naive radix tree; (3) FFT-specific scheduling that a general compiler
+may not match. **Combined with batch-vectorisation, this is the path to beating FFTW broadly on small
+non-pow2.**
+
+**Honest caveats (go in eyes-open — these are measured, not guessed):** it is **breadth** more than a fix for
+the parity floors we've already hit — the 2^a·5³ floor is *shuffle/vectorisation-axis-bound*, not
+codelet-scheduling-bound, so a scalar-DAG generator alone won't close it (you need the batch axis too); and
+the `julia-sched-mwe/` reproducer found **LLVM already schedules our radix-9/12 DAGs as well as Rust** — so
+genfft's classic "schedules better than the 1990s C compiler" edge is *narrower* against modern LLVM than
+against FFTW's original target. **Scope it deliberately** (its own brainstorm/spec) before building.
+
+
 ### AVX-512 (W=8) — extend the win beyond small compute-bound sizes
 - **Large-size regression — RESOLVED (it was a codegen bug, not memory bandwidth).** The W=8 store loops
   used runtime tuple indexing (`for k in 1:N; t[k]`), a CLAUDE.md rule-#1 violation that boxed/slowed the
