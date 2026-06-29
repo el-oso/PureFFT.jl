@@ -635,6 +635,18 @@ end
      shufflevector(a[2], a[3], Val((2, 3, 4, 5, 8, 9, 10, 11))),
      shufflevector(a[3], a[4], Val((4, 5, 8, 9, 10, 11, 12, 13))))
 end
+# transpose7 at W=8 (7×4 → 4×7): two transpose4 blocks (rows 0-3, rows 4-6+zero) compacted to 7 vectors
+# (out[c·7+r] = in[r,c]), same bridging-shuffle scheme as transpose5/9. Verified bit-exact vs the V4f path.
+@inline function avx_transpose7_packed(v0::Vec{8}, v1::Vec{8}, v2::Vec{8}, v3::Vec{8}, v4::Vec{8}, v5::Vec{8}, v6::Vec{8})
+    a = avx_transpose4_packed(v0, v1, v2, v3); b = avx_transpose4_packed(v4, v5, v6, zero(v0))
+    (a[1],
+     shufflevector(b[1], a[2], Val((0, 1, 2, 3, 4, 5, 8, 9))),
+     shufflevector(a[2], b[2], Val((2, 3, 4, 5, 6, 7, 8, 9))),
+     shufflevector(b[2], a[3], Val((2, 3, 4, 5, 8, 9, 10, 11))),
+     shufflevector(a[3], b[3], Val((4, 5, 6, 7, 8, 9, 10, 11))),
+     shufflevector(b[3], a[4], Val((4, 5, 8, 9, 10, 11, 12, 13))),
+     shufflevector(a[4], b[4], Val((6, 7, 8, 9, 10, 11, 12, 13))))
+end
 # transpose5 at W=8 (5×4 → 4×5): one transpose4 (rows 0-3) + row 4 + bridging shuffles. Verified bit-exact.
 @inline function avx_transpose5_packed(v0::Vec{8}, v1::Vec{8}, v2::Vec{8}, v3::Vec{8}, v4::Vec{8})
     a = avx_transpose4_packed(v0, v1, v2, v3)

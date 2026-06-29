@@ -62,6 +62,17 @@ end
         t = avx_transpose5_packed(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), _L8(buf,ib+3M), _L8(buf,ib+4M))
         Base.Cartesian.@nexprs 5 k -> _S8(out, ob + 4(k-1), t[k]); end
 end
+# radix-7 (the lone factor of 7: 2^k·7 sizes 112/224/448, base ÷4 so M stays ÷4 — no partial column).
+@inline function _colbf7_w8!(buf, o, ::Val{M}, tw, t0, t1, t2) where {M}
+    @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c
+        r = avx_column_butterfly7(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), _L8(buf,ib+3M), _L8(buf,ib+4M), _L8(buf,ib+5M), _L8(buf,ib+6M), t0, t1, t2)
+        _S8(buf, ib, r[1]); Base.Cartesian.@nexprs 6 j -> _S8(buf, ib + j*M, avx_mul_complex(tw[c*6+j], r[j+1])); end
+end
+@inline function _trans7_w8!(out, oo, buf, o, ::Val{M}) where {M}
+    @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c; ob = oo + 28c
+        t = avx_transpose7_packed(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), _L8(buf,ib+3M), _L8(buf,ib+4M), _L8(buf,ib+5M), _L8(buf,ib+6M))
+        Base.Cartesian.@nexprs 7 k -> _S8(out, ob + 4(k-1), t[k]); end
+end
 # radix-4 (covers the leftover 2s that radix-8/12 can't, so the W=8 tree spans ALL pow2 — needed for the
 # F32 pow2 path, where the W4 monolith is unavailable). 3 twiddles/column; transpose4 = one 4×4 reg block.
 @inline function _colbf4_w8!(buf, o, ::Val{M}, tw, rot) where {M}
@@ -321,6 +332,25 @@ end
     @inbounds for f in 0:(cnt-1); _trans5_w8!(out, f*n, inp, f*n, Val(M)); end
 end
 
+struct MR7W8{M, I <: Kernel, T} <: Kernel
+    inner::I; tw::Vector{Vec{8, T}}; t0::Vec{8, T}; t1::Vec{8, T}; t2::Vec{8, T}
+end
+klen(::MR7W8{M}) where {M} = 7M
+keltype(::MR7W8{M, I, T}) where {M, I, T} = T
+MR7W8(inner::Kernel, fwd::Bool) = (T = keltype(inner); M = klen(inner); MR7W8{M, typeof(inner), T}(inner, mr_twiddles_w8(T, 7, M, 7M, fwd), avx_broadcast_twiddle8(T, 1, 7, fwd), avx_broadcast_twiddle8(T, 2, 7, fwd), avx_broadcast_twiddle8(T, 3, 7, fwd)))
+@inline function proc_ip!(k::MR7W8{M}, buf, scr) where {M}
+    n = 7M; cnt = length(buf) ÷ n
+    @inbounds for f in 0:(cnt-1); _colbf7_w8!(buf, f*n, Val(M), k.tw, k.t0, k.t1, k.t2); end
+    proc_oop!(k.inner, scr, buf, scr)
+    @inbounds for f in 0:(cnt-1); _trans7_w8!(buf, f*n, scr, f*n, Val(M)); end
+end
+@inline function proc_oop!(k::MR7W8{M}, out, inp, scr) where {M}
+    n = 7M; cnt = length(inp) ÷ n
+    @inbounds for f in 0:(cnt-1); _colbf7_w8!(inp, f*n, Val(M), k.tw, k.t0, k.t1, k.t2); end
+    proc_ip!(k.inner, inp, scr)
+    @inbounds for f in 0:(cnt-1); _trans7_w8!(out, f*n, inp, f*n, Val(M)); end
+end
+
 # W=8-clean tree for n = 2^(6+3a+2b)·3^b·5^v5 = Butterfly64 · radix-8^a · radix-12^b · radix-9^b9 · radix-5^v5
 # (every len_per_row divisible by CPV=4). Returns nothing for any other size.
 function _plan_tree_w8_main(::Type{T}, n::Int, fwd::Bool = true) where {T}
@@ -402,7 +432,8 @@ function _plan_tree_w8_small(::Type{T}, n::Int, fwd::Bool) where {T}
     v2 = 0; t = n; while t % 2 == 0; t ÷= 2; v2 += 1; end
     v3 = 0; while t % 3 == 0; t ÷= 3; v3 += 1; end
     v5 = 0; while t % 5 == 0; t ÷= 5; v5 += 1; end
-    t == 1 || return nothing                                # not 2·3·5-smooth
+    v7 = 0; while t % 7 == 0; t ÷= 7; v7 += 1; end
+    (t == 1 && v7 <= 1) || return nothing                   # not 2·3·5·(≤1)·7-smooth
     v2 >= 4 || return nothing                               # need a ÷4-clean base ≥ B16W8 (no B8W8 yet)
     base = _pow2_kernel_w8(T, v2, fwd)
     isnothing(base) && return nothing
@@ -410,6 +441,7 @@ function _plan_tree_w8_small(::Type{T}, n::Int, fwd::Bool) where {T}
     for _ in 1:(v3 ÷ 2); k = MR9W8(k, fwd); end
     isodd(v3) && (k = MR3W8(k, fwd))
     for _ in 1:v5; k = MR5W8(k, fwd); end
+    v7 == 1 && (k = MR7W8(k, fwd))
     return RPlan(k)
 end
 
