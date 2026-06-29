@@ -626,6 +626,15 @@ end
      shufflevector(a[4], b[4], Val((2, 3, 4, 5, 6, 7, 8, 9))),
      shufflevector(b[4], v8, Val((2, 3, 4, 5, 6, 7, 14, 15))))
 end
+# transpose3 at W=8 (3×4 → 4×3): pad to a 4×4 register transpose with a zero 4th row, then compact the 4
+# transposed columns (each [r0,r1,r2,junk]) into 3 contiguous 4-complex vectors (out[c·3+r] = in[r,c]).
+# Verified bit-exact vs the V4f path / FFTW.
+@inline function avx_transpose3_packed(v0::Vec{8}, v1::Vec{8}, v2::Vec{8})
+    a = avx_transpose4_packed(v0, v1, v2, zero(v0))
+    (shufflevector(a[1], a[2], Val((0, 1, 2, 3, 4, 5, 8, 9))),
+     shufflevector(a[2], a[3], Val((2, 3, 4, 5, 8, 9, 10, 11))),
+     shufflevector(a[3], a[4], Val((4, 5, 8, 9, 10, 11, 12, 13))))
+end
 # transpose5 at W=8 (5×4 → 4×5): one transpose4 (rows 0-3) + row 4 + bridging shuffles. Verified bit-exact.
 @inline function avx_transpose5_packed(v0::Vec{8}, v1::Vec{8}, v2::Vec{8}, v3::Vec{8}, v4::Vec{8})
     a = avx_transpose4_packed(v0, v1, v2, v3)

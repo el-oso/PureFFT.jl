@@ -74,6 +74,18 @@ end
         t = avx_transpose4_packed(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), _L8(buf,ib+3M))
         Base.Cartesian.@nexprs 4 k -> _S8(out, ob + 4(k-1), t[k]); end
 end
+# radix-3 (the lone factor of 3 that radix-9/12 can't consume: 2^k·3 sizes — 48/96/192/384). bf3 twiddle;
+# transpose3 = a 4×4 register transpose (zero-padded) compacted to 3 vectors. 2 twiddles/column.
+@inline function _colbf3_w8!(buf, o, ::Val{M}, tw, bf3) where {M}
+    @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c
+        r = avx_column_butterfly3(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), bf3)
+        _S8(buf, ib, r[1]); Base.Cartesian.@nexprs 2 j -> _S8(buf, ib + j*M, avx_mul_complex(tw[c*2+j], r[j+1])); end
+end
+@inline function _trans3_w8!(out, oo, buf, o, ::Val{M}) where {M}
+    @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c; ob = oo + 12c
+        t = avx_transpose3_packed(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M))
+        Base.Cartesian.@nexprs 3 k -> _S8(out, ob + 4(k-1), t[k]); end
+end
 
 # ---- W=8 kernel types (reuse Kernel/RPlan/applyplan! + the proc_ip!/proc_oop! alternation) ----
 struct B64W8{T} <: Kernel
@@ -84,6 +96,52 @@ B64W8(fwd::Bool) = B64W8(Float64, fwd)
 B64W8(::Type{T}, fwd::Bool) where {T} = B64W8{T}(64, bf64_tw_w8(T, fwd), fwd ? _rot90_fwd8(T) : _rot90_inv8(T))
 @inline proc_ip!(k::B64W8, buf, scr) = (@inbounds for f in 0:(length(buf) ÷ 64 - 1); butterfly64_w8!(buf, buf, scr, 64f, k.tw, k.rot); end)
 @inline proc_oop!(k::B64W8, out, inp, scr) = (@inbounds for f in 0:(length(inp) ÷ 64 - 1); butterfly64_w8!(out, inp, out, 64f, k.tw, k.rot); end)
+
+# Butterfly16 at W8 (4×4, register-only — 16 complex = 4 V8 vectors, 1 columnset; the 4 cols pack into a
+# vector). phase1: col bf4 + twiddle + transpose4; phase2: col bf4 across. Verified bit-exact vs FFTW.
+bf16_tw_w8(::Type{T}, fwd) where {T} = ntuple(r -> avx_mixedradix_twiddle_chunk8(T, 0, r, 16, fwd), 3)
+function butterfly16_w8!(out, inp, base::Int, tw, rot)
+    @inbounds begin
+        m = avx_column_butterfly4(_L8(inp, base), _L8(inp, base+4), _L8(inp, base+8), _L8(inp, base+12), rot)
+        t = avx_transpose4_packed(m[1], avx_mul_complex(tw[1], m[2]), avx_mul_complex(tw[2], m[3]), avx_mul_complex(tw[3], m[4]))
+        o = avx_column_butterfly4(t[1], t[2], t[3], t[4], rot)
+        _S8(out, base, o[1]); _S8(out, base+4, o[2]); _S8(out, base+8, o[3]); _S8(out, base+12, o[4])
+    end
+end
+struct B16W8{T} <: Kernel
+    n::Int; tw::NTuple{3, Vec{8, T}}; rot::Vec{8, T}
+end
+keltype(::B16W8{T}) where {T} = T
+B16W8(fwd::Bool) = B16W8(Float64, fwd)
+B16W8(::Type{T}, fwd::Bool) where {T} = B16W8{T}(16, bf16_tw_w8(T, fwd), fwd ? _rot90_fwd8(T) : _rot90_inv8(T))
+@inline proc_ip!(k::B16W8, buf, scr) = (@inbounds for f in 0:(length(buf) ÷ 16 - 1); butterfly16_w8!(buf, buf, 16f, k.tw, k.rot); end)
+@inline proc_oop!(k::B16W8, out, inp, scr) = (@inbounds for f in 0:(length(inp) ÷ 16 - 1); butterfly16_w8!(out, inp, 16f, k.tw, k.rot); end)
+
+# Butterfly32 at W8 (4×8 two-phase; needs scratch ≥ length). 32 complex = 8 V8 vectors. phase1: 2
+# columnsets — col bf4 (4 rows, stride 8) + twiddle + transpose4 → scr; phase2: 1 columnset — col bf8
+# across 8 rows (stride 4) → out. Faithful W8 scale of butterfly32!. Verified bit-exact vs FFTW.
+bf32_tw_w8(::Type{T}, fwd) where {T} = Vec{8, T}[avx_mixedradix_twiddle_chunk8(T, cs * 4, r, 32, fwd) for cs in 0:1 for r in 1:3]   # 6, index 3cs+r
+function butterfly32_w8!(out, inp, scr, base::Int, tw, rot)
+    @inbounds for cs in 0:1
+        b = base + cs * 4
+        m = avx_column_butterfly4(_L8(inp, b), _L8(inp, b+8), _L8(inp, b+16), _L8(inp, b+24), rot)
+        t = avx_transpose4_packed(m[1], avx_mul_complex(tw[3cs+1], m[2]), avx_mul_complex(tw[3cs+2], m[3]), avx_mul_complex(tw[3cs+3], m[4]))
+        ob = base + cs * 16
+        _S8(scr, ob, t[1]); _S8(scr, ob+4, t[2]); _S8(scr, ob+8, t[3]); _S8(scr, ob+12, t[4])
+    end
+    @inbounds begin
+        m = avx_column_butterfly8(_L8(scr, base), _L8(scr, base+4), _L8(scr, base+8), _L8(scr, base+12), _L8(scr, base+16), _L8(scr, base+20), _L8(scr, base+24), _L8(scr, base+28), rot)
+        for r in 0:7; _S8(out, base + 4r, m[r+1]); end
+    end
+end
+struct B32W8{T} <: Kernel
+    n::Int; tw::Vector{Vec{8, T}}; rot::Vec{8, T}
+end
+keltype(::B32W8{T}) where {T} = T
+B32W8(fwd::Bool) = B32W8(Float64, fwd)
+B32W8(::Type{T}, fwd::Bool) where {T} = B32W8{T}(32, bf32_tw_w8(T, fwd), fwd ? _rot90_fwd8(T) : _rot90_inv8(T))
+@inline proc_ip!(k::B32W8, buf, scr) = (@inbounds for f in 0:(length(buf) ÷ 32 - 1); butterfly32_w8!(buf, buf, scr, 32f, k.tw, k.rot); end)
+@inline proc_oop!(k::B32W8, out, inp, scr) = (@inbounds for f in 0:(length(inp) ÷ 32 - 1); butterfly32_w8!(out, inp, out, 32f, k.tw, k.rot); end)
 
 # Butterfly256 at W8 (faithful port of rustfft Butterfly256Avx<f32>, 4 complex/vec): 32×8 two-phase.
 # phase 1: 8 columnsets — col bf8 + twiddle + transpose8 → scr; phase 2: 2 columnsets — col bf32 → out.
@@ -187,6 +245,25 @@ end
     @inbounds for f in 0:(cnt-1); _trans4_w8!(out, f*n, inp, f*n, Val(M)); end
 end
 
+struct MR3W8{M, I <: Kernel, T} <: Kernel
+    inner::I; tw::Vector{Vec{8, T}}; bf3::Vec{8, T}
+end
+klen(::MR3W8{M}) where {M} = 3M
+keltype(::MR3W8{M, I, T}) where {M, I, T} = T
+MR3W8(inner::Kernel, fwd::Bool) = (T = keltype(inner); M = klen(inner); MR3W8{M, typeof(inner), T}(inner, mr_twiddles_w8(T, 3, M, 3M, fwd), avx_broadcast_twiddle8(T, 1, 3, fwd)))
+@inline function proc_ip!(k::MR3W8{M}, buf, scr) where {M}
+    n = 3M; cnt = length(buf) ÷ n
+    @inbounds for f in 0:(cnt-1); _colbf3_w8!(buf, f*n, Val(M), k.tw, k.bf3); end
+    proc_oop!(k.inner, scr, buf, scr)
+    @inbounds for f in 0:(cnt-1); _trans3_w8!(buf, f*n, scr, f*n, Val(M)); end
+end
+@inline function proc_oop!(k::MR3W8{M}, out, inp, scr) where {M}
+    n = 3M; cnt = length(inp) ÷ n
+    @inbounds for f in 0:(cnt-1); _colbf3_w8!(inp, f*n, Val(M), k.tw, k.bf3); end
+    proc_ip!(k.inner, inp, scr)
+    @inbounds for f in 0:(cnt-1); _trans3_w8!(out, f*n, inp, f*n, Val(M)); end
+end
+
 struct MR12W8{M, I <: Kernel, T} <: Kernel
     inner::I; tw::Vector{Vec{8, T}}; bf3::Vec{8, T}; rot::Vec{8, T}
 end
@@ -246,11 +323,7 @@ end
 
 # W=8-clean tree for n = 2^(6+3a+2b)·3^b·5^v5 = Butterfly64 · radix-8^a · radix-12^b · radix-9^b9 · radix-5^v5
 # (every len_per_row divisible by CPV=4). Returns nothing for any other size.
-plan_tree_w8(n::Int, fwd::Bool = true) = plan_tree_w8(Float64, n, fwd)
-function plan_tree_w8(::Type{T}, n::Int, fwd::Bool = true) where {T}
-    # Float64 W=8 = Vec{8,Float64} = 512-bit ⇒ needs real AVX-512 (else don't build/time it). Float32 W=8
-    # = Vec{8,Float32} = 256-bit ⇒ plain AVX2, always buildable — so the gate is Float64-only.
-    T === Float64 && !_HAS_AVX512 && return nothing
+function _plan_tree_w8_main(::Type{T}, n::Int, fwd::Bool = true) where {T}
     v2 = 0; t = n; while t % 2 == 0; t ÷= 2; v2 += 1; end
     v3 = 0; while t % 3 == 0; t ÷= 3; v3 += 1; end
     v5 = 0; while t % 5 == 0; t ÷= 5; v5 += 1; end
@@ -300,4 +373,57 @@ function plan_tree_w8(::Type{T}, n::Int, fwd::Bool = true) where {T}
     for _ in 1:c4;  k = MR4W8(k, fwd);  end
     for _ in 1:v5;  k = MR5W8(k, fwd);  end
     RPlan(k)
+end
+
+# Pure-pow2 W=8 kernel of exponent e (no partial columns needed: every base/radix is ÷4-clean). Small
+# bases B16/B32/B64 (2⁴/2⁵/2⁶), e==7 = B16·radix-8, e≥8 the B256/B512 monolith + radix-8/4 chain. e<4
+# (2³ and below) is unsupported here (no B8W8) — those low-v2 sizes stay on the fallback. nothing if none.
+function _pow2_kernel_w8(::Type{T}, e::Int, fwd::Bool) where {T}
+    e == 4 && return B16W8(T, fwd)
+    e == 5 && return B32W8(T, fwd)
+    e == 6 && return B64W8(T, fwd)
+    e == 7 && return MR8W8(B16W8(T, fwd), fwd)              # 2⁴·2³
+    e >= 8 || return nothing
+    base, m = e % 3 == 0 ? (B512W8(T, fwd), e - 9) : (B256W8(T, fwd), e - 8)
+    m % 3 == 1 && return nothing
+    k::Kernel = base
+    for _ in 1:(m ÷ 3); k = MR8W8(k, fwd); end
+    m % 3 == 2 && (k = MR4W8(k, fwd))
+    return k
+end
+
+# Small-base smooth tree for 2·3·5-smooth sizes the main W=8 solver rejects (its base is B64W8 = 2⁶, with
+# no radix-3 for a lone factor of 3). Here a pow2 W=8 base consumes the 2s (v2≥4 ⇒ B16/B32/B64…, so every
+# inner length stays a multiple of 4 — no partial-column path), then radix-9 (pairs of 3) + radix-3 (lone
+# 3) + radix-5. Unlocks 2^k·{3,5,3·5} F32 non-pow2 sizes (48/80/96/160/192/240/384/480/720…). Purely
+# additive (only reached when the main solver returns nothing), so it can't change any existing W=8 tree.
+function _plan_tree_w8_small(::Type{T}, n::Int, fwd::Bool) where {T}
+    iseven(n) || return nothing
+    v2 = 0; t = n; while t % 2 == 0; t ÷= 2; v2 += 1; end
+    v3 = 0; while t % 3 == 0; t ÷= 3; v3 += 1; end
+    v5 = 0; while t % 5 == 0; t ÷= 5; v5 += 1; end
+    t == 1 || return nothing                                # not 2·3·5-smooth
+    v2 >= 4 || return nothing                               # need a ÷4-clean base ≥ B16W8 (no B8W8 yet)
+    base = _pow2_kernel_w8(T, v2, fwd)
+    isnothing(base) && return nothing
+    k::Kernel = base
+    for _ in 1:(v3 ÷ 2); k = MR9W8(k, fwd); end
+    isodd(v3) && (k = MR3W8(k, fwd))
+    for _ in 1:v5; k = MR5W8(k, fwd); end
+    return RPlan(k)
+end
+
+# W=8-clean tree (main solver), else the additive small-base tree (above). The Float64 W=8 path = 512-bit
+# ⇒ needs real AVX-512; Float32 W=8 = 256-bit (plain AVX2) is always buildable — so the gate is F64-only.
+plan_tree_w8(n::Int, fwd::Bool = true) = plan_tree_w8(Float64, n, fwd)
+function plan_tree_w8(::Type{T}, n::Int, fwd::Bool = true) where {T}
+    T === Float64 && !_HAS_AVX512 && return nothing
+    r = _plan_tree_w8_main(T, n, fwd)
+    isnothing(r) || return r
+    # The small-base path (B16/B32/B64W8 + radix-3) is Float32-ONLY: it exists to give ComplexF32 a fast
+    # non-64-multiple non-pow2 kernel (no W=4 Float64 port exists for it). ComplexF64 already has the tuned
+    # W=4 `AvxMixedRadixPlan` (B16/B18/B36 + radix passes) for these sizes — offering a slower W=8 variant
+    # only lets autoplan's noisy plan-time timing mis-rank it and REGRESS F64 (measured). So gate it off.
+    T === Float32 || return nothing
+    return _plan_tree_w8_small(T, n, fwd)
 end
