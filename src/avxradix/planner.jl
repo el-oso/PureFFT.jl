@@ -79,6 +79,15 @@ function _pow2_kernel(e::Int, fwd::Bool)
     return k
 end
 
+# 2^p2·5^p5 (p2∈{1,2,7}, no pow2 leaf): odd 5-power core (B25 5² base + MR5 for the rest, or BP5 for a
+# lone 5) wrapped in p2 MR2 radix-2 passes (odd-M tail handles the odd core; M is even above the first).
+function _pow2x_pow5_kernel(p2::Int, p5::Int, fwd::Bool)
+    k::Kernel = p5 >= 2 ? B25(fwd) : BP(5, fwd)
+    for _ in 1:(p5 >= 2 ? p5 - 2 : p5 - 1); k = MR5(k, fwd); end
+    for _ in 1:p2; k = MR2(k, fwd); end
+    k
+end
+
 # Smooth 2^p2·3^p3·5^p5 kernel (no RPlan wrap), or nothing. Used both for pure-smooth plans and as the
 # inner core under a single-prime (7/13) wrap. Small pure-pow2 leaves (B8..B64) are allowed here (the pure-
 # smooth public path gates those off via p2>=8 to preserve the dedicated pow2 routing).
@@ -87,7 +96,9 @@ function _smooth235_kernel(p2::Int, p3::Int, p5::Int, fwd::Bool)
     # even, so the chain composes. 80=MR5(B16), 1000=MR5³(B8), 10000=MR5⁴(B16).
     if p5 >= 1 && p3 == 0
         inner = _pow2_kernel(p2, fwd)
-        isnothing(inner) && return nothing
+        if isnothing(inner)                             # p2∈{1,2,7}: no pow2 leaf. Root the 5-power on
+            return _pow2x_pow5_kernel(p2, p5, fwd)      # B25/BP5 + carry the 2s as MR2 passes. 250=2·5³, 500=4·5³.
+        end
         return foldl((k, _) -> MR5(k, fwd), 1:p5; init = inner)
     end
     # 2^a·3·5 (lone 3 and lone 5): pow2 leaf + one radix-3 then one radix-5. 240=MR5(MR3(B16)).
@@ -165,6 +176,10 @@ function _odd_tree(n::Int, fwd::Bool)
         k::Kernel = BP(m, fwd)
     elseif a >= 2                                        # B9 (3²) base when ≥2 threes (radix-9 preferred)
         k = B9(fwd); a -= 2
+    elseif b >= 2                                        # B25 (5²) base: 25, 125=MR5(B25), 625=MR5²(B25)
+        k = B25(fwd); b -= 2
+    elseif c >= 2                                        # B49 (7²) base: 49, 343=MR7(B49)
+        k = B49(fwd); c -= 2
     elseif c >= 1
         k = BP(7, fwd); c -= 1
     elseif b >= 1

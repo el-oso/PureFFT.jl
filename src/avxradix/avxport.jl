@@ -84,6 +84,28 @@ const _ROT90_INV2 = V2f((0.0, -0.0))
     out1 = (avx_merge(a2, a3), lt[1], lt[2])
     (out0, out1)
 end
+# transpose_5x5 / transpose_7x7 — dual-width generalization of transpose_3x3 (no rust analogue; the
+# 5×5/7×7 packed transpose for the B25/B49 prime-power codelets). col 0 is a V2f per row (`a`); the
+# remaining cols are loaded 2-at-a-time as V4f pairs (`b`,`c`[,`d`]). Output: row 0's cols un-packed
+# into the half-width set (out0); each later row-pair packed full-width via transpose_2x2 (cf. B9).
+@inline function avx_transpose_5x5(a::NTuple{5, V2f}, b::NTuple{5, V4f}, c::NTuple{5, V4f})
+    out0 = (a[1], avx_lo(b[1]), avx_hi(b[1]), avx_lo(c[1]), avx_hi(c[1]))
+    tb1 = avx_transpose_2x2(b[2], b[3]); tc1 = avx_transpose_2x2(c[2], c[3])
+    out1 = (avx_merge(a[2], a[3]), tb1[1], tb1[2], tc1[1], tc1[2])
+    tb2 = avx_transpose_2x2(b[4], b[5]); tc2 = avx_transpose_2x2(c[4], c[5])
+    out2 = (avx_merge(a[4], a[5]), tb2[1], tb2[2], tc2[1], tc2[2])
+    (out0, out1, out2)
+end
+@inline function avx_transpose_7x7(a::NTuple{7, V2f}, b::NTuple{7, V4f}, c::NTuple{7, V4f}, d::NTuple{7, V4f})
+    out0 = (a[1], avx_lo(b[1]), avx_hi(b[1]), avx_lo(c[1]), avx_hi(c[1]), avx_lo(d[1]), avx_hi(d[1]))
+    tb1 = avx_transpose_2x2(b[2], b[3]); tc1 = avx_transpose_2x2(c[2], c[3]); td1 = avx_transpose_2x2(d[2], d[3])
+    out1 = (avx_merge(a[2], a[3]), tb1[1], tb1[2], tc1[1], tc1[2], td1[1], td1[2])
+    tb2 = avx_transpose_2x2(b[4], b[5]); tc2 = avx_transpose_2x2(c[4], c[5]); td2 = avx_transpose_2x2(d[4], d[5])
+    out2 = (avx_merge(a[4], a[5]), tb2[1], tb2[2], tc2[1], tc2[2], td2[1], td2[2])
+    tb3 = avx_transpose_2x2(b[6], b[7]); tc3 = avx_transpose_2x2(c[6], c[7]); td3 = avx_transpose_2x2(d[6], d[7])
+    out3 = (avx_merge(a[6], a[7]), tb3[1], tb3[2], tc3[1], tc3[2], td3[1], td3[2])
+    (out0, out1, out2, out3)
+end
 
 # partial (1-complex) load/store (load_partial1_complex / store_partial1_complex = _mm_loadu/storeu_pd)
 @inline function avx_load_partial1(x::AbstractVector{Complex{Float64}}, i::Int)

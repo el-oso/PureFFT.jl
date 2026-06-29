@@ -45,6 +45,38 @@ end
     @inbounds for f in 0:(length(inp) ÷ 9 - 1); butterfly9!(out, inp, 9f, k.tw, k.bf3, k.bf3lo); end
 end
 
+# ---- leaf: Butterfly25 (5x5) / Butterfly49 (7x7) — direct prime-power DFT codelets, in-register, no
+# scratch. The 5²/7² bases that root the radix-5/7 trees: 125=MR5(B25), 625=MR5²(B25), 343=MR7(B49). ----
+struct B25 <: Kernel
+    n::Int; tw1::NTuple{4, V4f}; tw2::NTuple{4, V4f}; t0::V4f; t1::V4f; t0lo::V2f; t1lo::V2f
+end
+function B25(fwd::Bool)
+    t0 = avx_broadcast_twiddle(1, 5, fwd); t1 = avx_broadcast_twiddle(2, 5, fwd)
+    tw1, tw2 = bf25_twiddles(fwd)
+    B25(25, tw1, tw2, t0, t1, avx_lo(t0), avx_lo(t1))
+end
+@inline function proc_ip!(k::B25, buf, scr)
+    @inbounds for f in 0:(length(buf) ÷ 25 - 1); butterfly25!(buf, buf, 25f, k.tw1, k.tw2, k.t0, k.t1, k.t0lo, k.t1lo); end
+end
+@inline function proc_oop!(k::B25, out, inp, scr)
+    @inbounds for f in 0:(length(inp) ÷ 25 - 1); butterfly25!(out, inp, 25f, k.tw1, k.tw2, k.t0, k.t1, k.t0lo, k.t1lo); end
+end
+
+struct B49 <: Kernel
+    n::Int; tw1::NTuple{6, V4f}; tw2::NTuple{6, V4f}; tw3::NTuple{6, V4f}; t0::V4f; t1::V4f; t2::V4f; t0lo::V2f; t1lo::V2f; t2lo::V2f
+end
+function B49(fwd::Bool)
+    t0 = avx_broadcast_twiddle(1, 7, fwd); t1 = avx_broadcast_twiddle(2, 7, fwd); t2 = avx_broadcast_twiddle(3, 7, fwd)
+    tw1, tw2, tw3 = bf49_twiddles(fwd)
+    B49(49, tw1, tw2, tw3, t0, t1, t2, avx_lo(t0), avx_lo(t1), avx_lo(t2))
+end
+@inline function proc_ip!(k::B49, buf, scr)
+    @inbounds for f in 0:(length(buf) ÷ 49 - 1); butterfly49!(buf, buf, 49f, k.tw1, k.tw2, k.tw3, k.t0, k.t1, k.t2, k.t0lo, k.t1lo, k.t2lo); end
+end
+@inline function proc_oop!(k::B49, out, inp, scr)
+    @inbounds for f in 0:(length(inp) ÷ 49 - 1); butterfly49!(out, inp, 49f, k.tw1, k.tw2, k.tw3, k.t0, k.t1, k.t2, k.t0lo, k.t1lo, k.t2lo); end
+end
+
 # ---- leaf: BP{P} — direct size-P odd-prime DFT (one FFT per iter via the width-generic V2f
 # avx_colbf_prime). The innermost base for odd composites carrying a prime with no SIMD radix pass
 # (11/19/23/43…) and for pure prime powers (5ⁿ/7ⁿ via MR5/MR7). tws = W_P^1…W_P^{(P-1)/2} as V2f.
@@ -291,6 +323,40 @@ end
     @inbounds begin
         ib = o + (M - 1); ob = oo + 7 * (M - 1)
         for r in 0:6; avx_store_partial1!(out, ob + r, avx_load_partial1(buf, ib + r * M)); end
+    end
+end
+
+# ---- radix-2 passes (the F64 analogue of MR2W8; carries a factor of 2 over an odd 5-power core, e.g.
+# 250=MR2(MR5(B25))). Odd-M partial-V2f tail, same structure as radix-5/7. ----
+@inline function _colbf2!(buf, o, ::Val{M}, tw) where {M}
+    @inbounds for c in 0:(M ÷ 2 - 1)
+        ib = o + 2c
+        s, d = avx_butterfly2(avx_load_complex(buf, ib), avx_load_complex(buf, ib + M))
+        avx_store_complex!(buf, ib, s)
+        avx_store_complex!(buf, ib + M, avx_mul_complex(tw[c + 1], d))
+    end
+    isodd(M) && _colbf2_oddtail!(buf, o, Val(M), tw)
+end
+@noinline function _colbf2_oddtail!(buf, o, ::Val{M}, tw) where {M}   # leftover column M-1, partial V2f
+    @inbounds begin
+        ib = o + (M - 1); tc = M ÷ 2
+        s, d = avx_butterfly2(avx_load_partial1(buf, ib), avx_load_partial1(buf, ib + M))
+        avx_store_partial1!(buf, ib, s)
+        avx_store_partial1!(buf, ib + M, avx_mul_complex(avx_lo(tw[tc + 1]), d))
+    end
+end
+@inline function _trans2!(out, oo, buf, o, ::Val{M}) where {M}
+    @inbounds for c in 0:(M ÷ 2 - 1)
+        ib = o + 2c; ob = oo + 4c
+        t = avx_transpose_2x2(avx_load_complex(buf, ib), avx_load_complex(buf, ib + M))
+        avx_store_complex!(out, ob, t[1]); avx_store_complex!(out, ob + 2, t[2])
+    end
+    isodd(M) && _trans2_oddtail!(out, oo, buf, o, Val(M))
+end
+@noinline function _trans2_oddtail!(out, oo, buf, o, ::Val{M}) where {M}   # transpose of a 2x1 column → 2 contiguous complex
+    @inbounds begin
+        ib = o + (M - 1); ob = oo + 2 * (M - 1)
+        for r in 0:1; avx_store_partial1!(out, ob + r, avx_load_partial1(buf, ib + r * M)); end
     end
 end
 
@@ -565,6 +631,28 @@ end
     @inbounds for f in 0:(cnt - 1); _colbf5!(inp, f * n, Val(M), k.tw, k.t0, k.t1); end
     proc_ip!(k.inner, inp, scr)
     @inbounds for f in 0:(cnt - 1); _trans5!(out, f * n, inp, f * n, Val(M)); end
+end
+
+# ---- MixedRadix2 (R=2) — carries a lone factor of 2 over an odd 5-power core (250/500/1000/2000) ----
+struct MR2{M, I <: Kernel} <: Kernel
+    inner::I; tw::Vector{V4f}
+end
+klen(::MR2{M}) where {M} = 2M
+function MR2(inner::Kernel, fwd::Bool)
+    M = klen(inner)
+    MR2{M, typeof(inner)}(inner, mr_twiddles(2, M, 2M, fwd))
+end
+@inline function proc_ip!(k::MR2{M}, buf, scr) where {M}
+    n = 2M; cnt = length(buf) ÷ n
+    @inbounds for f in 0:(cnt - 1); _colbf2!(buf, f * n, Val(M), k.tw); end
+    proc_oop!(k.inner, scr, buf, scr)
+    @inbounds for f in 0:(cnt - 1); _trans2!(buf, f * n, scr, f * n, Val(M)); end
+end
+@inline function proc_oop!(k::MR2{M}, out, inp, scr) where {M}
+    n = 2M; cnt = length(inp) ÷ n
+    @inbounds for f in 0:(cnt - 1); _colbf2!(inp, f * n, Val(M), k.tw); end
+    proc_ip!(k.inner, inp, scr)
+    @inbounds for f in 0:(cnt - 1); _trans2!(out, f * n, inp, f * n, Val(M)); end
 end
 
 # ---- MixedRadix7 (R=7) ----
