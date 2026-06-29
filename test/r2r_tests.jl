@@ -275,18 +275,20 @@ end
 
 @testitem "F32 non-pow2 complex parity vs FFTW ≥ 0.96×" tags=[:perf] begin
     using PureFFT, FFTW, BenchmarkTools, Statistics
-    # Float32 non-pow2 (non-W8-clean) sizes routed through the new Vec{8,Float32} small-base W=8 tree
-    # (B16/B32/B64W8 base + radix-3/5/9). Each was 0.32–0.50× before (scalar recursive/codelet fallback,
-    # FFTW-F32 ≈ 2× F64); now ≥0.96× (fair env; canonical run_compare_f32 bench). Below-gate sizes are
-    # tracked, not hidden: tiny L1 sizes (48/384) where FFTW/rust's hand codelets win, factor-7
-    # (112/224/448: no radix-7 W=8 pass), v2<4 (90/360/3000: no B8W8 base) — all REMAINING work.
+    # Float32 non-pow2 sizes routed through the Vec{8,Float32} W=8 tree: small pow2 bases B4/B8/B16/B32/
+    # B64W8 (v2≥2) + radix-3/5/7/9 passes. Each was 0.32–0.56× before (scalar recursive/codelet fallback,
+    # FFTW-F32 ≈ 2× F64); now ≥0.96× (fair env; canonical bench). Below-gate sizes are tracked, not hidden:
+    #  - tiny L1 (12/48/384): FFTW/rust hand codelets win — still ~2× the old fallback, best PureFFT option;
+    #  - 120 (0.90) / 3000 (0.92): the documented radix-5 chain/high-power floor;
+    #  - v2=1 (90/54/162/270/486/810): need W=8 partial-column handling (M not ÷4) — REMAINING work.
     med(b) = median(b.times)
     ratio(n) = (x = randn(ComplexF32, n);
         pp = plan_pfft(ComplexF32, n); pf = FFTW.plan_fft!(copy(x); flags = FFTW.MEASURE);
         med(@benchmark $pf * y setup = (y = copy($x))) / med(@benchmark PureFFT.apply_unnormalized!($pp, z) setup = (z = copy($x))))
-    pass = (80, 96, 160, 192, 240, 480, 720)             # 2^k·{3,5,3·5}, v2≥4 — clear the gate (canonical bench)
-    floor_sizes = (48, 384)                              # tiny L1 sizes — FFTW/rust hand codelets win (0.87/0.95,
-                                                         # still ~2× the old scalar fallback; best PureFFT option)
+    pass = (36, 40, 72, 80, 96, 112, 160, 180, 192,      # v2≥2 · {3,5,7,9} — clear the gate (canonical bench)
+            224, 240, 360, 448, 480, 720)
+    floor_sizes = (12, 24, 48, 120, 384, 1500, 3000)     # tiny-L1 (12/24/48/384, FFTW/rust hand codelets win)
+                                                         # + radix-5 chain/high-power (120/1500/3000)
     if Base.JLOptions().check_bounds == 0
         for n in pass; @test ratio(n) ≥ 0.96; end
         for n in floor_sizes; @test_broken ratio(n) ≥ 0.96; end
