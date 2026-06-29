@@ -85,16 +85,23 @@ end
         t = avx_transpose5_packed(_LP(buf,ib), _LP(buf,ib+M), _LP(buf,ib+2M), _LP(buf,ib+3M), _LP(buf,ib+4M))
         _S8(out, ob, t[1]); _S8(out, ob+4, t[2]); _SP(out, ob+8, t[3]); end; end
 end
-# radix-7 (the lone factor of 7: 2^k·7 sizes 112/224/448, base ÷4 so M stays ÷4 — no partial column).
+# radix-7 (the lone factor of 7: 2^k·7 sizes 112/224/448, base ÷4 so M stays ÷4 — no partial column),
+# PLUS the v2=1 rem=2 tail so 2·7^k sizes (98=2·7², …) route here (DST-I n=48 wraps inner 98).
 @inline function _colbf7_w8!(buf, o, ::Val{M}, tw, t0, t1, t2) where {M}
     @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c
         r = avx_column_butterfly7(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), _L8(buf,ib+3M), _L8(buf,ib+4M), _L8(buf,ib+5M), _L8(buf,ib+6M), t0, t1, t2)
         _S8(buf, ib, r[1]); Base.Cartesian.@nexprs 6 j -> _S8(buf, ib + j*M, avx_mul_complex(tw[c*6+j], r[j+1])); end
+    if M % 4 == 2; @inbounds begin; ib = o + (M-2); tc = (M ÷ 4) * 6   # rem=2 tail: 2 leftover columns (v2=1)
+        r = avx_column_butterfly7(_LP(buf,ib), _LP(buf,ib+M), _LP(buf,ib+2M), _LP(buf,ib+3M), _LP(buf,ib+4M), _LP(buf,ib+5M), _LP(buf,ib+6M), t0, t1, t2)
+        _SP(buf, ib, r[1]); Base.Cartesian.@nexprs 6 j -> _SP(buf, ib + j*M, avx_mul_complex(tw[tc+j], r[j+1])); end; end
 end
 @inline function _trans7_w8!(out, oo, buf, o, ::Val{M}) where {M}
     @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c; ob = oo + 28c
         t = avx_transpose7_packed(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), _L8(buf,ib+3M), _L8(buf,ib+4M), _L8(buf,ib+5M), _L8(buf,ib+6M))
         Base.Cartesian.@nexprs 7 k -> _S8(out, ob + 4(k-1), t[k]); end
+    if M % 4 == 2; @inbounds begin; ib = o + (M-2); ob = oo + (M-2)*7   # 2R=14 valid complex: 3 full Vec8 + 1 Vec4
+        t = avx_transpose7_packed(_LP(buf,ib), _LP(buf,ib+M), _LP(buf,ib+2M), _LP(buf,ib+3M), _LP(buf,ib+4M), _LP(buf,ib+5M), _LP(buf,ib+6M))
+        _S8(out, ob, t[1]); _S8(out, ob+4, t[2]); _S8(out, ob+8, t[3]); _SP(out, ob+12, t[4]); end; end
 end
 # radix-4 (covers the leftover 2s that radix-8/12 can't, so the W=8 tree spans ALL pow2 — needed for the
 # F32 pow2 path, where the W4 monolith is unavailable). 3 twiddles/column; transpose4 = one 4×4 reg block.
@@ -522,15 +529,16 @@ function _plan_tree_w8_small(::Type{T}, n::Int, fwd::Bool) where {T}
     v3 = 0; while t % 3 == 0; t ÷= 3; v3 += 1; end
     v5 = 0; while t % 5 == 0; t ÷= 5; v5 += 1; end
     v7 = 0; while t % 7 == 0; t ÷= 7; v7 += 1; end
-    (t == 1 && v7 <= 1) || return nothing                   # not 2·3·5·(≤1)·7-smooth
+    t == 1 || return nothing                                # not 2·3·5·7-smooth
     if v2 == 1                                              # 2·odd: rem = M mod 4 = 2 uniformly (partial cols)
-        v7 == 0 || return nothing                           # v2=1 partial path serves 2·3·5-smooth only
         k1::Kernel = B2W8(T, fwd)                           # B2 base (the lone factor of 2)
         for _ in 1:(v3 ÷ 2); k1 = MR9W8(k1, fwd); end       # radix-9 per pair of 3s (preferred; fewer passes)
         isodd(v3) && (k1 = MR3W8(k1, fwd))                  # lone factor of 3 (M ≡ 2 mod 4 ⇒ rem-2 tail)
         for _ in 1:v5; k1 = MR5W8(k1, fwd); end             # then radix-5
+        for _ in 1:v7; k1 = MR7W8(k1, fwd); end             # radix-7 per factor of 7 (98=2·7² → DST-I n=48)
         return RPlan(k1)
     end
+    v7 <= 1 || return nothing                               # v2≥2 path: radix-7 only as the lone factor
     v2 >= 2 || return nothing                               # need a ÷4-clean base ≥ B4W8 (v2≤1 → partial cols)
     base = _pow2_kernel_w8(T, v2, fwd)
     isnothing(base) && return nothing

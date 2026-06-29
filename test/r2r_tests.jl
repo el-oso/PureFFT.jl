@@ -288,7 +288,8 @@ end
         med(@benchmark $pf * y setup = (y = copy($x))) / med(@benchmark PureFFT.apply_unnormalized!($pp, z) setup = (z = copy($x))))
     pass = (36, 40, 72, 80, 96, 112, 160, 180, 192,      # v2≥2 · {3,5,7,9} — clear the gate (canonical bench)
             224, 240, 360, 448, 480, 720,
-            54, 90, 162, 270, 486, 810)                  # v2=1 (2·odd) — W=8 partial-column subsystem
+            54, 90, 162, 270, 486, 810,                  # v2=1 (2·odd) — W=8 partial-column subsystem
+            98)                                          # v2=1 · 7² — radix-7 rem=2 tail (0.22→1.29)
     floor_sizes = (12, 24, 48, 120, 384, 1500, 3000)     # tiny-L1 (12/24/48/384, FFTW/rust hand codelets win)
                                                          # + radix-5 chain/high-power (120/1500/3000)
     if Base.JLOptions().check_bounds == 0

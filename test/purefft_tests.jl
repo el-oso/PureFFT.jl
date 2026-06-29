@@ -243,7 +243,8 @@ end
         # radix-3/5/7/9 (48/96/112/192/240/448/480/720). The v2=1 (2·odd) sizes 6/18/54/90/162/270/486/810
         # exercise the W=8 partial-column subsystem (B2W8 base + rem=2 tails on MR3/MR5/MR9).
         for n in (768, 12, 24, 36, 40, 48, 96, 112, 192, 240, 360, 448, 480, 720,
-                  6, 18, 54, 90, 162, 270, 486, 810)
+                  6, 18, 54, 90, 162, 270, 486, 810,
+                  14, 98)   # v2=1 · 7^k (2·7, 2·7²) — radix-7 rem=2 tail
             pf = PureFFT.AvxMixedRadixPlanW8(ComplexF32, n)
             @test pf isa PureFFT.AvxMixedRadixPlan
             x = randn(ComplexF32, n); y = copy(x); pfft!(y, pf)        # forward (unnormalized) = fft
