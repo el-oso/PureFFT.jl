@@ -45,6 +45,38 @@ end
     @inbounds for f in 0:(length(inp) ÷ 9 - 1); butterfly9!(out, inp, 9f, k.tw, k.bf3, k.bf3lo); end
 end
 
+# ---- leaf: BP{P} — direct size-P odd-prime DFT (one FFT per iter via the width-generic V2f
+# avx_colbf_prime). The innermost base for odd composites carrying a prime with no SIMD radix pass
+# (11/19/23/43…) and for pure prime powers (5ⁿ/7ⁿ via MR5/MR7). tws = W_P^1…W_P^{(P-1)/2} as V2f.
+# (A V4f pack-2 variant was measured strictly slower — the merge/lo-hi shuffles cost more than the
+# throughput gain on these leaf-bound pure-power sizes — so the straight V2f leaf is kept.) ----
+@generated function _bfprime!(out, ob::Int, inp, ib::Int, tws, ::Val{P}) where {P}
+    loads = [:($(Symbol(:x, j)) = avx_load_partial1(inp, ib + $j)) for j in 0:(P - 1)]
+    rst = Expr(:tuple, [Symbol(:x, j) for j in 0:(P - 1)]...)
+    stores = [:(avx_store_partial1!(out, ob + $k, r[$(k + 1)])) for k in 0:(P - 1)]
+    quote
+        @inbounds begin
+            $(loads...)
+            r = avx_colbf_prime($rst, tws)
+            $(stores...)
+        end
+    end
+end
+struct BP{P, H} <: Kernel
+    n::Int; tws::NTuple{H, V2f}
+end
+klen(::BP{P}) where {P} = P
+function BP(P::Int, fwd::Bool)
+    H = (P - 1) ÷ 2
+    BP{P, H}(P, ntuple(a -> avx_lo(avx_broadcast_twiddle(a, P, fwd)), H))
+end
+@inline function proc_ip!(k::BP{P}, buf, scr) where {P}
+    @inbounds for f in 0:(length(buf) ÷ P - 1); _bfprime!(buf, P * f, buf, P * f, k.tws, Val(P)); end
+end
+@inline function proc_oop!(k::BP{P}, out, inp, scr) where {P}
+    @inbounds for f in 0:(length(inp) ÷ P - 1); _bfprime!(out, P * f, inp, P * f, k.tws, Val(P)); end
+end
+
 # ---- leaf: Butterfly18 (3x6, faithful rustfft port; col 0 partial V2f, cols 1-2 V4f; no scratch) ----
 struct B18 <: Kernel
     n::Int; tw::NTuple{5, V4f}; bf3::V4f; bf3lo::V2f
@@ -190,12 +222,27 @@ end
         avx_store_complex!(buf, ib + 3M, avx_mul_complex(tw[c * 4 + 3], r[4]))
         avx_store_complex!(buf, ib + 4M, avx_mul_complex(tw[c * 4 + 4], r[5]))
     end
+    if isodd(M)                                          # leftover column M-1 as a partial V2f (1 complex)
+        @inbounds begin
+            ib = o + (M - 1); tc = (M ÷ 2) * 4
+            r = avx_column_butterfly5(avx_load_partial1(buf, ib), avx_load_partial1(buf, ib + M), avx_load_partial1(buf, ib + 2M), avx_load_partial1(buf, ib + 3M), avx_load_partial1(buf, ib + 4M), avx_lo(t0), avx_lo(t1))
+            avx_store_partial1!(buf, ib, r[1])
+            avx_store_partial1!(buf, ib + M, avx_mul_complex(avx_lo(tw[tc + 1]), r[2])); avx_store_partial1!(buf, ib + 2M, avx_mul_complex(avx_lo(tw[tc + 2]), r[3]))
+            avx_store_partial1!(buf, ib + 3M, avx_mul_complex(avx_lo(tw[tc + 3]), r[4])); avx_store_partial1!(buf, ib + 4M, avx_mul_complex(avx_lo(tw[tc + 4]), r[5]))
+        end
+    end
 end
 @inline function _trans5!(out, oo, buf, o, ::Val{M}) where {M}
     @inbounds for c in 0:(M ÷ 2 - 1)
         ib = o + 2c; ob = oo + 10c
         t = avx_transpose5_packed(avx_load_complex(buf, ib), avx_load_complex(buf, ib + M), avx_load_complex(buf, ib + 2M), avx_load_complex(buf, ib + 3M), avx_load_complex(buf, ib + 4M))
         avx_store_complex!(out, ob, t[1]); avx_store_complex!(out, ob + 2, t[2]); avx_store_complex!(out, ob + 4, t[3]); avx_store_complex!(out, ob + 6, t[4]); avx_store_complex!(out, ob + 8, t[5])
+    end
+    if isodd(M)                                          # transpose of a 5x1 column = 5 contiguous complex at oo+5(M-1)
+        @inbounds begin
+            ib = o + (M - 1); ob = oo + 5 * (M - 1)
+            for r in 0:4; avx_store_partial1!(out, ob + r, avx_load_partial1(buf, ib + r * M)); end
+        end
     end
 end
 # ---- radix-7 passes (reuses verified avx_column_butterfly7) ----
@@ -209,6 +256,17 @@ end
         avx_store_complex!(buf, ib + 3M, avx_mul_complex(tw[c * 6 + 3], r[4])); avx_store_complex!(buf, ib + 4M, avx_mul_complex(tw[c * 6 + 4], r[5]))
         avx_store_complex!(buf, ib + 5M, avx_mul_complex(tw[c * 6 + 5], r[6])); avx_store_complex!(buf, ib + 6M, avx_mul_complex(tw[c * 6 + 6], r[7]))
     end
+    if isodd(M)                                          # leftover column M-1 as a partial V2f (1 complex)
+        @inbounds begin
+            ib = o + (M - 1); tc = (M ÷ 2) * 6
+            r = avx_column_butterfly7(avx_load_partial1(buf, ib), avx_load_partial1(buf, ib + M), avx_load_partial1(buf, ib + 2M), avx_load_partial1(buf, ib + 3M),
+                                      avx_load_partial1(buf, ib + 4M), avx_load_partial1(buf, ib + 5M), avx_load_partial1(buf, ib + 6M), avx_lo(t0), avx_lo(t1), avx_lo(t2))
+            avx_store_partial1!(buf, ib, r[1])
+            avx_store_partial1!(buf, ib + M, avx_mul_complex(avx_lo(tw[tc + 1]), r[2])); avx_store_partial1!(buf, ib + 2M, avx_mul_complex(avx_lo(tw[tc + 2]), r[3]))
+            avx_store_partial1!(buf, ib + 3M, avx_mul_complex(avx_lo(tw[tc + 3]), r[4])); avx_store_partial1!(buf, ib + 4M, avx_mul_complex(avx_lo(tw[tc + 4]), r[5]))
+            avx_store_partial1!(buf, ib + 5M, avx_mul_complex(avx_lo(tw[tc + 5]), r[6])); avx_store_partial1!(buf, ib + 6M, avx_mul_complex(avx_lo(tw[tc + 6]), r[7]))
+        end
+    end
 end
 @inline function _trans7!(out, oo, buf, o, ::Val{M}) where {M}
     @inbounds for c in 0:(M ÷ 2 - 1)
@@ -217,6 +275,12 @@ end
                                   avx_load_complex(buf, ib + 4M), avx_load_complex(buf, ib + 5M), avx_load_complex(buf, ib + 6M))
         avx_store_complex!(out, ob, t[1]); avx_store_complex!(out, ob + 2, t[2]); avx_store_complex!(out, ob + 4, t[3]); avx_store_complex!(out, ob + 6, t[4])
         avx_store_complex!(out, ob + 8, t[5]); avx_store_complex!(out, ob + 10, t[6]); avx_store_complex!(out, ob + 12, t[7])
+    end
+    if isodd(M)                                          # transpose of a 7x1 column = 7 contiguous complex at oo+7(M-1)
+        @inbounds begin
+            ib = o + (M - 1); ob = oo + 7 * (M - 1)
+            for r in 0:6; avx_store_partial1!(out, ob + r, avx_load_partial1(buf, ib + r * M)); end
+        end
     end
 end
 

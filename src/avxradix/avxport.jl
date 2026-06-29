@@ -244,6 +244,44 @@ end
     (output0, output1, output2, output3, output4, output5, output6, output7, output8, output9, output10, output11, output12)
 end
 
+# ---- generic odd-prime column DFT, @generated + width-generic ----
+# Generalizes avx_column_butterfly5/7/13 (the conjugate-pair real-FFT structure) to ANY odd prime P:
+# half = (P-1)/2 conjugate pairs (m,P-m); tws = (W_P^1 … W_P^half) broadcast complex. For output k the
+# coefficient of pair m is W_P^{km}: let a = (k·m) mod P; cos uses tws[a≤half ? a : P-a] (cos symmetric);
+# sin uses the SAME index with a + sign when a≤half, − when a>half (sin(2πa/P) = −sin(2π(P-a)/P)). The
+# straight-line body is emitted at COMPILE time (no runtime tuple indexing — CLAUDE.md rule 1) and
+# reproduces the hand kernels for P∈{5,7,13} bit-exactly; verified vs a reference DFT for P∈{11,19,23,43}.
+@generated function avx_colbf_prime(rs::NTuple{P}, tws::NTuple{H}) where {P, H}
+    @assert 2H + 1 == P "avx_colbf_prime: P must be an odd prime, got P=$P H=$H"
+    s = Any[]
+    for m in 1:H
+        push!(s, :(($(Symbol(:sm, m)), $(Symbol(:df, m))) = avx_butterfly2(rs[$(1 + m)], rs[$(P + 1 - m)])))
+    end
+    push!(s, :(rot = _rot90_inv(rs[1])))
+    for m in 1:H
+        push!(s, :($(Symbol(:d, m)) = avx_rotate90($(Symbol(:df, m)), rot)))
+    end
+    acc = :(rs[1]); for m in 1:H; acc = :(avx_add($acc, $(Symbol(:sm, m)))); end
+    push!(s, :(o0 = $acc))
+    for a in 1:H
+        push!(s, :(($(Symbol(:t, a, :r)), $(Symbol(:t, a, :i))) = avx_duplicate_complex(tws[$a])))
+    end
+    for k in 1:H
+        re = :(rs[1]); im = nothing
+        for m in 1:H
+            a = (k * m) % P; idx = a <= H ? a : P - a
+            tr = Symbol(:t, idx, :r); ti = Symbol(:t, idx, :i); dm = Symbol(:d, m)
+            re = :(avx_fmadd($tr, $(Symbol(:sm, m)), $re))
+            im = m == 1 ? :(avx_mul($ti, $dm)) :
+                 a <= H ? :(avx_fmadd($ti, $dm, $im)) : :(avx_fnmadd($ti, $dm, $im))
+        end
+        push!(s, :($(Symbol(:re, k)) = $re)); push!(s, :($(Symbol(:im, k)) = $im))
+        push!(s, :(($(Symbol(:o, k)), $(Symbol(:o, P - k))) = avx_butterfly2($(Symbol(:re, k)), $(Symbol(:im, k)))))
+    end
+    push!(s, Expr(:tuple, [Symbol(:o, j) for j in 0:(P - 1)]...))
+    Expr(:block, s...)
+end
+
 # column_butterfly4: rotation = make_rotation90(FFT direction) — _ROT90_FWD for forward.
 @inline function avx_column_butterfly4(r1, r2, r3, r4, rotation)
     mid0, mid2 = avx_butterfly2(r1, r3)

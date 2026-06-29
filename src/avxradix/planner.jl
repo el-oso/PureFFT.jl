@@ -134,8 +134,59 @@ function _smooth235_kernel(p2::Int, p3::Int, p5::Int, fwd::Bool)
     return nothing
 end
 
+# odd-prime leaf coverage: a residual prime carried as a BP leaf (>7, since 3/5/7 are SIMD radix passes).
+# 43 = largest prime an MR3/MR5 wrap composes for the small odd r2r-inner sizes (33=3·11, 65=5·13, 95=5·19,
+# 129=3·43). Above this the O(p²) leaf loses to Bluestein, so fall back (autoplan times it regardless).
+const _BP_MAX = 43
+function _isprime_odd(m::Int)
+    m < 2 && return false
+    iseven(m) && return m == 2
+    d = 3
+    while d * d <= m
+        m % d == 0 && return false
+        d += 2
+    end
+    return true
+end
+
+# Odd-n radix tree: n = 3^a·5^b·7^c·q with q∈{1, one supported odd prime ≤43}. Innermost leaf = B9 (3²)
+# when a≥2, else a prime leaf BP{q/5/7/3}; wrap MR9/MR3 (3s) + MR5 (5s) + MR7 (7s) — each has the odd-M
+# partial-V2f tail (radix-3/9 from commit 3aebc8b, radix-5/7 here), so every (odd) inner length composes.
+# Covers pure powers (25=MR5(BP5), 49=MR7(BP7), 63=MR7(B9), 125, 3ⁿ) and residual-prime composites
+# (11,13 leaves; 33,65,95,129). nothing if the residual is an unsupported prime/prime-power.
+function _odd_tree(n::Int, fwd::Bool)
+    n == 1 && return nothing
+    a = b = c = 0; m = n
+    while m % 3 == 0; m ÷= 3; a += 1; end
+    while m % 5 == 0; m ÷= 5; b += 1; end
+    while m % 7 == 0; m ÷= 7; c += 1; end
+    if m != 1                                            # residual non-{3,5,7} prime ≤43 as the leaf
+        (m <= _BP_MAX && _isprime_odd(m)) || return nothing
+        k::Kernel = BP(m, fwd)
+    elseif a >= 2                                        # B9 (3²) base when ≥2 threes (radix-9 preferred)
+        k = B9(fwd); a -= 2
+    elseif c >= 1
+        k = BP(7, fwd); c -= 1
+    elseif b >= 1
+        k = BP(5, fwd); b -= 1
+    elseif a == 1
+        k = BP(3, fwd); a -= 1
+    else
+        return nothing
+    end
+    while a >= 2; k = MR9(k, fwd); a -= 2; end
+    a == 1 && (k = MR3(k, fwd))
+    for _ in 1:b; k = MR5(k, fwd); end
+    for _ in 1:c; k = MR7(k, fwd); end
+    return k
+end
+
 # build a kernel tree for n (or nothing if unsupported). fwd = forward.
 function plan_tree(n::Int, fwd::Bool=true)
+    if isodd(n)                                          # all odd sizes route through the odd-prime tree
+        ot = _odd_tree(n, fwd)
+        return isnothing(ot) ? nothing : RPlan(ot)
+    end
     p2, p3, p5, rest = factor235(n)
     p7 = 0;  while rest % 7  == 0; rest ÷= 7;  p7  += 1; end
     p13 = 0; while rest % 13 == 0; rest ÷= 13; p13 += 1; end
