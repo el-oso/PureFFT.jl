@@ -263,12 +263,17 @@ end
     #  - 7/13: pure primes — FFTW tiny hand-codelet; BP leaf is still PureFFT's best.
     #  - 250=2·5³ (≈0.93×), 500=4·5³ (≈0.81×), 2000=2⁴·5³ (≈0.83×): the radix-5-heavy 2^a·5³ family
     #    (pinned 4500 MHz, 3000-sample median; big lift from the broken routing baseline 250 0.54→0.93,
-    #    500 0.59→0.81). BOTH routes measured (the AVX tree beats Recursive). Two structural levers were
-    #    built-and-measured and BOTH disproven: (1) the "pad the odd-M radix-5 tail to Vec-aligned" trick —
-    #    that tail is only +3% of the transform (M=24→25: 107.6→111.3ns), can't close a 20-40% gap; (2) a
-    #    monolithic B125 (5³) codelet to mimic FFTW's fused codelet — LLVM spills it to a 704 B stack frame /
-    #    10 ymm spills (vs MR5(B25)'s 128 B / 3), so it REGRESSES every size (125 1.50→1.37). FFTW's genfft
-    #    hand-schedules these to spill minimally; no PureFFT lever beats it. Genuine floor, fully investigated.
+    #    500 0.59→0.81). FULLY INVESTIGATED — four levers built/measured, all disproven:
+    #    (1) pad the odd-M radix-5 tail to Vec-aligned — that tail is only +3% of the transform, can't close
+    #        a 20-40% gap; (2) monolithic B125 (5³) — LLVM spills it (704 B frame / 10 ymm) and regresses all;
+    #    (3) B50 (2·5²) on AVX2 — spills harder (4064 B / 170); (4) B50 on AVX-512 — went register-resident
+    #        (15 spills) but the ratio DID NOT MOVE → the loss is shuffle/permute-bound, not spill-bound.
+    #    VERIFIED ROOT CAUSE (FFTW.flops + plan dump + @code_native, not a guess): FFTW is NOT monolithic —
+    #    it's Cooley-Tukey with small SIMD codelets (n1fv_10/25, vrank) that vectorize ACROSS the sub-transform
+    #    batch (transpose-free). PureFFT column-packs (W=2) ⇒ intra-transform transpose shuffles (radix-5
+    #    butterfly shuf/arith=0.38). Same flop class (near-parity rules out a big op-count gap), different SIMD
+    #    axis. Closing it needs batch-vectorized codelets for small non-pow2 — a rearchitecture (see ROADMAP),
+    #    not a codelet tweak. Genuine, root-caused floor; vs RustFFT 250/500 already pass.
     med(b) = median(b.times)
     ratio(n) = (x = randn(ComplexF64, n);
         pp = plan_pfft(ComplexF64, n); pf = FFTW.plan_fft!(copy(x); flags = FFTW.MEASURE);

@@ -70,8 +70,26 @@ Status + planned work. This is the canonical, checked-in roadmap (human- and age
   gap is **rustfft's implementation** being more optimized, not Julia/LLVM scheduling. To close it: diff
   PureFFT's MR9/MR12 pass against rustfft's `Butterfly9`/mixed-radix source (decomposition, in-place /
   transpose / memory strategy) and adopt what's better — a PureFFT optimization, not a compiler chase.
-- **MR2 / MR16** — currently sizes needing a radix-2 or radix-16 step fall back; add them for fuller
-  smooth-size coverage.
+- **MR16** — sizes needing a radix-16 step still fall back; add for fuller smooth-size coverage.
+  (**MR2 DONE** — the F64 radix-2 pass was added with the radix-5 base work below.)
+- **radix-5/7 packed bases (B25/B49) — DONE.** `B25` (5²) + `B49` (7²) `@generated` register codelets now
+  ROOT the radix-5/7 trees (25→B25, 49→B49, 125=MR5(B25), 625=MR5²(B25), 343=MR7(B49)), plus an F64 `MR2`
+  radix-2 pass fixing the 2·5³/4·5³ routing gap (250/500 were falling to slow recursive, 0.54/0.59). Closed
+  the radix-5/7 **pure-power floor**: 25=2.35, 49=2.07, 125=1.52, 625=1.41, 1000=1.20× FFTW (pinned, all green).
+- **The 2^a·5³ floor (250≈0.93× / 500≈0.81× / 2000≈0.83× FFTW) is ARCHITECTURAL — verified, not a tweak.**
+  Four codelet levers built+measured+disproven: the odd-M radix-5 padding trick (tail = 3% of cost), a
+  monolithic B125 (LLVM spills), B50 on AVX2 (spills harder), and B50 on **AVX-512** (went register-resident
+  but the ratio didn't move → **shuffle/permute-bound, not spill-bound**). Root cause (FFTW.flops + plan dump
+  + `@code_native`): **FFTW is not monolithic** — it's Cooley-Tukey with small SIMD codelets (`n1fv_10/25`,
+  `dft-vrank`) that **vectorize across the sub-transform batch** (transpose-free). PureFFT **column-packs**
+  (W=2) ⇒ intra-transform transpose shuffles (radix-5 butterfly shuf/arith=0.38). Same flop class
+  (near-parity rules out a big op-count gap), different SIMD axis. vs RustFFT, 250/500 already pass.
+- **Batch-vectorized codelets for small non-pow2 (the open lever for the 2^a·5³ floor) — research/rearchitecture.**
+  The one verified way to close the above: mirror FFTW's strategy — vectorize a `vrank`-style **batch of
+  sub-transforms** (SIMD lanes = different transforms, transpose-free) instead of column-packing within one
+  transform. Large effort and RISKY: column-packing wins on the *many* sizes where it's used, so this is a
+  deliberate separate project (brainstorm/scope first), not a grind for three sizes. Would also help other
+  shuffle-bound non-pow2 (radix-9/12 vs rust).
 
 ### Breadth / type coverage (gaps for a *general* library vs the 1-D complex-`Float64` investigation)
 - **DCT/DST (real-to-real) — all 8 r2r kinds DONE.** DCT-I/II/III/IV (`REDFT00/10/01/11`) and
