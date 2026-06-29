@@ -16,6 +16,7 @@ makedocs(;
     pages = [
         "Home" => "index.md",
         "Guide" => "guide.md",
+        "Manual (FFTW map)" => "manual.md",
         "Performance" => "performance.md",
         "Benchmarks" => "benchmarks.md",
     ],
