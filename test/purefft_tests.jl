@@ -240,8 +240,10 @@ end
         # Float32 W=8 = Vec{8,Float32} = 256-bit AVX2 (NOT AVX-512) — the PRIMARY Float32 AVX path, so it
         # is always buildable (no _HAS_AVX512 gate) and tested unconditionally, unlike the Float64 W=8 path.
         # 768 = the main (B64W8) solver; the rest = small-base path: B4(12/36), B8(24/360), B16/B32/B64 +
-        # radix-3/5/7/9 (48/96/112/192/240/448/480/720).
-        for n in (768, 12, 24, 36, 40, 48, 96, 112, 192, 240, 360, 448, 480, 720)
+        # radix-3/5/7/9 (48/96/112/192/240/448/480/720). The v2=1 (2·odd) sizes 6/18/54/90/162/270/486/810
+        # exercise the W=8 partial-column subsystem (B2W8 base + rem=2 tails on MR3/MR5/MR9).
+        for n in (768, 12, 24, 36, 40, 48, 96, 112, 192, 240, 360, 448, 480, 720,
+                  6, 18, 54, 90, 162, 270, 486, 810)
             pf = PureFFT.AvxMixedRadixPlanW8(ComplexF32, n)
             @test pf isa PureFFT.AvxMixedRadixPlan
             x = randn(ComplexF32, n); y = copy(x); pfft!(y, pf)        # forward (unnormalized) = fft

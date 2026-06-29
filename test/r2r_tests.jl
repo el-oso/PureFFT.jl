@@ -280,13 +280,15 @@ end
     # FFTW-F32 ≈ 2× F64); now ≥0.96× (fair env; canonical bench). Below-gate sizes are tracked, not hidden:
     #  - tiny L1 (12/48/384): FFTW/rust hand codelets win — still ~2× the old fallback, best PureFFT option;
     #  - 120 (0.90) / 3000 (0.92): the documented radix-5 chain/high-power floor;
-    #  - v2=1 (90/54/162/270/486/810): need W=8 partial-column handling (M not ÷4) — REMAINING work.
+    #  - v2=1 (54/90/162/270/486/810): NOW GREEN via the W=8 partial-column subsystem (B2W8 base + rem=2
+    #    tails on MR3/MR5/MR9; M ≡ 2 mod 4 uniformly) — 1.07–1.48× (radix-9 route).
     med(b) = median(b.times)
     ratio(n) = (x = randn(ComplexF32, n);
         pp = plan_pfft(ComplexF32, n); pf = FFTW.plan_fft!(copy(x); flags = FFTW.MEASURE);
         med(@benchmark $pf * y setup = (y = copy($x))) / med(@benchmark PureFFT.apply_unnormalized!($pp, z) setup = (z = copy($x))))
     pass = (36, 40, 72, 80, 96, 112, 160, 180, 192,      # v2≥2 · {3,5,7,9} — clear the gate (canonical bench)
-            224, 240, 360, 448, 480, 720)
+            224, 240, 360, 448, 480, 720,
+            54, 90, 162, 270, 486, 810)                  # v2=1 (2·odd) — W=8 partial-column subsystem
     floor_sizes = (12, 24, 48, 120, 384, 1500, 3000)     # tiny-L1 (12/24/48/384, FFTW/rust hand codelets win)
                                                          # + radix-5 chain/high-power (120/1500/3000)
     if Base.JLOptions().check_bounds == 0
