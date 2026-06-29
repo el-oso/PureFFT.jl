@@ -13,9 +13,9 @@ const SAMPLES = 1000
 const SECONDS = 2.0
 
 pow2_sizes() = [2^e for e in 8:16]
-# Non-pow2: the small 2^k·{3,5,3·5} sizes (v2≥4) served by the new Vec{8,Float32} small-base W=8 tree
-# (B16/B32/B64W8 + radix-3/5/9), plus the larger W=8-clean (n≡0 mod 64) sizes for the main solver.
-nonpow2_sizes() = [48, 80, 96, 160, 192, 240, 384, 480, 720, 768, 2880, 9216, 23040]
+# Non-pow2: the small 2^k·{3,5,7,3·5} sizes (v2≥2) served by the Vec{8,Float32} W=8 tree (bases
+# B4/B8/B16/B32/B64W8 + radix-3/5/7/9), plus the larger W=8-clean (n≡0 mod 64) sizes for the main solver.
+nonpow2_sizes() = [24, 36, 40, 48, 72, 80, 96, 112, 160, 180, 192, 224, 240, 360, 384, 448, 480, 720, 768, 2880, 9216, 23040]
 
 function sample(n)
     xf = randn(ComplexF32, n); xd = randn(ComplexF64, n)
