@@ -229,6 +229,50 @@ end
     end
 end
 
+@testitem "DCT-I/DST-I (REDFT00/RODFT00) parity vs FFTW ≥ 0.96× — every n" tags=[:perf] begin
+    using PureFFT, FFTW, BenchmarkTools, Statistics, LinearAlgebra
+    # The fix target: DCT-I/DST-I route their inner complex FFT (size n∓1, an odd prime/prime-power/
+    # composite) through the AVX odd-prime radix tree (BP leaf + MR3/5/7/9 odd-column tail) instead of
+    # the old Bluestein/recursive mis-route. Each size here was RED before (0.47–0.93×); now ≥0.96×.
+    # As elsewhere, `Pkg.test` forces --check-bounds=yes (handicaps PureFFT's @inbounds, not FFTW's C):
+    # assert only in the fair (bench) env, skip otherwise — same guard as the DCT-II perf item.
+    med(b) = median(b.times)
+    for (pk, fk) in ((REDFT00, FFTW.REDFT00), (RODFT00, FFTW.RODFT00)), n in (12, 24, 32, 48, 64, 96, 128, 192, 256, 512)
+        x = randn(Float64, n)
+        pp = plan_r2r(x, pk); y = similar(x)
+        pf = FFTW.plan_r2r(copy(x), fk; flags = FFTW.MEASURE)
+        tp = med(@benchmark mul!($y, $pp, $x))
+        tf = med(@benchmark $pf * z setup = (z = copy($x)))
+        if Base.JLOptions().check_bounds == 0
+            @test tf / tp ≥ 0.96
+        else
+            @test_skip tf / tp ≥ 0.96
+        end
+    end
+end
+
+@testitem "small non-pow2 complex parity vs FFTW ≥ 0.96×" tags=[:perf] begin
+    using PureFFT, FFTW, BenchmarkTools, Statistics
+    # Small odd primes/prime-powers/composites — the inner sizes feeding DCT-I/DST-I. All previously
+    # mis-routed to Bluestein/recursive (0.23–0.69×); now on the AVX odd-prime radix tree. These clear
+    # 0.96× (fair env). The very smallest pure-prime / pure-prime-power sizes (7, 13, 25, 49, 125) sit
+    # at a documented FFTW tiny-hand-codelet floor (0.77–0.93×) — the tree is still the best PureFFT
+    # kernel for them (2–4× over Bluestein/CodeletPlan), and every DCT-I/DST-I transform that USES them
+    # clears the gate (above) — so they are tracked as @test_broken, not skipped or hidden.
+    med(b) = median(b.times)
+    ratio(n) = (x = randn(ComplexF64, n);
+        pp = plan_pfft(ComplexF64, n); pf = FFTW.plan_fft!(copy(x); flags = FFTW.MEASURE);
+        med(@benchmark $pf * y setup = (y = copy($x))) / med(@benchmark PureFFT.apply_unnormalized!($pp, z) setup = (z = copy($x))))
+    pass = (11, 17, 19, 23, 33, 35, 45, 55, 63, 65, 77, 91, 95, 129)   # clear the gate
+    floor_sizes = (7, 13, 25, 49, 125)                                  # FFTW tiny-codelet floor (tracked)
+    if Base.JLOptions().check_bounds == 0
+        for n in pass; @test ratio(n) ≥ 0.96; end
+        for n in floor_sizes; @test_broken ratio(n) ≥ 0.96; end
+    else
+        for n in (pass..., floor_sizes...); @test_skip ratio(n) ≥ 0.96; end
+    end
+end
+
 @testitem "r2r all 8 kinds — public API bit-exact vs FFTW" begin
     using PureFFT, FFTW, LinearAlgebra
     kinds = ((REDFT00,FFTW.REDFT00),(REDFT01,FFTW.REDFT01),(REDFT10,FFTW.REDFT10),(REDFT11,FFTW.REDFT11),

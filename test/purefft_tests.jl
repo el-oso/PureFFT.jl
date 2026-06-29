@@ -146,7 +146,7 @@ end
         @test relerr(ipfft(pfft(x; variant = :codelet); variant = :codelet), x) < tol(T)
     end
 
-    @testset ":fast routes small smooth non-pow2 to a fast (non-Bluestein) plan, primes → Bluestein" begin
+    @testset ":fast routes small smooth + small primes to a fast (non-Bluestein) plan; only large primes → Bluestein" begin
         # `:fast` (autoplan) now TIMES candidates and keeps the fastest, so the exact kernel for a small
         # smooth size is size-dependent (e.g. n=96 → FourStepCodeletPlan beats the size-96 CodeletPlan).
         # The invariant is the routing *intent*: smooth sizes reach a fast codelet/smooth path, never the
@@ -157,7 +157,11 @@ end
                   p isa PureFFT.RecursiveMixedRadixPlan || p isa PureFFT.AvxMixedRadixPlan
             @test !(p isa PureFFT.BluesteinPlan)
         end
-        @test plan_pfft(ComplexF64, 7; variant = :fast) isa PureFFT.BluesteinPlan     # small prime
+        # Small odd primes/prime-powers/composites (≤43) now route through the AVX odd-prime radix tree
+        # (BP leaf), NOT Bluestein — running a chirp-Z convolution for a size-7 FFT was the mis-route.
+        for n in (7, 11, 13, 25, 49, 33, 65)
+            @test !(plan_pfft(ComplexF64, n; variant = :fast) isa PureFFT.BluesteinPlan)
+        end
         @test plan_pfft(ComplexF64, 1009; variant = :fast) isa PureFFT.BluesteinPlan  # large prime, no split
     end
 
