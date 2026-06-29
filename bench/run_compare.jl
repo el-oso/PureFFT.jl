@@ -38,7 +38,8 @@ function nonpow2_sizes()
     w8clean = [768, 6144, 9216, 49152, 110592]
     small3 = [48, 96, 192, 384]   # single-factor-of-3 2^k·3 sizes (B16/B64 leaf + MR{3,6} route)
     small57 = [80, 112, 160, 224, 240, 320, 448, 480]   # 2^k·{5,7}, 2^k·3·5 (B32 leaf + MR5/MR7 route)
-    return sort!(unique(vcat(small3, small57, base, w8clean)))
+    small5pow = [25, 49, 125, 250, 343, 500, 625, 1000, 2000]   # 5²/7² powers (B25/B49 codelets) + 2^a·5³
+    return sort!(unique(vcat(small3, small57, small5pow, base, w8clean)))
 end
 
 cap(t) = length(t) > MAXSAVE ? t[1:MAXSAVE] : t
