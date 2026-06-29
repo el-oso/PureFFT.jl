@@ -212,6 +212,12 @@ end
         avx_store_complex!(out, ob, t[1]); avx_store_complex!(out, ob + 2, t[2]); avx_store_complex!(out, ob + 4, t[3]); avx_store_complex!(out, ob + 6, t[4])
     end
 end
+# NOTE: the odd-M leftover-column tail lives in a SEPARATE @noinline helper, called behind a
+# compile-time `isodd(M) &&` guard. For even M (the common 2ᵏ·5ᵐ chains — 1000/5000/10000) the guard
+# folds to `false`, the call is DCE'd, and `_colbf5!`'s inlinable body is BYTE-IDENTICAL to the
+# pre-tail (master) version. Keeping the tail inline here instead bloated the typed-IR cost the
+# inliner sees and regressed even-M 1000 ~0.98→0.87 (measured) even though LLVM later DCE'd the dead
+# branch — so the tail MUST stay out-of-line.
 @inline function _colbf5!(buf, o, ::Val{M}, tw, t0, t1) where {M}
     @inbounds for c in 0:(M ÷ 2 - 1)
         ib = o + 2c
@@ -222,14 +228,15 @@ end
         avx_store_complex!(buf, ib + 3M, avx_mul_complex(tw[c * 4 + 3], r[4]))
         avx_store_complex!(buf, ib + 4M, avx_mul_complex(tw[c * 4 + 4], r[5]))
     end
-    if isodd(M)                                          # leftover column M-1 as a partial V2f (1 complex)
-        @inbounds begin
-            ib = o + (M - 1); tc = (M ÷ 2) * 4
-            r = avx_column_butterfly5(avx_load_partial1(buf, ib), avx_load_partial1(buf, ib + M), avx_load_partial1(buf, ib + 2M), avx_load_partial1(buf, ib + 3M), avx_load_partial1(buf, ib + 4M), avx_lo(t0), avx_lo(t1))
-            avx_store_partial1!(buf, ib, r[1])
-            avx_store_partial1!(buf, ib + M, avx_mul_complex(avx_lo(tw[tc + 1]), r[2])); avx_store_partial1!(buf, ib + 2M, avx_mul_complex(avx_lo(tw[tc + 2]), r[3]))
-            avx_store_partial1!(buf, ib + 3M, avx_mul_complex(avx_lo(tw[tc + 3]), r[4])); avx_store_partial1!(buf, ib + 4M, avx_mul_complex(avx_lo(tw[tc + 4]), r[5]))
-        end
+    isodd(M) && _colbf5_oddtail!(buf, o, Val(M), tw, t0, t1)
+end
+@noinline function _colbf5_oddtail!(buf, o, ::Val{M}, tw, t0, t1) where {M}   # leftover column M-1, partial V2f
+    @inbounds begin
+        ib = o + (M - 1); tc = (M ÷ 2) * 4
+        r = avx_column_butterfly5(avx_load_partial1(buf, ib), avx_load_partial1(buf, ib + M), avx_load_partial1(buf, ib + 2M), avx_load_partial1(buf, ib + 3M), avx_load_partial1(buf, ib + 4M), avx_lo(t0), avx_lo(t1))
+        avx_store_partial1!(buf, ib, r[1])
+        avx_store_partial1!(buf, ib + M, avx_mul_complex(avx_lo(tw[tc + 1]), r[2])); avx_store_partial1!(buf, ib + 2M, avx_mul_complex(avx_lo(tw[tc + 2]), r[3]))
+        avx_store_partial1!(buf, ib + 3M, avx_mul_complex(avx_lo(tw[tc + 3]), r[4])); avx_store_partial1!(buf, ib + 4M, avx_mul_complex(avx_lo(tw[tc + 4]), r[5]))
     end
 end
 @inline function _trans5!(out, oo, buf, o, ::Val{M}) where {M}
@@ -238,11 +245,12 @@ end
         t = avx_transpose5_packed(avx_load_complex(buf, ib), avx_load_complex(buf, ib + M), avx_load_complex(buf, ib + 2M), avx_load_complex(buf, ib + 3M), avx_load_complex(buf, ib + 4M))
         avx_store_complex!(out, ob, t[1]); avx_store_complex!(out, ob + 2, t[2]); avx_store_complex!(out, ob + 4, t[3]); avx_store_complex!(out, ob + 6, t[4]); avx_store_complex!(out, ob + 8, t[5])
     end
-    if isodd(M)                                          # transpose of a 5x1 column = 5 contiguous complex at oo+5(M-1)
-        @inbounds begin
-            ib = o + (M - 1); ob = oo + 5 * (M - 1)
-            for r in 0:4; avx_store_partial1!(out, ob + r, avx_load_partial1(buf, ib + r * M)); end
-        end
+    isodd(M) && _trans5_oddtail!(out, oo, buf, o, Val(M))
+end
+@noinline function _trans5_oddtail!(out, oo, buf, o, ::Val{M}) where {M}   # transpose of a 5x1 column → 5 contiguous complex
+    @inbounds begin
+        ib = o + (M - 1); ob = oo + 5 * (M - 1)
+        for r in 0:4; avx_store_partial1!(out, ob + r, avx_load_partial1(buf, ib + r * M)); end
     end
 end
 # ---- radix-7 passes (reuses verified avx_column_butterfly7) ----
@@ -256,16 +264,17 @@ end
         avx_store_complex!(buf, ib + 3M, avx_mul_complex(tw[c * 6 + 3], r[4])); avx_store_complex!(buf, ib + 4M, avx_mul_complex(tw[c * 6 + 4], r[5]))
         avx_store_complex!(buf, ib + 5M, avx_mul_complex(tw[c * 6 + 5], r[6])); avx_store_complex!(buf, ib + 6M, avx_mul_complex(tw[c * 6 + 6], r[7]))
     end
-    if isodd(M)                                          # leftover column M-1 as a partial V2f (1 complex)
-        @inbounds begin
-            ib = o + (M - 1); tc = (M ÷ 2) * 6
-            r = avx_column_butterfly7(avx_load_partial1(buf, ib), avx_load_partial1(buf, ib + M), avx_load_partial1(buf, ib + 2M), avx_load_partial1(buf, ib + 3M),
-                                      avx_load_partial1(buf, ib + 4M), avx_load_partial1(buf, ib + 5M), avx_load_partial1(buf, ib + 6M), avx_lo(t0), avx_lo(t1), avx_lo(t2))
-            avx_store_partial1!(buf, ib, r[1])
-            avx_store_partial1!(buf, ib + M, avx_mul_complex(avx_lo(tw[tc + 1]), r[2])); avx_store_partial1!(buf, ib + 2M, avx_mul_complex(avx_lo(tw[tc + 2]), r[3]))
-            avx_store_partial1!(buf, ib + 3M, avx_mul_complex(avx_lo(tw[tc + 3]), r[4])); avx_store_partial1!(buf, ib + 4M, avx_mul_complex(avx_lo(tw[tc + 4]), r[5]))
-            avx_store_partial1!(buf, ib + 5M, avx_mul_complex(avx_lo(tw[tc + 5]), r[6])); avx_store_partial1!(buf, ib + 6M, avx_mul_complex(avx_lo(tw[tc + 6]), r[7]))
-        end
+    isodd(M) && _colbf7_oddtail!(buf, o, Val(M), tw, t0, t1, t2)
+end
+@noinline function _colbf7_oddtail!(buf, o, ::Val{M}, tw, t0, t1, t2) where {M}   # leftover column M-1, partial V2f
+    @inbounds begin
+        ib = o + (M - 1); tc = (M ÷ 2) * 6
+        r = avx_column_butterfly7(avx_load_partial1(buf, ib), avx_load_partial1(buf, ib + M), avx_load_partial1(buf, ib + 2M), avx_load_partial1(buf, ib + 3M),
+                                  avx_load_partial1(buf, ib + 4M), avx_load_partial1(buf, ib + 5M), avx_load_partial1(buf, ib + 6M), avx_lo(t0), avx_lo(t1), avx_lo(t2))
+        avx_store_partial1!(buf, ib, r[1])
+        avx_store_partial1!(buf, ib + M, avx_mul_complex(avx_lo(tw[tc + 1]), r[2])); avx_store_partial1!(buf, ib + 2M, avx_mul_complex(avx_lo(tw[tc + 2]), r[3]))
+        avx_store_partial1!(buf, ib + 3M, avx_mul_complex(avx_lo(tw[tc + 3]), r[4])); avx_store_partial1!(buf, ib + 4M, avx_mul_complex(avx_lo(tw[tc + 4]), r[5]))
+        avx_store_partial1!(buf, ib + 5M, avx_mul_complex(avx_lo(tw[tc + 5]), r[6])); avx_store_partial1!(buf, ib + 6M, avx_mul_complex(avx_lo(tw[tc + 6]), r[7]))
     end
 end
 @inline function _trans7!(out, oo, buf, o, ::Val{M}) where {M}
@@ -276,11 +285,12 @@ end
         avx_store_complex!(out, ob, t[1]); avx_store_complex!(out, ob + 2, t[2]); avx_store_complex!(out, ob + 4, t[3]); avx_store_complex!(out, ob + 6, t[4])
         avx_store_complex!(out, ob + 8, t[5]); avx_store_complex!(out, ob + 10, t[6]); avx_store_complex!(out, ob + 12, t[7])
     end
-    if isodd(M)                                          # transpose of a 7x1 column = 7 contiguous complex at oo+7(M-1)
-        @inbounds begin
-            ib = o + (M - 1); ob = oo + 7 * (M - 1)
-            for r in 0:6; avx_store_partial1!(out, ob + r, avx_load_partial1(buf, ib + r * M)); end
-        end
+    isodd(M) && _trans7_oddtail!(out, oo, buf, o, Val(M))
+end
+@noinline function _trans7_oddtail!(out, oo, buf, o, ::Val{M}) where {M}   # transpose of a 7x1 column → 7 contiguous complex
+    @inbounds begin
+        ib = o + (M - 1); ob = oo + 7 * (M - 1)
+        for r in 0:6; avx_store_partial1!(out, ob + r, avx_load_partial1(buf, ib + r * M)); end
     end
 end
 
