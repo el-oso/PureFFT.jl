@@ -677,6 +677,14 @@ end
      shufflevector(a[4], b[4], Val((2, 3, 4, 5, 6, 7, 8, 9))),
      shufflevector(b[4], v8, Val((2, 3, 4, 5, 6, 7, 14, 15))))
 end
+# transpose2 at W=8 (2×4 → 4×2): pad to a 4×4 register transpose with two zero rows, then keep the first
+# two lanes (rows 0,1) of each transposed column, packing 4 columns into 2 contiguous 4-complex vectors
+# (out[c·2+r] = in[r,c]). The bare-prime 2·P composites (22/26/190 = MR2W8(BP-W8 leaf)). Bit-exact verified.
+@inline function avx_transpose2_packed(v0::Vec{8}, v1::Vec{8})
+    a = avx_transpose4_packed(v0, v1, zero(v0), zero(v0))   # a[k] = [v0_c(k-1), v1_c(k-1), 0, 0]
+    (shufflevector(a[1], a[2], Val((0, 1, 2, 3, 8, 9, 10, 11))),   # [r0c0,r1c0,r0c1,r1c1]
+     shufflevector(a[3], a[4], Val((0, 1, 2, 3, 8, 9, 10, 11))))   # [r0c2,r1c2,r0c3,r1c3]
+end
 # transpose3 at W=8 (3×4 → 4×3): pad to a 4×4 register transpose with a zero 4th row, then compact the 4
 # transposed columns (each [r0,r1,r2,junk]) into 3 contiguous 4-complex vectors (out[c·3+r] = in[r,c]).
 # Verified bit-exact vs the V4f path / FFTW.

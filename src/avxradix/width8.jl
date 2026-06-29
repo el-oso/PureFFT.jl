@@ -156,6 +156,34 @@ end
         t = avx_transpose4_packed(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), _L8(buf,ib+3M))
         Base.Cartesian.@nexprs 4 k -> _S8(out, ob + 4(k-1), t[k]); end
 end
+# radix-2 (the lone factor of 2 above a bare-prime BP-W8 leaf: 2·P sizes 22/26/190). 1 twiddle/column;
+# transpose2 = a zero-padded 4×4 register transpose keeping rows 0,1. The inner M is always ODD here (it
+# wraps a prime/prime·5/7 leaf) ⇒ rem ∈ {1,3}; rem=2 included for completeness (DCE'd when M%4≠2).
+@inline function _colbf2_w8!(buf, o, ::Val{M}, tw) where {M}
+    @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c
+        a = _L8(buf, ib); b = _L8(buf, ib + M)
+        _S8(buf, ib, a + b); _S8(buf, ib + M, avx_mul_complex(tw[c + 1], a - b)); end
+    if M % 4 == 2; @inbounds begin; ib = o + (M-2); tc = M ÷ 4
+        a = _LP(buf, ib); b = _LP(buf, ib + M)
+        _SP(buf, ib, a + b); _SP(buf, ib + M, avx_mul_complex(tw[tc + 1], a - b)); end; end
+    if M % 4 == 1; @inbounds begin; ib = o + (M-1); tc = M ÷ 4
+        a = _LP1(buf, ib); b = _LP1(buf, ib + M)
+        _SP1(buf, ib, a + b); _SP1(buf, ib + M, avx_mul_complex(tw[tc + 1], a - b)); end; end
+    if M % 4 == 3; @inbounds begin; ib = o + (M-3); tc = M ÷ 4
+        a = _LP3(buf, ib); b = _LP3(buf, ib + M)
+        _SP3(buf, ib, a + b); _SP3(buf, ib + M, avx_mul_complex(tw[tc + 1], a - b)); end; end
+end
+@inline function _trans2_w8!(out, oo, buf, o, ::Val{M}) where {M}
+    @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c; ob = oo + 8c
+        t = avx_transpose2_packed(_L8(buf,ib), _L8(buf,ib+M))
+        _S8(out, ob, t[1]); _S8(out, ob+4, t[2]); end
+    if M % 4 == 2; @inbounds begin; ib = o + (M-2); ob = oo + (M-2)*2   # 2R=4 valid complex: 1 full Vec8
+        t = avx_transpose2_packed(_LP(buf,ib), _LP(buf,ib+M)); _S8(out, ob, t[1]); end; end
+    if M % 4 == 1; @inbounds begin; ib = o + (M-1); ob = oo + (M-1)*2   # R=2 valid: 1 Vec(2) partial
+        t = avx_transpose2_packed(_LP1(buf,ib), _LP1(buf,ib+M)); _SP(out, ob, t[1]); end; end
+    if M % 4 == 3; @inbounds begin; ib = o + (M-3); ob = oo + (M-3)*2   # 3R=6 valid: 1 full Vec8 + 1 Vec(2)
+        t = avx_transpose2_packed(_LP3(buf,ib), _LP3(buf,ib+M)); _S8(out, ob, t[1]); _SP(out, ob+4, t[2]); end; end
+end
 # radix-3 (the lone factor of 3 that radix-9/12 can't consume: 2^k·3 sizes — 48/96/192/384). bf3 twiddle;
 # transpose3 = a 4×4 register transpose (zero-padded) compacted to 3 vectors. 2 twiddles/column.
 @inline function _colbf3_w8!(buf, o, ::Val{M}, tw, bf3) where {M}
@@ -207,6 +235,21 @@ keltype(::B1W8{T}) where {T} = T
 B1W8(::Type{T}, fwd::Bool) where {T} = B1W8{T}(1)
 @inline proc_ip!(k::B1W8, buf, scr) = nothing
 @inline proc_oop!(k::B1W8, out, inp, scr) = (out === inp || copyto!(out, inp); nothing)
+
+# BPW8{P} — direct size-P odd-prime DFT leaf at W=8 (the bare primes 11/13/19 the padding trick CANNOT
+# reach: there is no avx_column_butterfly{11,13,19}). One FFT per iter via the width-generic
+# `avx_colbf_prime` over zero-padded V8f32 partial-1 loads (complex in lane 0; upper 3 lanes are zeroed
+# garbage discarded by the partial-1 store) — the SAME idiom as the D1 rem=1 padding tail, reusing
+# `_bfprime!` (recursive.jl) verbatim. Only the twiddle WIDTH differs from the V2f `BP` leaf: V8f32
+# broadcast (avx_colbf_prime is width-generic). keltype = T so the W=8 RPlan allocates T-typed scratch.
+struct BPW8{P, H, T} <: Kernel
+    n::Int; tws::NTuple{H, Vec{8, T}}
+end
+klen(::BPW8{P}) where {P} = P
+keltype(::BPW8{P, H, T}) where {P, H, T} = T
+BPW8(::Type{T}, P::Int, fwd::Bool) where {T} = (H = (P - 1) ÷ 2; BPW8{P, H, T}(P, ntuple(a -> avx_broadcast_twiddle8(T, a, P, fwd), H)))
+@inline proc_ip!(k::BPW8{P}, buf, scr) where {P} = (@inbounds for f in 0:(length(buf) ÷ P - 1); _bfprime!(buf, P * f, buf, P * f, k.tws, Val(P)); end)
+@inline proc_oop!(k::BPW8{P}, out, inp, scr) where {P} = (@inbounds for f in 0:(length(inp) ÷ P - 1); _bfprime!(out, P * f, inp, P * f, k.tws, Val(P)); end)
 
 # Butterfly2 at W8 — the v2=1 (2·odd) base: a size-2 DFT [a,b] → [a+b, a-b] (no twiddles, fwd≡inv). Packs
 # 2 instances (4 complex) per Vec{8}; one leftover instance (count = n/2 = odd for 2·odd sizes) handled by a
@@ -414,6 +457,25 @@ end
     @inbounds for f in 0:(cnt-1); _trans4_w8!(out, f*n, inp, f*n, Val(M)); end
 end
 
+struct MR2W8{M, I <: Kernel, T} <: Kernel
+    inner::I; tw::Vector{Vec{8, T}}
+end
+klen(::MR2W8{M}) where {M} = 2M
+keltype(::MR2W8{M, I, T}) where {M, I, T} = T
+MR2W8(inner::Kernel, fwd::Bool) = (T = keltype(inner); M = klen(inner); MR2W8{M, typeof(inner), T}(inner, mr_twiddles_w8(T, 2, M, 2M, fwd)))
+@inline function proc_ip!(k::MR2W8{M}, buf, scr) where {M}
+    n = 2M; cnt = length(buf) ÷ n
+    @inbounds for f in 0:(cnt-1); _colbf2_w8!(buf, f*n, Val(M), k.tw); end
+    proc_oop!(k.inner, scr, buf, scr)
+    @inbounds for f in 0:(cnt-1); _trans2_w8!(buf, f*n, scr, f*n, Val(M)); end
+end
+@inline function proc_oop!(k::MR2W8{M}, out, inp, scr) where {M}
+    n = 2M; cnt = length(inp) ÷ n
+    @inbounds for f in 0:(cnt-1); _colbf2_w8!(inp, f*n, Val(M), k.tw); end
+    proc_ip!(k.inner, inp, scr)
+    @inbounds for f in 0:(cnt-1); _trans2_w8!(out, f*n, inp, f*n, Val(M)); end
+end
+
 struct MR3W8{M, I <: Kernel, T} <: Kernel
     inner::I; tw::Vector{Vec{8, T}}; bf3::Vec{8, T}
 end
@@ -593,7 +655,20 @@ function _plan_tree_w8_small(::Type{T}, n::Int, fwd::Bool) where {T}
     v3 = 0; while t % 3 == 0; t ÷= 3; v3 += 1; end
     v5 = 0; while t % 5 == 0; t ÷= 5; v5 += 1; end
     v7 = 0; while t % 7 == 0; t ÷= 7; v7 += 1; end
-    t == 1 || return nothing                                # not 2·3·5·7-smooth
+    if t != 1                                               # residual bare prime 11/13/17/19 → BP-W8 leaf (D2)
+        # The padding trick can't reach these (no avx_column_butterfly{11,13,19}); use the direct size-P
+        # BPW8 leaf as the innermost base, wrapped by radix-9/3/5/7 for the smooth part and one radix-2
+        # (MR2W8) for the lone factor of 2 (2·P composites 22/26/190). v2≤1 only (the targets); v2≥2 with a
+        # residual prime falls back. Float32-only path ⇒ no F64 concern.
+        (11 <= t <= 19 && _isprime_odd(t) && v2 <= 1) || return nothing
+        kp::Kernel = BPW8(T, t, fwd)
+        for _ in 1:(v3 ÷ 2); kp = MR9W8(kp, fwd); end
+        isodd(v3) && (kp = MR3W8(kp, fwd))
+        for _ in 1:v5; kp = MR5W8(kp, fwd); end
+        for _ in 1:v7; kp = MR7W8(kp, fwd); end
+        v2 == 1 && (kp = MR2W8(kp, fwd))
+        return RPlan(kp)
+    end
     if v2 == 0                                              # pure odd: padding-trick (B1 base, M=1 ⇒ rem∈{1,3})
         # Odd {3,5,7}-smooth via the B1 identity leaf + odd-M rem∈{1,3} tails on MR9/MR3/MR5/MR7 — every
         # inner length is odd ⇒ rem ∈ {1,3} at every pass. Clears the odd prime-powers (9/25/49/27/45/63/
