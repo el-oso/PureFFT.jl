@@ -108,6 +108,38 @@ B64W8(::Type{T}, fwd::Bool) where {T} = B64W8{T}(64, bf64_tw_w8(T, fwd), fwd ? _
 @inline proc_ip!(k::B64W8, buf, scr) = (@inbounds for f in 0:(length(buf) ÷ 64 - 1); butterfly64_w8!(buf, buf, scr, 64f, k.tw, k.rot); end)
 @inline proc_oop!(k::B64W8, out, inp, scr) = (@inbounds for f in 0:(length(inp) ÷ 64 - 1); butterfly64_w8!(out, inp, out, 64f, k.tw, k.rot); end)
 
+# Butterfly4 at W8 (register-only — 4 complex = 1 V8 vector; a single size-4 DFT in lanes via _dft4_lane).
+# The 2² base for v2=2 sizes (12=MR3(B4), 36=MR9(B4), …). No twiddles, no scratch.
+struct B4W8{T} <: Kernel
+    n::Int; rot::Vec{8, T}
+end
+keltype(::B4W8{T}) where {T} = T
+B4W8(fwd::Bool) = B4W8(Float64, fwd)
+B4W8(::Type{T}, fwd::Bool) where {T} = B4W8{T}(4, fwd ? _rot90_fwd8(T) : _rot90_inv8(T))
+@inline proc_ip!(k::B4W8, buf, scr) = (@inbounds for f in 0:(length(buf) ÷ 4 - 1); _S8(buf, 4f, _dft4_lane(_L8(buf, 4f), k.rot)); end)
+@inline proc_oop!(k::B4W8, out, inp, scr) = (@inbounds for f in 0:(length(inp) ÷ 4 - 1); _S8(out, 4f, _dft4_lane(_L8(inp, 4f), k.rot)); end)
+
+# Butterfly8 at W8 (register-only — 8 complex = 2 V8 vectors; 2×4 split: a size-4 DFT in lanes per row,
+# twiddle row 1 by [W8⁰…W8³], radix-2 across the 2 rows, interleave to natural order). The 2³ base for
+# v2=3 sizes (24=MR3(B8), 360=MR5(MR9(B8)), 3000=MR5³(MR3(B8))). Verified bit-exact vs FFTW.
+function butterfly8_w8!(out, inp, base::Int, tw8, rot)
+    @inbounds begin
+        v0 = _L8(inp, base); v1 = _L8(inp, base + 4)
+        E = _dft4_lane(v0 + v1, rot)                       # even outputs X[0,2,4,6] = DFT4(row0+row1)
+        O = _dft4_lane(avx_mul_complex(tw8, v0 - v1), rot) # odd  outputs X[1,3,5,7] = DFT4(tw8·(row0-row1))
+        _S8(out, base,     shufflevector(E, O, Val((0, 1, 8, 9, 2, 3, 10, 11))))
+        _S8(out, base + 4, shufflevector(E, O, Val((4, 5, 12, 13, 6, 7, 14, 15))))
+    end
+end
+struct B8W8{T} <: Kernel
+    n::Int; tw8::Vec{8, T}; rot::Vec{8, T}
+end
+keltype(::B8W8{T}) where {T} = T
+B8W8(fwd::Bool) = B8W8(Float64, fwd)
+B8W8(::Type{T}, fwd::Bool) where {T} = B8W8{T}(8, avx_mixedradix_twiddle_chunk8(T, 0, 1, 8, fwd), fwd ? _rot90_fwd8(T) : _rot90_inv8(T))
+@inline proc_ip!(k::B8W8, buf, scr) = (@inbounds for f in 0:(length(buf) ÷ 8 - 1); butterfly8_w8!(buf, buf, 8f, k.tw8, k.rot); end)
+@inline proc_oop!(k::B8W8, out, inp, scr) = (@inbounds for f in 0:(length(inp) ÷ 8 - 1); butterfly8_w8!(out, inp, 8f, k.tw8, k.rot); end)
+
 # Butterfly16 at W8 (4×4, register-only — 16 complex = 4 V8 vectors, 1 columnset; the 4 cols pack into a
 # vector). phase1: col bf4 + twiddle + transpose4; phase2: col bf4 across. Verified bit-exact vs FFTW.
 bf16_tw_w8(::Type{T}, fwd) where {T} = ntuple(r -> avx_mixedradix_twiddle_chunk8(T, 0, r, 16, fwd), 3)
@@ -409,6 +441,8 @@ end
 # bases B16/B32/B64 (2⁴/2⁵/2⁶), e==7 = B16·radix-8, e≥8 the B256/B512 monolith + radix-8/4 chain. e<4
 # (2³ and below) is unsupported here (no B8W8) — those low-v2 sizes stay on the fallback. nothing if none.
 function _pow2_kernel_w8(::Type{T}, e::Int, fwd::Bool) where {T}
+    e == 2 && return B4W8(T, fwd)
+    e == 3 && return B8W8(T, fwd)
     e == 4 && return B16W8(T, fwd)
     e == 5 && return B32W8(T, fwd)
     e == 6 && return B64W8(T, fwd)
@@ -434,7 +468,7 @@ function _plan_tree_w8_small(::Type{T}, n::Int, fwd::Bool) where {T}
     v5 = 0; while t % 5 == 0; t ÷= 5; v5 += 1; end
     v7 = 0; while t % 7 == 0; t ÷= 7; v7 += 1; end
     (t == 1 && v7 <= 1) || return nothing                   # not 2·3·5·(≤1)·7-smooth
-    v2 >= 4 || return nothing                               # need a ÷4-clean base ≥ B16W8 (no B8W8 yet)
+    v2 >= 2 || return nothing                               # need a ÷4-clean base ≥ B4W8 (v2≤1 → partial cols)
     base = _pow2_kernel_w8(T, v2, fwd)
     isnothing(base) && return nothing
     k::Kernel = base

@@ -594,6 +594,24 @@ const _SGN16F32 = V16f32(ntuple(k -> isodd(k) ? -1f0 : 1f0, Val(16)))
 @inline _rot90_fwd8(::Type{Float32}) = _ROT90_FWD8_F32
 @inline _rot90_inv8(::Type{Float32}) = _ROT90_INV8_F32
 
+# In-lane size-4 DFT on ONE Vec{8} (4 complex in lanes [x0,x1,x2,x3] → [X0,X1,X2,X3]). The W=8 analogue
+# of a standalone Butterfly4 for the tiny bases B4W8/B8W8 (a single small FFT lives in 1-2 registers, so
+# the cross-lane `avx_column_butterfly4` — which does 4 PARALLEL size-4 — doesn't apply). Two radix-2
+# stages: swap-halves butterfly (x0±x2, x1±x3), rotate the odd pair by ∓i (the W4 twiddle; `rotmask`
+# selects fwd/inv), then the second butterfly + a final lane shuffle to natural order. `rotmask` is the
+# element-typed rot90 const (_rot90_{fwd,inv}8(T)). Verified bit-exact vs a reference DFT4 (F32 + F64).
+@inline function _dft4_lane(v::Vec{8}, rotmask)
+    vs = shufflevector(v, Val((4, 5, 6, 7, 0, 1, 2, 3)))          # [x2,x3,x0,x1]
+    s  = v + vs                                                   # [a,c,a,c]  a=x0+x2, c=x1+x3
+    df = v - vs                                                   # [b,d,*,*]  b=x0-x2, d=x1-x3
+    dfr = avx_rotate90(df, rotmask)                               # rotate the d lane-pair (∓i·d)
+    F = shufflevector(s, df,  Val((0, 1, 8, 9, 0, 1, 8, 9)))      # [a,b,a,b]
+    S = shufflevector(s, dfr, Val((2, 3, 10, 11, 2, 3, 10, 11)))  # [c, ∓i·d, c, ∓i·d]
+    top = F + S                                                   # [X0,X1,*,*]
+    bot = F - S                                                   # [X2,X3,*,*]
+    shufflevector(top, bot, Val((0, 1, 2, 3, 8, 9, 10, 11)))      # [X0,X1,X2,X3]
+end
+
 # ---- W=8 packed transposes (verified end-to-end: B64 bit-exact, 768=MR12(B64) rel-err 2e-16) ----
 # 4×4 register transpose (the radix4_avx _transpose4 pattern): out[k] = column (k-1) of the 4 rows.
 @inline function avx_transpose4_packed(C0::Vec{8}, C1::Vec{8}, C2::Vec{8}, C3::Vec{8})
