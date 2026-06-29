@@ -34,7 +34,9 @@ const KINDS = [
     (RODFT11, FFTW.RODFT11, "DST-IV"),
     (RODFT00, FFTW.RODFT00, "DST-I"),
 ]
-const SIZES = [8, 16, 32, 64, 128, 256, 1024, 4096]
+# Includes the DCT-I/DST-I symptom sizes (12,24,48,96,192,512) whose odd inner FFT (n∓1 = prime/
+# prime-power/composite) used to mis-route to Bluestein/recursive and showed RED in the plot.
+const SIZES = [8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 512, 1024, 4096]
 
 # Concrete @noinline batch appliers (CLAUDE.md rule 6: NOT closures — closure indirection would land
 # in the timed region and corrupt the tiny-kernel ratio; plan types are concrete → these devirtualize).
