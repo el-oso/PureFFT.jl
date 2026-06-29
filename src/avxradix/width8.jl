@@ -7,8 +7,19 @@
 # ---- W=8 passes (load/store via V8f; transposes from avxport: avx_transpose8/12_packed(::V8f)) ----
 @inline _L8(b, i) = avx_load_complex8(b, i)
 @inline _S8(b, i, v) = avx_store_complex8!(b, i, v)
+@inline _LP(b, i) = avx_load_partial2(b, i)        # 2-complex (Vec4) load, zero-padded to Vec8
+@inline _SP(b, i, v) = avx_store_partial2!(b, i, v) # store low 2 complex of a Vec8
 bf64_tw_w8(::Type{T}, fwd) where {T} = Vec{8, T}[avx_mixedradix_twiddle_chunk8(T, cs * 4, r, 64, fwd) for cs in 0:1 for r in 1:7]
-mr_twiddles_w8(::Type{T}, R, M, n, fwd) where {T} = Vec{8, T}[avx_mixedradix_twiddle_chunk8(T, c * 4, y, n, fwd) for c in 0:(M ÷ 4 - 1) for y in 1:(R - 1)]
+function mr_twiddles_w8(::Type{T}, R, M, n, fwd) where {T}
+    tw = Vec{8, T}[avx_mixedradix_twiddle_chunk8(T, c * 4, y, n, fwd) for c in 0:(M ÷ 4 - 1) for y in 1:(R - 1)]
+    # v2=1 (2·odd) sizes leave rem = M mod 4 = 2 leftover columns per pass: append ONE extra twiddle chunk
+    # per harmonic covering columns [M-2, M-1] (lanes 0-3 valid; lanes 4-7 = unused cols M, M+1). No-op for
+    # the ÷4-clean kernels (M%4==0) ⇒ byte-identical twiddle tables, no F64/green-size regression.
+    if M % 4 == 2
+        for y in 1:(R - 1); push!(tw, avx_mixedradix_twiddle_chunk8(T, M - 2, y, n, fwd)); end
+    end
+    tw
+end
 
 # Butterfly64 at W=8 (out/inp/scr; out===inp ⇒ in-place via scr). Verified bit-exact vs V4f.
 function butterfly64_w8!(out, inp, scr, base::Int, tw, rot)
@@ -56,11 +67,17 @@ end
     @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c
         r = avx_column_butterfly5(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), _L8(buf,ib+3M), _L8(buf,ib+4M), t0, t1)
         _S8(buf, ib, r[1]); Base.Cartesian.@nexprs 4 j -> _S8(buf, ib + j*M, avx_mul_complex(tw[c*4+j], r[j+1])); end
+    if M % 4 == 2; @inbounds begin; ib = o + (M-2); tc = (M ÷ 4) * 4   # rem=2 tail: 2 leftover columns (v2=1)
+        r = avx_column_butterfly5(_LP(buf,ib), _LP(buf,ib+M), _LP(buf,ib+2M), _LP(buf,ib+3M), _LP(buf,ib+4M), t0, t1)
+        _SP(buf, ib, r[1]); Base.Cartesian.@nexprs 4 j -> _SP(buf, ib + j*M, avx_mul_complex(tw[tc+j], r[j+1])); end; end
 end
 @inline function _trans5_w8!(out, oo, buf, o, ::Val{M}) where {M}
     @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c; ob = oo + 20c
         t = avx_transpose5_packed(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), _L8(buf,ib+3M), _L8(buf,ib+4M))
         Base.Cartesian.@nexprs 5 k -> _S8(out, ob + 4(k-1), t[k]); end
+    if M % 4 == 2; @inbounds begin; ib = o + (M-2); ob = oo + (M-2)*5   # 2R=10 valid complex: 2 full Vec8 + 1 Vec4
+        t = avx_transpose5_packed(_LP(buf,ib), _LP(buf,ib+M), _LP(buf,ib+2M), _LP(buf,ib+3M), _LP(buf,ib+4M))
+        _S8(out, ob, t[1]); _S8(out, ob+4, t[2]); _SP(out, ob+8, t[3]); end; end
 end
 # radix-7 (the lone factor of 7: 2^k·7 sizes 112/224/448, base ÷4 so M stays ÷4 — no partial column).
 @inline function _colbf7_w8!(buf, o, ::Val{M}, tw, t0, t1, t2) where {M}
@@ -91,11 +108,17 @@ end
     @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c
         r = avx_column_butterfly3(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), bf3)
         _S8(buf, ib, r[1]); Base.Cartesian.@nexprs 2 j -> _S8(buf, ib + j*M, avx_mul_complex(tw[c*2+j], r[j+1])); end
+    if M % 4 == 2; @inbounds begin; ib = o + (M-2); tc = (M ÷ 4) * 2   # rem=2 tail: 2 leftover columns (v2=1)
+        r = avx_column_butterfly3(_LP(buf,ib), _LP(buf,ib+M), _LP(buf,ib+2M), bf3)
+        _SP(buf, ib, r[1]); Base.Cartesian.@nexprs 2 j -> _SP(buf, ib + j*M, avx_mul_complex(tw[tc+j], r[j+1])); end; end
 end
 @inline function _trans3_w8!(out, oo, buf, o, ::Val{M}) where {M}
     @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c; ob = oo + 12c
         t = avx_transpose3_packed(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M))
         Base.Cartesian.@nexprs 3 k -> _S8(out, ob + 4(k-1), t[k]); end
+    if M % 4 == 2; @inbounds begin; ib = o + (M-2); ob = oo + (M-2)*3   # 2R=6 valid complex: 1 full Vec8 + 1 Vec4
+        t = avx_transpose3_packed(_LP(buf,ib), _LP(buf,ib+M), _LP(buf,ib+2M))
+        _S8(out, ob, t[1]); _SP(out, ob+4, t[2]); end; end
 end
 
 # ---- W=8 kernel types (reuse Kernel/RPlan/applyplan! + the proc_ip!/proc_oop! alternation) ----
@@ -107,6 +130,32 @@ B64W8(fwd::Bool) = B64W8(Float64, fwd)
 B64W8(::Type{T}, fwd::Bool) where {T} = B64W8{T}(64, bf64_tw_w8(T, fwd), fwd ? _rot90_fwd8(T) : _rot90_inv8(T))
 @inline proc_ip!(k::B64W8, buf, scr) = (@inbounds for f in 0:(length(buf) ÷ 64 - 1); butterfly64_w8!(buf, buf, scr, 64f, k.tw, k.rot); end)
 @inline proc_oop!(k::B64W8, out, inp, scr) = (@inbounds for f in 0:(length(inp) ÷ 64 - 1); butterfly64_w8!(out, inp, out, 64f, k.tw, k.rot); end)
+
+# Butterfly2 at W8 — the v2=1 (2·odd) base: a size-2 DFT [a,b] → [a+b, a-b] (no twiddles, fwd≡inv). Packs
+# 2 instances (4 complex) per Vec{8}; one leftover instance (count = n/2 = odd for 2·odd sizes) handled by a
+# Vec{4} partial. Float32-only (the partial-column path is F32-only). The radix-3/5 passes above it carry
+# M ≡ 2 mod 4 (uniform rem=2) and use the partial-column tails. Verified bit-exact (n=2 DFT is exact).
+const _SGN2_F32 = V8f32((1f0, 1f0, -1f0, -1f0, 1f0, 1f0, -1f0, -1f0))
+@inline function _dft2_pair(v::Vec{8})
+    A = shufflevector(v, Val((0, 1, 0, 1, 4, 5, 4, 5)))   # [a,a,a',a']
+    B = shufflevector(v, Val((2, 3, 2, 3, 6, 7, 6, 7)))   # [b,b,b',b']
+    muladd(_SGN2_F32, B, A)                                # [a+b, a-b, a'+b', a'-b']
+end
+struct B2W8{T} <: Kernel
+    n::Int
+end
+keltype(::B2W8{T}) where {T} = T
+B2W8(::Type{T}, fwd::Bool) where {T} = B2W8{T}(2)
+@inline function proc_ip!(k::B2W8, buf, scr)
+    cnt = length(buf) ÷ 2; np = cnt ÷ 2
+    @inbounds for p in 0:(np-1); _S8(buf, 4p, _dft2_pair(_L8(buf, 4p))); end
+    isodd(cnt) && (@inbounds _SP(buf, 2(cnt-1), _dft2_pair(_LP(buf, 2(cnt-1)))))
+end
+@inline function proc_oop!(k::B2W8, out, inp, scr)
+    cnt = length(inp) ÷ 2; np = cnt ÷ 2
+    @inbounds for p in 0:(np-1); _S8(out, 4p, _dft2_pair(_L8(inp, 4p))); end
+    isodd(cnt) && (@inbounds _SP(out, 2(cnt-1), _dft2_pair(_LP(inp, 2(cnt-1)))))
+end
 
 # Butterfly4 at W8 (register-only — 4 complex = 1 V8 vector; a single size-4 DFT in lanes via _dft4_lane).
 # The 2² base for v2=2 sizes (12=MR3(B4), 36=MR9(B4), …). No twiddles, no scratch.
@@ -468,6 +517,13 @@ function _plan_tree_w8_small(::Type{T}, n::Int, fwd::Bool) where {T}
     v5 = 0; while t % 5 == 0; t ÷= 5; v5 += 1; end
     v7 = 0; while t % 7 == 0; t ÷= 7; v7 += 1; end
     (t == 1 && v7 <= 1) || return nothing                   # not 2·3·5·(≤1)·7-smooth
+    if v2 == 1                                              # 2·odd: rem = M mod 4 = 2 uniformly (partial cols)
+        v7 == 0 || return nothing                           # v2=1 partial path serves 2·3·5-smooth only
+        k1::Kernel = B2W8(T, fwd)                           # B2 base (the lone factor of 2)
+        for _ in 1:v3; k1 = MR3W8(k1, fwd); end             # radix-3 per factor of 3 (M ≡ 2 mod 4 ⇒ rem-2 tail)
+        for _ in 1:v5; k1 = MR5W8(k1, fwd); end             # then radix-5
+        return RPlan(k1)
+    end
     v2 >= 2 || return nothing                               # need a ÷4-clean base ≥ B4W8 (v2≤1 → partial cols)
     base = _pow2_kernel_w8(T, v2, fwd)
     isnothing(base) && return nothing

@@ -550,6 +550,17 @@ end
 @inline function avx_store_complex8!(x::AbstractVector{Complex{Float32}}, i::Int, v::V8f32)
     GC.@preserve x vstore(v, reinterpret(Ptr{Float32}, pointer(x)) + i * 8)
 end
+# Partial 2-complex (Vec{4,Float32} = 16 bytes) load/store for the W=8 partial-column path: v2=1 sizes
+# (2·odd) leave rem = M mod 4 = 2 columns per radix pass. Load reads exactly 2 complex (no overread past
+# the buffer end) into lanes 0-3, ZERO-padding lanes 4-7 (so the reused lane-parallel cb_R / transpose_R
+# produce clean zeros in the discarded upper columns); store writes only the 2 valid complex back.
+@inline function avx_load_partial2(x::AbstractVector{Complex{Float32}}, i::Int)
+    v4 = GC.@preserve x vload(Vec{4, Float32}, reinterpret(Ptr{Float32}, pointer(x)) + i * 8)
+    shufflevector(v4, zero(v4), Val((0, 1, 2, 3, 4, 5, 6, 7)))
+end
+@inline function avx_store_partial2!(x::AbstractVector{Complex{Float32}}, i::Int, v::V8f32)
+    GC.@preserve x vstore(shufflevector(v, Val((0, 1, 2, 3))), reinterpret(Ptr{Float32}, pointer(x)) + i * 8)
+end
 
 # ============================================================================================
 # Float32 8-complex path: V16f32 = Vec{16,Float32} = one 512-bit (zmm) register = 8 interleaved
