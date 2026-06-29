@@ -148,14 +148,20 @@ end
     @test maximum(abs.((p*x) .- fft(x, 2)))/maximum(abs.(fft(x,2))) < 1e-12
 end
 
-@testitem "N-D inv/plan_inv round-trip (PureFFT path)" begin
-    using PureFFT, FFTW
+@testitem "N-D inv/plan_inv + ifft (ScaledPlan) round-trip (PureFFT path)" begin
+    using PureFFT, FFTW, AbstractFFTs
     tol(::Type{Float64})=1e-12; tol(::Type{Float32})=1f-4
     for T in (Float64, Float32), (sz, region) in (((8,5), (1,2)), ((6,4,5), (1,3)), ((8,96), (1,2)), ((4,4,48), (2,3)))
         x = randn(Complex{T}, sz...)
         pf = PureFFT._pure_plan_fft_nd(x, region; inverse=false)
-        # inv(pf) returns _NDScaledPlan wrapping inverse NDPlan scaled by 1/∏sz[region]
+        # inv(pf) returns an AbstractFFTs.ScaledPlan over the inverse NDPlan, scaled by 1/∏sz[region]
         @test maximum(abs.(inv(pf) * (pf * x) .- x)) < tol(T)
+        # the ifft/plan_ifft path: ScaledPlan must be able to wrap a PureFFT NDPlan (regressed when
+        # NDPlan was not <: AbstractFFTs.Plan — ScaledPlan(::NDPlan,…) threw MethodError → ifft failed)
+        pb = PureFFT._pure_plan_fft_nd(x, region; inverse=true)
+        sp = AbstractFFTs.ScaledPlan(pb, AbstractFFTs.normalization(T, sz, region))
+        @test pf isa AbstractFFTs.Plan{Complex{T}}
+        @test maximum(abs.(sp * (pf * x) .- x)) < tol(T)
     end
 end
 

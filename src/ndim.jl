@@ -2,7 +2,7 @@
 # D = number of transformed dims (type parameter so apply @generated-unrolls over it — inner
 # `plans` tuple is heterogeneous, so runtime indexing would box, CLAUDE.md rule #1). N = array rank.
 
-struct NDPlan{T, D, P, N} <: AbstractFFTPlan{T}
+struct NDPlan{T, D, P, N} <: AbstractFFTs.Plan{Complex{T}}
     dims::NTuple{D, Int}         # transformed dims, sorted + deduped
     plans::P                     # NTuple{D} of inner 1-D plans
     sz::NTuple{N, Int}           # full array shape
@@ -399,17 +399,10 @@ function LinearAlgebra.mul!(y::AbstractArray, p::NDPlan, x::AbstractArray)
     apply_unnormalized!(p, copyto!(y, x))
 end
 
-# NDPlan is not <: AbstractFFTs.Plan, so ScaledPlan(::NDPlan,...) would fail (constructor requires Plan{T}).
-# ponytail: minimal scaled-plan wrapper — add AbstractFFTs.Plan inheritance to NDPlan if ecosystem compat needed.
-struct _NDScaledPlan{T, P}
-    plan::P
-    scale::T
-end
-Base.:*(sp::_NDScaledPlan, x::AbstractArray) = sp.scale .* (sp.plan * x)
-
+# NDPlan <: AbstractFFTs.Plan, so the generic ifft/plan_ifft (ScaledPlan over plan_bfft) just works.
 function AbstractFFTs.plan_inv(p::NDPlan{T}) where {T}
     ip = _pure_plan_fft_nd(Array{Complex{T}}(undef, p.sz...), p.dims; inverse=!p.inverse)
-    _NDScaledPlan(ip, AbstractFFTs.normalization(real(T), p.sz, p.dims))
+    AbstractFFTs.ScaledPlan(ip, AbstractFFTs.normalization(real(T), p.sz, p.dims))
 end
 
 Base.inv(p::NDPlan) = AbstractFFTs.plan_inv(p)
