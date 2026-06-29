@@ -57,11 +57,17 @@ end
     @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c
         r = avx_column_butterfly9(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), _L8(buf,ib+3M), _L8(buf,ib+4M), _L8(buf,ib+5M), _L8(buf,ib+6M), _L8(buf,ib+7M), _L8(buf,ib+8M), tw1, tw2, tw3, bf3)
         _S8(buf, ib, r[1]); Base.Cartesian.@nexprs 8 j -> _S8(buf, ib + j*M, avx_mul_complex(tw[c*8+j], r[j+1])); end
+    if M % 4 == 2; @inbounds begin; ib = o + (M-2); tc = (M ÷ 4) * 8   # rem=2 tail: 2 leftover columns (v2=1)
+        r = avx_column_butterfly9(_LP(buf,ib), _LP(buf,ib+M), _LP(buf,ib+2M), _LP(buf,ib+3M), _LP(buf,ib+4M), _LP(buf,ib+5M), _LP(buf,ib+6M), _LP(buf,ib+7M), _LP(buf,ib+8M), tw1, tw2, tw3, bf3)
+        _SP(buf, ib, r[1]); Base.Cartesian.@nexprs 8 j -> _SP(buf, ib + j*M, avx_mul_complex(tw[tc+j], r[j+1])); end; end
 end
 @inline function _trans9_w8!(out, oo, buf, o, ::Val{M}) where {M}
     @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c; ob = oo + 36c
         t = avx_transpose9_packed(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), _L8(buf,ib+3M), _L8(buf,ib+4M), _L8(buf,ib+5M), _L8(buf,ib+6M), _L8(buf,ib+7M), _L8(buf,ib+8M))
         Base.Cartesian.@nexprs 9 k -> _S8(out, ob + 4(k-1), t[k]); end
+    if M % 4 == 2; @inbounds begin; ib = o + (M-2); ob = oo + (M-2)*9   # 2R=18 valid complex: 4 full Vec8 + 1 Vec4
+        t = avx_transpose9_packed(_LP(buf,ib), _LP(buf,ib+M), _LP(buf,ib+2M), _LP(buf,ib+3M), _LP(buf,ib+4M), _LP(buf,ib+5M), _LP(buf,ib+6M), _LP(buf,ib+7M), _LP(buf,ib+8M))
+        _S8(out, ob, t[1]); _S8(out, ob+4, t[2]); _S8(out, ob+8, t[3]); _S8(out, ob+12, t[4]); _SP(out, ob+16, t[5]); end; end
 end
 @inline function _colbf5_w8!(buf, o, ::Val{M}, tw, t0, t1) where {M}
     @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c
@@ -520,7 +526,8 @@ function _plan_tree_w8_small(::Type{T}, n::Int, fwd::Bool) where {T}
     if v2 == 1                                              # 2·odd: rem = M mod 4 = 2 uniformly (partial cols)
         v7 == 0 || return nothing                           # v2=1 partial path serves 2·3·5-smooth only
         k1::Kernel = B2W8(T, fwd)                           # B2 base (the lone factor of 2)
-        for _ in 1:v3; k1 = MR3W8(k1, fwd); end             # radix-3 per factor of 3 (M ≡ 2 mod 4 ⇒ rem-2 tail)
+        for _ in 1:(v3 ÷ 2); k1 = MR9W8(k1, fwd); end       # radix-9 per pair of 3s (preferred; fewer passes)
+        isodd(v3) && (k1 = MR3W8(k1, fwd))                  # lone factor of 3 (M ≡ 2 mod 4 ⇒ rem-2 tail)
         for _ in 1:v5; k1 = MR5W8(k1, fwd); end             # then radix-5
         return RPlan(k1)
     end
