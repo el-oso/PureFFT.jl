@@ -75,7 +75,9 @@ _r2r_inner_size(::Type{RODFT10_T}, n) = n
 _r2r_inner_size(::Type{RODFT01_T}, n) = n
 _r2r_inner_size(::Type{REDFT00_T}, n) = 2 * (n - 1)
 _r2r_inner_size(::Type{RODFT00_T}, n) = 2 * (n + 1)
-_r2r_inner_size(::Type, n) = 0                          # IV / unknown: never codelet
+_r2r_inner_size(::Type{REDFT11_T}, n) = n               # DCT-IV / DST-IV: full size-N complex codelet
+_r2r_inner_size(::Type{RODFT11_T}, n) = n
+_r2r_inner_size(::Type, n) = 0                          # unknown: never codelet
 
 # Route to the @generated codelet only for the slow small-N kinds (DCT/DST II/III/I — DCT/DST-IV's
 # complex route is already competitive small), and only when the unrolled inner DFT stays smooth
@@ -85,6 +87,11 @@ _r2r_inner_size(::Type, n) = 0                          # IV / unknown: never co
 #  · Inverse kinds (III/DST-III) use a full size-N complex DFT (≈2× the work of the real route) so
 #    they only win for N ≤ 32; above that the FFT-wrap route is already at/near parity — keep it.
 # Invalid sizes fall through to `_build_r2r` which returns the proper size Err.
+# DCT-IV/DST-IV: the full size-N complex codelet beats the FFT-wrap only at the very smallest N. Measured
+# PF/FFTW (codelet): n=12 → 1.38 (DCT-IV) / 3.87 (DST-IV) ✓; n=24 → 0.82 (≈ wrap's 0.83 — FFTW's fused
+# n=24 hand codelet wins either way, a genuine floor); n=32 → 0.72 (codelet loses, wrap is better); n≥48
+# the wrap already wins ~1.8×. So the codelet only helps n≤12. ponytail: ≤12 is the proven-win boundary.
+const _R2R_IV_CODELET_MAX = 12
 _r2r_codelet_fwd(K) = K in (REDFT10_T, RODFT10_T, REDFT00_T, RODFT00_T)
 function _use_r2r_codelet(kind::R2RKind, n::Int)
     K = typeof(kind)
@@ -94,8 +101,10 @@ function _use_r2r_codelet(kind::R2RKind, n::Int)
     _max_prime_factor(m) <= 7 || return false
     if _r2r_codelet_fwd(K)
         return iseven(m) && (m ÷ 2) <= 32         # half-size real pack: even inner size, DFT ≤ 32
+    elseif K === REDFT11_T || K === RODFT11_T
+        return n <= _R2R_IV_CODELET_MAX           # DCT-IV/DST-IV: tiny-N only (wrap already wins ≥48)
     else
-        return n <= 32                            # full-complex inverse codelet
+        return n <= 32                            # full-complex inverse codelet (III)
     end
 end
 
@@ -603,6 +612,27 @@ function _r2r_codelet_body(K, N::Int, Tt)
         for k in 0:(N - 1)
             push!(stmts, :(@inbounds y[$(k + 1)] = -$(Xi[k + 2])))            # y_k = −Im(O_{k+1})
         end
+    elseif K === REDFT11_T || K === RODFT11_T        # DCT-IV / DST-IV: reorder+sign+pre-twiddle → size-N FFT → post
+        sine = K === RODFT11_T                         # DST-IV: front samples negated, take Im (else Re)
+        preR(p) = Tt(real(cispi(-p / N))); preI(p) = Tt(imag(cispi(-p / N)))   # pre_p = e^{−iπp/N}
+        insr = Vector{Any}(undef, N); insi = Vector{Any}(undef, N)
+        emit = (p, v) -> (rs = Symbol("p", p); is = Symbol("q", p);
+            push!(stmts, :($rs = $(preR(p)) * $v)); push!(stmts, :($is = $(preI(p)) * $v));
+            insr[p + 1] = rs; insi[p + 1] = is)
+        neg(s) = Expr(:call, :-, s)                    # build `-s` without `:(…)` (avoids the `? :(` clash)
+        for m in 0:((N + 1) ÷ 2 - 1)                   # even samples → front (DST-IV negates)
+            emit(m, sine ? neg(g[2m + 1]) : g[2m + 1])
+        end
+        for m in 0:(N ÷ 2 - 1)                         # odd samples NEGATED → reversed tail
+            emit(N - 1 - m, neg(g[2m + 2]))
+        end
+        Cr, Ci = _gen_dft_soa_mixed!(stmts, insr, insi, N, -1, Tt, ctr, "w")
+        for k in 0:(N - 1)
+            pr = Tt(real(cispi(-(2k + 1) / (4N)))); pii = Tt(imag(cispi(-(2k + 1) / (4N))))  # post_k
+            yi = :(muladd($(Tt(2) * pr), $(Ci[k + 1]), $(Tt(2) * pii) * $(Cr[k + 1])))   # 2·Im(post·C)
+            yr = :(muladd($(Tt(2) * pr), $(Cr[k + 1]), $(Tt(-2) * pii) * $(Ci[k + 1])))  # 2·Re(post·C)
+            push!(stmts, :(@inbounds y[$(k + 1)] = $(sine ? yi : yr)))
+        end
     else
         error("no r2r codelet for kind $K")
     end
@@ -627,6 +657,8 @@ _r2r_inv(::Type{RODFT10_T}, n, ::Type{T}) where {T} = (RODFT01, T(1) / (2n))
 _r2r_inv(::Type{RODFT01_T}, n, ::Type{T}) where {T} = (RODFT10, T(1) / (2n))
 _r2r_inv(::Type{REDFT00_T}, n, ::Type{T}) where {T} = (REDFT00, T(1) / (2 * (n - 1)))
 _r2r_inv(::Type{RODFT00_T}, n, ::Type{T}) where {T} = (RODFT00, T(1) / (2 * (n + 1)))
+_r2r_inv(::Type{REDFT11_T}, n, ::Type{T}) where {T} = (REDFT11, T(1) / (2n))   # self-inverse up to 2N
+_r2r_inv(::Type{RODFT11_T}, n, ::Type{T}) where {T} = (RODFT11, T(1) / (2n))
 function Base.inv(p::R2RCodeletPlan{K, T, N}) where {K, T, N}
     ik, sc = _r2r_inv(K, N, T)
     return ScaledR2RPlan(plan_r2r(Vector{T}(undef, N), ik), sc)

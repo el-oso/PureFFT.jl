@@ -297,6 +297,28 @@ end
     end
 end
 
+@testitem "F32 DCT-IV/DST-IV tiny-N codelet parity vs FFTW ≥ 0.96×" tags=[:perf] begin
+    using PureFFT, FFTW, BenchmarkTools, Statistics, LinearAlgebra
+    # DCT-IV/DST-IV (REDFT11/RODFT11) had no @generated codelet — they wrapped a size-N complex FFT and
+    # lost at tiny N (n=12: 0.80) to FFTW's fused hand codelets. The new full-complex r2r-IV codelet
+    # (src/r2r.jl, gated n≤12) lifts n=12 (DCT-IV 1.38, DST-IV 3.87). n=24 stays a proven floor: the
+    # codelet (0.82) ≈ the wrap (0.83) — FFTW's fused n=24 codelet wins either way (tracked, not assumed).
+    med(b) = median(b.times)
+    ratio(pk, fk, n) = (x = randn(Float32, n); pp = plan_r2r(x, pk); pf = FFTW.plan_r2r(copy(x), fk; flags = FFTW.MEASURE); y = similar(x);
+        med(@benchmark $pf * z setup = (z = copy($x))) / med(@benchmark PureFFT._apply!($pp, $y, $x)))
+    if Base.JLOptions().check_bounds == 0
+        @test ratio(REDFT11, FFTW.REDFT11, 12) ≥ 0.96
+        @test ratio(RODFT11, FFTW.RODFT11, 12) ≥ 0.96
+        @test_broken ratio(REDFT11, FFTW.REDFT11, 24) ≥ 0.96   # FFTW fused n=24 codelet floor (both routes ≈0.82)
+        @test_broken ratio(RODFT11, FFTW.RODFT11, 24) ≥ 0.96
+    else
+        for (pk, fk, n) in ((REDFT11, FFTW.REDFT11, 12), (RODFT11, FFTW.RODFT11, 12),
+                            (REDFT11, FFTW.REDFT11, 24), (RODFT11, FFTW.RODFT11, 24))
+            @test_skip ratio(pk, fk, n) ≥ 0.96
+        end
+    end
+end
+
 @testitem "r2r all 8 kinds — public API bit-exact vs FFTW" begin
     using PureFFT, FFTW, LinearAlgebra
     kinds = ((REDFT00,FFTW.REDFT00),(REDFT01,FFTW.REDFT01),(REDFT10,FFTW.REDFT10),(REDFT11,FFTW.REDFT11),
