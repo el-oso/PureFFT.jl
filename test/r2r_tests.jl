@@ -290,8 +290,11 @@ end
             224, 240, 360, 448, 480, 720,
             54, 90, 162, 270, 486, 810,                  # v2=1 (2·odd) — W=8 partial-column subsystem
             98,                                          # v2=1 · 7² — radix-7 rem=2 tail (0.22→1.29)
-            21, 25, 27, 49, 63, 81, 105, 225, 343, 1225) # v2=0 odd {3,5,7}-smooth — B1 base + odd-M
+            21, 25, 27, 49, 63, 81, 105, 225, 343, 1225, # v2=0 odd {3,5,7}-smooth — B1 base + odd-M
                                                          # rem∈{1,3} tails (49=7² is the rfft-98/DST-I-48 inner)
+            11, 13, 19, 95, 22, 26, 190)                 # D2 bare-prime BP-W8 leaf (11/13/19) + radix-2
+                                                         # (MR2W8) for 2·P — 11=1.23 13=1.14 19=2.51 95=2.53
+                                                         # 22=1.10 26=0.99 190=2.45 (FFTW; W8≫Codelet/Bluestein)
     floor_sizes = (12, 24, 48, 120, 384, 1500, 3000,     # tiny-L1 (12/24/48/384, FFTW/rust hand codelets win)
                                                          # + radix-5 chain/high-power (120/1500/3000)
                    7, 9, 15, 75)                         # v2=0: tiny-L1 primes 7/9/15 (autoplan→CodeletPlan,
@@ -330,17 +333,17 @@ end
     using PureFFT, FFTW, BenchmarkTools, Statistics, LinearAlgebra
     # DCT-I/DST-I route their inner real FFT (plan_prfft, size 2(n∓1)) whose half-size complex inner is a
     # v2=0 ODD prime/prime-power. DST-I n=48 → rfft-98 → complex-49=7²: now served by the W=8 v2=0
-    # padding-trick subsystem (B1 base + odd-M rem∈{1,3} tails), 0.80→1.63. The remaining sub-gate sizes
-    # need bare primes 11/13/19 (no radix to pad-tail): DCT-I n=12 (cplx-11), DST-I n=12 (cplx-13),
-    # DCT-I n=96 (cplx-95=5·19) — tracked @test_broken (tiny-L1 / BP-W8-leaf work, both routes measured).
+    # padding-trick subsystem (B1 base + odd-M rem∈{1,3} tails), 0.80→1.63. The bare primes 11/13/19 (no
+    # radix to pad-tail) are now served by the D2 BP-W8 direct prime leaf: DCT-I n=12 (cplx-11, 0.56→1.21),
+    # DST-I n=12 (cplx-13, 0.68→1.84), DCT-I n=96 (cplx-95=5·19, 0.74→2.80) — all clear the gate.
     med(b) = median(b.times)
     ratio(pk, fk, n) = (x = randn(Float32, n); pp = plan_r2r(x, pk); pf = FFTW.plan_r2r(copy(x), fk; flags = FFTW.MEASURE); y = similar(x);
         med(@benchmark $pf * z setup = (z = copy($x))) / med(@benchmark mul!($y, $pp, $x)))
     if Base.JLOptions().check_bounds == 0
         @test ratio(RODFT00, FFTW.RODFT00, 48) ≥ 0.96            # inner cplx-49=7² — W=8 padding trick
-        @test_broken ratio(REDFT00, FFTW.REDFT00, 12) ≥ 0.96    # inner cplx-11 (bare prime, tiny-L1)
-        @test_broken ratio(RODFT00, FFTW.RODFT00, 12) ≥ 0.96    # inner cplx-13 (bare prime, tiny-L1)
-        @test_broken ratio(REDFT00, FFTW.REDFT00, 96) ≥ 0.96    # inner cplx-95=5·19 (bare prime 19)
+        @test ratio(REDFT00, FFTW.REDFT00, 12) ≥ 0.96           # inner cplx-11 (bare prime — D2 BP-W8 leaf, 0.56→1.21)
+        @test ratio(RODFT00, FFTW.RODFT00, 12) ≥ 0.96           # inner cplx-13 (bare prime — D2 BP-W8 leaf, 0.68→1.84)
+        @test ratio(REDFT00, FFTW.REDFT00, 96) ≥ 0.96           # inner cplx-95=5·19 (bare prime 19 — D2, 0.74→2.80)
     else
         for (pk, fk, n) in ((RODFT00, FFTW.RODFT00, 48), (REDFT00, FFTW.REDFT00, 12),
                             (RODFT00, FFTW.RODFT00, 12), (REDFT00, FFTW.REDFT00, 96))

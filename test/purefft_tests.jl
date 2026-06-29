@@ -245,8 +245,10 @@ end
         for n in (768, 12, 24, 36, 40, 48, 96, 112, 192, 240, 360, 448, 480, 720,
                   6, 18, 54, 90, 162, 270, 486, 810,
                   14, 98,                                    # v2=1 · 7^k (2·7, 2·7²) — radix-7 rem=2 tail
-                  7, 9, 21, 25, 27, 49, 63, 75, 81, 105, 225, 343, 441, 1225)  # v2=0 odd {3,5,7}-smooth:
+                  7, 9, 21, 25, 27, 49, 63, 75, 81, 105, 225, 343, 441, 1225,  # v2=0 odd {3,5,7}-smooth:
                                                              # B1 base + odd-M rem∈{1,3} tails (49=7² keystone)
+                  11, 13, 17, 19, 95, 22, 26, 190)           # D2: bare-prime BP-W8 leaf (11/13/19) +
+                                                             # radix-2 (MR2W8) for the 2·P composites
             pf = PureFFT.AvxMixedRadixPlanW8(ComplexF32, n)
             @test pf isa PureFFT.AvxMixedRadixPlan
             x = randn(ComplexF32, n); y = copy(x); pfft!(y, pf)        # forward (unnormalized) = fft
