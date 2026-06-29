@@ -24,6 +24,27 @@ engineering. (The remaining gap is a ~0.85–0.92× floor on 3-heavy / radix-9-1
 > Historical note: an early `REPORT.md` concluded the 2× was unproven; it predates the radix-4 AVX
 > engine and the faithful port and is superseded by the current results.
 
+## Where this is headed
+
+PureFFT began as an investigation — *can pure Julia match FFTW/rustfft?* The answer turned out to be
+**yes**, and that changes what it can be. The goal now is to **mature it into a general-purpose FFT
+library that is also a showcase of what Julia makes possible**:
+
+> A **general-purpose, pure-Julia, MIT-licensed, dependency-free** FFT that **matches FFTW and RustFFT in
+> speed** — and does what an ahead-of-time C/Rust library structurally *cannot*: **on-demand codelet
+> specialization** (`@generated` / runtime codegen), **one type-generic kernel set** across
+> `Float32`/`Float64`, and **`AbstractFFTs`-native composability**.
+
+Two of those are a concrete, practical reason to reach for PureFFT *today*, independent of the showcase:
+it is **pure Julia with no binary dependency** and **MIT-licensed**, where FFTW is **GPL** (via `FFTW.jl`)
+— which rules FFTW out for some permissively-licensed and commercial users.
+
+The showcase features and the library features are mostly the **same investment** — robust any-size
+coverage, type-generic kernels, and ecosystem composability serve both at once. The one piece that is
+"library, not showcase" is **multi-threading**: a real, scheduled milestone (see `ROADMAP.md`), but not
+first. The flagship next step is the **Julia-native codelet generator** — the genfft analogue only Julia
+can build.
+
 ## Layout
 
 ```

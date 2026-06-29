@@ -3,6 +3,25 @@
 Status + planned work. This is the canonical, checked-in roadmap (human- and agent-readable). For the
 "why/how" of finished work see git history, `docs/src/performance.md`, and `docs/src/benchmarks.md`.
 
+## Vision / positioning
+
+PureFFT started as an investigation (*can pure Julia match FFTW/rustfft?* — **yes**). The goal now:
+**mature it into a general-purpose FFT library that also showcases Julia.** This is the filter for every
+roadmap decision below — *does this serve general-purpose use, the Julia showcase, or (ideally) both?*
+
+> A **general-purpose, pure-Julia, MIT-licensed, dependency-free** FFT that **matches FFTW and RustFFT**
+> while doing what an ahead-of-time C/Rust library structurally can't: **on-demand codelet
+> specialization, type-generic kernels, `AbstractFFTs`-native composability.**
+
+- **Practical differentiator (true today):** pure Julia, no binary dependency, **MIT** vs FFTW's **GPL**
+  (`FFTW.jl` wraps a GPL binary) — a real reason to choose PureFFT regardless of the showcase.
+- **Showcase ≈ library:** the codelet generator, type-generic kernels, and the AbstractFFTs-native API
+  are *both* Julia flexes *and* general-purpose capabilities — mostly one investment, not two.
+- **The one separable piece is multi-threading** — required for "general-purpose," but a byproduct of no
+  showcase feature, so it's a deliberate scheduled milestone (below), after the generator prototype.
+- **Honest cost:** general-purpose is a forever commitment (the full input space becomes a permanent
+  test/maintenance surface) and a multi-year arc; the strict parity-gate culture is what makes it tractable.
+
 ## Where it stands today
 
 - **Power-of-two**: AVX-512 (`Vec{8,Float64}`) radix-4 engine for the bulk; the **odd-power gap** (512=4⁴·2,
@@ -188,10 +207,12 @@ against FFTW's original target. **Scope it deliberately** (its own brainstorm/sp
     floor, same class as F64 128²).
   - Spec: `docs/superpowers/specs/2026-06-27-ndim-fft-design.md`; bench: `bench/run_compare_ndim.jl` +
     `bench/run_compare_rndim.jl`.
-- **Multi-threading** — single-thread only (deliberate for the kernel investigation; a real library wants
-  threads). **DEFERRED below the ⭐ flagship codelet generator** (user priority): MT is catch-up
-  (FFTW/Rust already have it; mechanical), whereas the codelet generator is the Julia-unique
-  differentiator. Pick MT up after the generator, or when a concrete large-transform workload demands it.
+- **Multi-threading — a REQUIRED general-purpose milestone, scheduled after the generator prototype.**
+  Single-thread only today (deliberate for the kernel investigation). MT is the one general-purpose
+  requirement that is *not* a showcase byproduct (FFTW/Rust already have it; it's relatively mechanical —
+  thread the outer/batch loops, handle plan reuse / false sharing / thread safety). It is on the critical
+  path to "general-purpose," but sequenced after the ⭐ flagship codelet generator (which is foundational
+  and the Julia differentiator) — or pulled forward if a concrete large-transform workload demands it.
 - **`autoplan` returns a 7-member `Union`, not a concrete type** — runtime kernel selection (the
   plan-constructor exception to "concrete returns"; one dispatch per `apply`, amortized over the transform).
   The pow2 `AutoPlan{T, typeof(best)}` wrapper widens its `T`, putting a bare `AutoPlan` in the union —
