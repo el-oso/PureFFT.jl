@@ -273,6 +273,28 @@ end
     end
 end
 
+@testitem "F32 non-pow2 complex parity vs FFTW ≥ 0.96×" tags=[:perf] begin
+    using PureFFT, FFTW, BenchmarkTools, Statistics
+    # Float32 non-pow2 (non-W8-clean) sizes routed through the new Vec{8,Float32} small-base W=8 tree
+    # (B16/B32/B64W8 base + radix-3/5/9). Each was 0.32–0.50× before (scalar recursive/codelet fallback,
+    # FFTW-F32 ≈ 2× F64); now ≥0.96× (fair env; canonical run_compare_f32 bench). Below-gate sizes are
+    # tracked, not hidden: tiny L1 sizes (48/384) where FFTW/rust's hand codelets win, factor-7
+    # (112/224/448: no radix-7 W=8 pass), v2<4 (90/360/3000: no B8W8 base) — all REMAINING work.
+    med(b) = median(b.times)
+    ratio(n) = (x = randn(ComplexF32, n);
+        pp = plan_pfft(ComplexF32, n); pf = FFTW.plan_fft!(copy(x); flags = FFTW.MEASURE);
+        med(@benchmark $pf * y setup = (y = copy($x))) / med(@benchmark PureFFT.apply_unnormalized!($pp, z) setup = (z = copy($x))))
+    pass = (80, 96, 160, 192, 240, 480, 720)             # 2^k·{3,5,3·5}, v2≥4 — clear the gate (canonical bench)
+    floor_sizes = (48, 384)                              # tiny L1 sizes — FFTW/rust hand codelets win (0.87/0.95,
+                                                         # still ~2× the old scalar fallback; best PureFFT option)
+    if Base.JLOptions().check_bounds == 0
+        for n in pass; @test ratio(n) ≥ 0.96; end
+        for n in floor_sizes; @test_broken ratio(n) ≥ 0.96; end
+    else
+        for n in (pass..., floor_sizes...); @test_skip ratio(n) ≥ 0.96; end
+    end
+end
+
 @testitem "r2r all 8 kinds — public API bit-exact vs FFTW" begin
     using PureFFT, FFTW, LinearAlgebra
     kinds = ((REDFT00,FFTW.REDFT00),(REDFT01,FFTW.REDFT01),(REDFT10,FFTW.REDFT10),(REDFT11,FFTW.REDFT11),
