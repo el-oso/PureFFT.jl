@@ -136,12 +136,16 @@ against FFTW's original target. **Scope it deliberately** (its own brainstorm/sp
   transform. Large effort and RISKY: column-packing wins on the *many* sizes where it's used, so this is a
   deliberate separate project (brainstorm/scope first), not a grind for three sizes. Would also help other
   shuffle-bound non-pow2 (radix-9/12 vs rust).
-- **Non-pow2 fast-path coverage gaps (FIXABLE — from the slow-backend audit).** `plan_tree` rejects some
-  smooth sizes, so `autoplan` falls to the best slow option (Recursive/four-step/Bluestein) and lands at the
-  "fell to slow generic" 0.2–0.6× signature (NOT an architectural floor). Found gaps (pinned PF/FFTW):
-  **2^a·7²** (98=0.33, 196=0.39, 294=0.57 — `plan_tree` requires `p7≤1`; fix = B49 in the even path, e.g.
-  98=MR2(B49)); **small 2^a·13** (26=0.28, 52=0.40, 78=0.21 — radix-2-base gap, same class as pre-Phase-E
-  250/500); **13²** (169=0.30). Phase-E-style kernel additions; each is "add a kernel," not a router change.
+- **Non-pow2 fast-path coverage gaps (from the slow-backend audit) — DONE.** `plan_tree` rejected some
+  smooth sizes, so `autoplan` fell to the best slow option (0.2–0.6× — "fell to slow generic," NOT an
+  architectural floor). All closed (pinned PF/FFTW before→after): **2^a·7²** 98 0.33→1.40 (MR2(B49)),
+  196 0.39→1.18, 294 0.57→1.19, 588 →1.10 (relaxed the `p7≤1` gate + an odd-safe even-izer + `_carry_even`
+  helper, reusing the B49 7² codelet); **2^a·13** 26 0.28→1.45, 52 0.40→1.11, 78 0.21→1.19 (a new trivial
+  **B2** leaf so the 13 rides the fast `avx_column_butterfly13` via MR13(B2) — the prescribed BP13+MR2
+  route measured below gate, so per "floors are often bugs" a faster mechanism was substituted);
+  **13²** 169 0.30→1.11, 338 →1.07 (new radix-13 odd-M tail `_colbf13_oddtail!`, analogous to radix-5/7,
+  `isodd(M)`-guarded so even-M MR13 stays byte-identical — 65520 unchanged at 1.09). Bit-exact, 0 test fail,
+  no regression. PF now beats FFTW *and* RustFFT on every former gap size.
 - **Slow-backend audit verdict — `RecursiveMixedRadixPlan` STAYS; no guard test.** `autoplan` is a *timed
   competition* (it times `codelet` / four-step-or-recursive / Avx / W8 and keeps the `argmin`), so Recursive
   is selected only when it genuinely times fastest — never silently misrouted. Dropping it would force a
