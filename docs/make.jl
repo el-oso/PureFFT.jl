@@ -17,6 +17,7 @@ makedocs(;
         "Home" => "index.md",
         "Guide" => "guide.md",
         "Manual (FFTW map)" => "manual.md",
+        "Codelet Generator (KB)" => "codelet-generator.md",
         "Performance" => "performance.md",
         "Benchmarks" => "benchmarks.md",
     ],

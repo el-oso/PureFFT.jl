@@ -15,7 +15,10 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 TrimCheck = "f940d764-e397-4179-96e0-76ce55cfe39b"
 
 [sources]
-StrictMode = {rev = "master", url = "https://github.com/el-oso/StrictMode.jl"}
+# DEV (feat/codelet-generator): consume the in-moat local checkout so StrictMode improvements (the
+# co-deliverable) flow into PureFFT's tests. REVERT to the {rev,url} git source before merging to master
+# (the path is machine-specific). Original: StrictMode = {rev = "master", url = "https://github.com/el-oso/StrictMode.jl"}
+StrictMode = {path = "../../StrictMode.jl"}
 
 [preferences.StrictMode]
 analysis = "full"
