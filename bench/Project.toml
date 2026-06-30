@@ -17,9 +17,7 @@ TrimCheck = "f940d764-e397-4179-96e0-76ce55cfe39b"
 TypeContracts = "c7a3f1e2-84b5-4d69-9e0a-1f2b3c4d5e6f"
 
 [sources]
-# DEV (feat/codelet-generator): in-moat local checkout for the StrictMode co-deliverable. REVERT to the
-# {rev,url} git source before merging. Original: StrictMode = {rev = "master", url = "https://github.com/el-oso/StrictMode.jl"}
-StrictMode = {path = "../../StrictMode.jl"}
+StrictMode = {rev = "master", url = "https://github.com/el-oso/StrictMode.jl"}
 
 [preferences.StrictMode]
 analysis = "fast"
