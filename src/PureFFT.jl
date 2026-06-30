@@ -44,12 +44,24 @@ include("ndim_batched.jl")
 include("ndim.jl")
 include("ndim_real.jl")
 
-# Amortize the fully-unrolled P² codelets' superlinear LLVM compile (P=11..31 cost 0.3–6.4 s each at
-# first use) into the precompile cache. PrecompileTools (not bare `precompile()`) because it caches the
-# generated NATIVE code, which is exactly what these @generated kernels need → interactive first-use ≈ 0.
+# Amortize the fully-unrolled P² codelets' superlinear LLVM compile into the precompile cache (cost moves
+# off interactive first-use → ~0). PrecompileTools (not bare `precompile()`) caches the generated NATIVE
+# code, which is what these @generated kernels need. Compile cost grows fast with P (large P² dominate),
+# so the PRECOMPILED set is capped by a Preferences key. MEASURED cumulative precompile time at each
+# cutoff (`Base.compilecache`, this machine), on top of a ~2.7 s no-workload base:
+#     cutoff P:   (none)   19       23       29       31
+#     precompile: 2.6 s    10.0 s   15.1 s   25.8 s   40.3 s
+# Default = 31 (full eligible family; ~40 s added fits the ≤60 s budget — every routed P² then JIT-free).
+# Lower it for faster precompile — rarer P² then compile on first use (correct regardless: the autotune
+# invariant fix never routes to a slower plan). It only controls which eligible sizes are PRECOMPILED;
+# GENPP_MAX_P (autotune.jl) is the separate ELIGIBILITY cap. Set+recompile with:
+#   using Preferences; set_preferences!(PureFFT, "genpp_precompile_max_p" => 19)
 using PrecompileTools: @compile_workload
+using Preferences: @load_preference
+const _GENPP_PRECOMPILE_MAX_P = @load_preference("genpp_precompile_max_p", 31)::Int
 @compile_workload begin
     for P in (11, 13, 17, 19, 23, 29, 31)
+        P <= _GENPP_PRECOMPILE_MAX_P || continue
         n = P * P
         # gen_pp_codelet!{H,M} is keyed on tuple TYPES (H=(P-1)/2, M=P-1), identical fwd/inv — so the
         # forward specialization is the same native code the inverse plan reuses. One direction suffices.

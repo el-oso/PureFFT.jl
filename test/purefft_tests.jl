@@ -236,6 +236,8 @@ end
         @test PureFFT._gen_pp_prime(961) == 31
         # P=37/41/43 (capped) fall back to their prior route — never routed to a slower GenPP plan
         @test PureFFT.autoplan(ComplexF64, 1849) isa PureFFT.BluesteinPlan
+        # precompile-set cutoff (Preferences key `genpp_precompile_max_p`) defaults to the eligibility cap
+        @test PureFFT._GENPP_PRECOMPILE_MAX_P == 31
     end
     @testset "hot path is dispatch-free + alloc-free" begin
         x = randn(ComplexF64, 289)
