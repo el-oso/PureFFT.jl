@@ -48,33 +48,37 @@ end
 # ---- leaf: Butterfly25 (5x5) / Butterfly49 (7x7) — direct prime-power DFT codelets, in-register, no
 # scratch. The 5²/7² bases that root the radix-5/7 trees: 125=MR5(B25), 625=MR5²(B25), 343=MR7(B49). ----
 struct B25 <: Kernel
-    n::Int; tw1::NTuple{4, V4f}; tw2::NTuple{4, V4f}; t0::V4f; t1::V4f; t0lo::V2f; t1lo::V2f
+    n::Int
+    twchunk::NTuple{2, NTuple{4, V4f}}
+    twcol::NTuple{2, V4f}
+    twcol_lo::NTuple{2, V2f}
 end
 function B25(fwd::Bool)
-    t0 = avx_broadcast_twiddle(1, 5, fwd); t1 = avx_broadcast_twiddle(2, 5, fwd)
-    tw1, tw2 = bf25_twiddles(fwd)
-    B25(25, tw1, tw2, t0, t1, avx_lo(t0), avx_lo(t1))
+    twcol = ntuple(a -> avx_broadcast_twiddle(a, 5, fwd), 2)
+    B25(25, ntuple(g -> ntuple(r -> avx_mixedradix_twiddle_chunk(2g - 1, r, 25, fwd), 4), 2), twcol, map(avx_lo, twcol))
 end
 @inline function proc_ip!(k::B25, buf, scr)
-    @inbounds for f in 0:(length(buf) ÷ 25 - 1); butterfly25!(buf, buf, 25f, k.tw1, k.tw2, k.t0, k.t1, k.t0lo, k.t1lo); end
+    @inbounds for f in 0:(length(buf) ÷ 25 - 1); gen_pp_codelet!(buf, buf, 25f, k.twchunk, k.twcol, k.twcol_lo); end
 end
 @inline function proc_oop!(k::B25, out, inp, scr)
-    @inbounds for f in 0:(length(inp) ÷ 25 - 1); butterfly25!(out, inp, 25f, k.tw1, k.tw2, k.t0, k.t1, k.t0lo, k.t1lo); end
+    @inbounds for f in 0:(length(inp) ÷ 25 - 1); gen_pp_codelet!(out, inp, 25f, k.twchunk, k.twcol, k.twcol_lo); end
 end
 
 struct B49 <: Kernel
-    n::Int; tw1::NTuple{6, V4f}; tw2::NTuple{6, V4f}; tw3::NTuple{6, V4f}; t0::V4f; t1::V4f; t2::V4f; t0lo::V2f; t1lo::V2f; t2lo::V2f
+    n::Int
+    twchunk::NTuple{3, NTuple{6, V4f}}
+    twcol::NTuple{3, V4f}
+    twcol_lo::NTuple{3, V2f}
 end
 function B49(fwd::Bool)
-    t0 = avx_broadcast_twiddle(1, 7, fwd); t1 = avx_broadcast_twiddle(2, 7, fwd); t2 = avx_broadcast_twiddle(3, 7, fwd)
-    tw1, tw2, tw3 = bf49_twiddles(fwd)
-    B49(49, tw1, tw2, tw3, t0, t1, t2, avx_lo(t0), avx_lo(t1), avx_lo(t2))
+    twcol = ntuple(a -> avx_broadcast_twiddle(a, 7, fwd), 3)
+    B49(49, ntuple(g -> ntuple(r -> avx_mixedradix_twiddle_chunk(2g - 1, r, 49, fwd), 6), 3), twcol, map(avx_lo, twcol))
 end
 @inline function proc_ip!(k::B49, buf, scr)
-    @inbounds for f in 0:(length(buf) ÷ 49 - 1); butterfly49!(buf, buf, 49f, k.tw1, k.tw2, k.tw3, k.t0, k.t1, k.t2, k.t0lo, k.t1lo, k.t2lo); end
+    @inbounds for f in 0:(length(buf) ÷ 49 - 1); gen_pp_codelet!(buf, buf, 49f, k.twchunk, k.twcol, k.twcol_lo); end
 end
 @inline function proc_oop!(k::B49, out, inp, scr)
-    @inbounds for f in 0:(length(inp) ÷ 49 - 1); butterfly49!(out, inp, 49f, k.tw1, k.tw2, k.tw3, k.t0, k.t1, k.t2, k.t0lo, k.t1lo, k.t2lo); end
+    @inbounds for f in 0:(length(inp) ÷ 49 - 1); gen_pp_codelet!(out, inp, 49f, k.twchunk, k.twcol, k.twcol_lo); end
 end
 
 # ---- leaf: BP{P} — direct size-P odd-prime DFT (one FFT per iter via the width-generic V2f

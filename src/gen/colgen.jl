@@ -29,7 +29,7 @@
 # avxradix AVX2 primitives (avx_colbf_prime, avx_mul_complex, avx_transpose_2x2, avx_merge, avx_lo,
 # avx_hi, avx_load/store_*) in scope.
 
-@generated function gen_pp_codelet!(out, inp, base::Int,
+@inline @generated function gen_pp_codelet!(out, inp, base::Int,
                                     twchunk::NTuple{H, NTuple{M, V4f}},
                                     twcol::NTuple{H, V4f}, twcol_lo::NTuple{H, V2f}) where {H, M}
     P = 2H + 1
