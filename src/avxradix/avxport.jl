@@ -170,101 +170,21 @@ end
 @inline _rot90_inv(::V2f) = _ROT90_INV2
 
 # ---- column_butterfly5, width-generic ----
-@inline function avx_column_butterfly5(r1, r2, r3, r4, r5, tw0, tw1)
-    sum1, diff4 = avx_butterfly2(r2, r5)
-    sum2, diff3 = avx_butterfly2(r3, r4)
-    rot = _rot90_inv(r1)
-    rotated4 = avx_rotate90(diff4, rot)
-    rotated3 = avx_rotate90(diff3, rot)
-    output0 = avx_add(r1, avx_add(sum1, sum2))
-    t0r, t0i = avx_duplicate_complex(tw0)
-    t1r, t1i = avx_duplicate_complex(tw1)
-    twiddled1_mid = avx_fmadd(t0r, sum1, r1)
-    twiddled2_mid = avx_fmadd(t1r, sum1, r1)
-    twiddled3_mid = avx_mul(t1i, rotated4)
-    twiddled4_mid = avx_mul(t0i, rotated4)
-    twiddled1 = avx_fmadd(t1r, sum2, twiddled1_mid)
-    twiddled2 = avx_fmadd(t0r, sum2, twiddled2_mid)
-    twiddled3 = avx_fnmadd(t0i, rotated3, twiddled3_mid)
-    twiddled4 = avx_fmadd(t1i, rotated3, twiddled4_mid)
-    output1, output4 = avx_butterfly2(twiddled1, twiddled4)
-    output2, output3 = avx_butterfly2(twiddled2, twiddled3)
-    (output0, output1, output2, output3, output4)
-end
+# Systematized (P0.1): forwards to the @generated avx_colbf_prime, which emits the same odd-prime real-FFT
+# DFT — numerically equivalent (≤2 ULP; FP-accumulation order differs) and instruction-count-par with the
+# former hand body (proven by the gen_pp B25/B49 work). Correctness is vs a reference DFT, not byte-identity.
+@inline avx_column_butterfly5(r1, r2, r3, r4, r5, tw0, tw1) =
+    avx_colbf_prime((r1, r2, r3, r4, r5), (tw0, tw1))
 
 # ---- column_butterfly7, width-generic ----
-# Same odd-prime real-FFT structure as column_butterfly5, with 3 conjugate pairs (1,6)(2,5)(3,4) and
-# tw0=W7^1, tw1=W7^2, tw2=W7^3 (broadcast complex). Coefficient of pair m in output k is W7^{mk}: cos via
-# symmetry cos(2πj/7)=cos(2π(7-j)/7); sin flips sign for the conjugate half (indices 4,5,6). Verified
-# bit-exact vs a reference DFT (scratchpad/bf7check.jl, max-err ~1e-14, fwd+inv).
-@inline function avx_column_butterfly7(r1, r2, r3, r4, r5, r6, r7, tw0, tw1, tw2)
-    sum1, diff6 = avx_butterfly2(r2, r7)
-    sum2, diff5 = avx_butterfly2(r3, r6)
-    sum3, diff4 = avx_butterfly2(r4, r5)
-    rot = _rot90_inv(r1)
-    rot6 = avx_rotate90(diff6, rot); rot5 = avx_rotate90(diff5, rot); rot4 = avx_rotate90(diff4, rot)
-    output0 = avx_add(r1, avx_add(avx_add(sum1, sum2), sum3))
-    t0r, t0i = avx_duplicate_complex(tw0)
-    t1r, t1i = avx_duplicate_complex(tw1)
-    t2r, t2i = avx_duplicate_complex(tw2)
-    re1 = avx_fmadd(t2r, sum3, avx_fmadd(t1r, sum2, avx_fmadd(t0r, sum1, r1)))   # k=1: cos1,cos2,cos3
-    re2 = avx_fmadd(t0r, sum3, avx_fmadd(t2r, sum2, avx_fmadd(t1r, sum1, r1)))   # k=2: cos2,cos3,cos1
-    re3 = avx_fmadd(t1r, sum3, avx_fmadd(t0r, sum2, avx_fmadd(t2r, sum1, r1)))   # k=3: cos3,cos1,cos2
-    im1 = avx_fmadd(t2i, rot4, avx_fmadd(t1i, rot5, avx_mul(t0i, rot6)))         # k=1: +s1,+s2,+s3
-    im2 = avx_fnmadd(t0i, rot4, avx_fnmadd(t2i, rot5, avx_mul(t1i, rot6)))       # k=2: +s2,-s3,-s1
-    im3 = avx_fmadd(t1i, rot4, avx_fnmadd(t0i, rot5, avx_mul(t2i, rot6)))        # k=3: +s3,-s1,+s2
-    output1, output6 = avx_butterfly2(re1, im1)
-    output2, output5 = avx_butterfly2(re2, im2)
-    output3, output4 = avx_butterfly2(re3, im3)
-    (output0, output1, output2, output3, output4, output5, output6)
-end
+# Systematized (P0.1): forwards to avx_colbf_prime (see avx_column_butterfly5). tw0=W7^1,tw1=W7^2,tw2=W7^3.
+@inline avx_column_butterfly7(r1, r2, r3, r4, r5, r6, r7, tw0, tw1, tw2) =
+    avx_colbf_prime((r1, r2, r3, r4, r5, r6, r7), (tw0, tw1, tw2))
 
 # ---- column_butterfly13, width-generic ----
-# Same odd-prime real-FFT structure as column_butterfly5/7, with 6 conjugate pairs (1,12)(2,11)…(6,7) and
-# tw1..tw6 = W13^1..W13^6 (broadcast complex). Output-k coefficient of pair m is W13^{km}: cos via symmetry
-# cos(2πj/13)=cos(2π(13-j)/13), sin flips sign when (km mod 13) > 6. Straight-line body generated from the
-# (index,sign) tables and verified bit-exact vs a reference DFT (scratchpad/gen13.jl, max-err ~1.5e-14, fwd+inv).
-@inline function avx_column_butterfly13(r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, tw1, tw2, tw3, tw4, tw5, tw6)
-    sum1, diff1 = avx_butterfly2(r2, r13)
-    sum2, diff2 = avx_butterfly2(r3, r12)
-    sum3, diff3 = avx_butterfly2(r4, r11)
-    sum4, diff4 = avx_butterfly2(r5, r10)
-    sum5, diff5 = avx_butterfly2(r6, r9)
-    sum6, diff6 = avx_butterfly2(r7, r8)
-    rot = _rot90_inv(r1)
-    d1 = avx_rotate90(diff1, rot)
-    d2 = avx_rotate90(diff2, rot)
-    d3 = avx_rotate90(diff3, rot)
-    d4 = avx_rotate90(diff4, rot)
-    d5 = avx_rotate90(diff5, rot)
-    d6 = avx_rotate90(diff6, rot)
-    output0 = avx_add(r1, avx_add(avx_add(avx_add(avx_add(avx_add(sum1, sum2), sum3), sum4), sum5), sum6))
-    t1r, t1i = avx_duplicate_complex(tw1)
-    t2r, t2i = avx_duplicate_complex(tw2)
-    t3r, t3i = avx_duplicate_complex(tw3)
-    t4r, t4i = avx_duplicate_complex(tw4)
-    t5r, t5i = avx_duplicate_complex(tw5)
-    t6r, t6i = avx_duplicate_complex(tw6)
-    re1 = avx_fmadd(t6r, sum6, avx_fmadd(t5r, sum5, avx_fmadd(t4r, sum4, avx_fmadd(t3r, sum3, avx_fmadd(t2r, sum2, avx_fmadd(t1r, sum1, r1))))))
-    im1 = avx_fmadd(t6i, d6, avx_fmadd(t5i, d5, avx_fmadd(t4i, d4, avx_fmadd(t3i, d3, avx_fmadd(t2i, d2, avx_mul(t1i, d1))))))
-    re2 = avx_fmadd(t1r, sum6, avx_fmadd(t3r, sum5, avx_fmadd(t5r, sum4, avx_fmadd(t6r, sum3, avx_fmadd(t4r, sum2, avx_fmadd(t2r, sum1, r1))))))
-    im2 = avx_fnmadd(t1i, d6, avx_fnmadd(t3i, d5, avx_fnmadd(t5i, d4, avx_fmadd(t6i, d3, avx_fmadd(t4i, d2, avx_mul(t2i, d1))))))
-    re3 = avx_fmadd(t5r, sum6, avx_fmadd(t2r, sum5, avx_fmadd(t1r, sum4, avx_fmadd(t4r, sum3, avx_fmadd(t6r, sum2, avx_fmadd(t3r, sum1, r1))))))
-    im3 = avx_fmadd(t5i, d6, avx_fmadd(t2i, d5, avx_fnmadd(t1i, d4, avx_fnmadd(t4i, d3, avx_fmadd(t6i, d2, avx_mul(t3i, d1))))))
-    re4 = avx_fmadd(t2r, sum6, avx_fmadd(t6r, sum5, avx_fmadd(t3r, sum4, avx_fmadd(t1r, sum3, avx_fmadd(t5r, sum2, avx_fmadd(t4r, sum1, r1))))))
-    im4 = avx_fnmadd(t2i, d6, avx_fnmadd(t6i, d5, avx_fmadd(t3i, d4, avx_fnmadd(t1i, d3, avx_fnmadd(t5i, d2, avx_mul(t4i, d1))))))
-    re5 = avx_fmadd(t4r, sum6, avx_fmadd(t1r, sum5, avx_fmadd(t6r, sum4, avx_fmadd(t2r, sum3, avx_fmadd(t3r, sum2, avx_fmadd(t5r, sum1, r1))))))
-    im5 = avx_fmadd(t4i, d6, avx_fnmadd(t1i, d5, avx_fnmadd(t6i, d4, avx_fmadd(t2i, d3, avx_fnmadd(t3i, d2, avx_mul(t5i, d1))))))
-    re6 = avx_fmadd(t3r, sum6, avx_fmadd(t4r, sum5, avx_fmadd(t2r, sum4, avx_fmadd(t5r, sum3, avx_fmadd(t1r, sum2, avx_fmadd(t6r, sum1, r1))))))
-    im6 = avx_fnmadd(t3i, d6, avx_fmadd(t4i, d5, avx_fnmadd(t2i, d4, avx_fmadd(t5i, d3, avx_fnmadd(t1i, d2, avx_mul(t6i, d1))))))
-    output1, output12 = avx_butterfly2(re1, im1)
-    output2, output11 = avx_butterfly2(re2, im2)
-    output3, output10 = avx_butterfly2(re3, im3)
-    output4, output9 = avx_butterfly2(re4, im4)
-    output5, output8 = avx_butterfly2(re5, im5)
-    output6, output7 = avx_butterfly2(re6, im6)
-    (output0, output1, output2, output3, output4, output5, output6, output7, output8, output9, output10, output11, output12)
-end
+# Systematized (P0.1): forwards to avx_colbf_prime (see avx_column_butterfly5). tw1..tw6 = W13^1..W13^6.
+@inline avx_column_butterfly13(r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, tw1, tw2, tw3, tw4, tw5, tw6) =
+    avx_colbf_prime((r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13), (tw1, tw2, tw3, tw4, tw5, tw6))
 
 # ---- generic odd-prime column DFT, @generated + width-generic ----
 # Generalizes avx_column_butterfly5/7/13 (the conjugate-pair real-FFT structure) to ANY odd prime P:
