@@ -44,7 +44,8 @@ function nonpow2_sizes()
     small3 = [48, 96, 192, 384]   # single-factor-of-3 2^k·3 sizes (B16/B64 leaf + MR{3,6} route)
     small57 = [80, 112, 160, 224, 240, 320, 448, 480]   # 2^k·{5,7}, 2^k·3·5 (B32 leaf + MR5/MR7 route)
     small5pow = [25, 49, 125, 250, 343, 500, 625, 1000, 2000]   # 5²/7² powers (B25/B49 codelets) + 2^a·5³
-    return sort!(unique(vcat(small3, small57, small5pow, base, w8clean)))
+    gaps = [26, 52, 78, 98, 169, 196, 294, 338, 588]   # closed coverage gaps: 2^a·7² (B49), 2^a·13 (MR13(B2)), 13² (MR13(BP13))
+    return sort!(unique(vcat(small3, small57, small5pow, gaps, base, w8clean)))
 end
 
 cap(t) = length(t) > MAXSAVE ? t[1:MAXSAVE] : t
