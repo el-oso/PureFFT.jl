@@ -42,5 +42,16 @@
             @assert_trim_safe P.apply_unnormalized!(p, x)
             @test true
         end
+        # @assert_inlined — guard that the hot-LOOP generated kernels stay @inline. A missing @inline on
+        # avx_colbf_prime regressed the MR5/7/13 passes to ~0.7× (2026-06-30; op-counts were IDENTICAL,
+        # so only the per-iteration non-inlined-call overhead differed) — this catches that class
+        # statically, before any benchmark. StrictMode treats :inlined as informational (inlining is a
+        # heuristic), but for these large @generated codelets Julia's and LLVM's decisions align, and the
+        # N=13 case is where a non-@inline @generated kernel actually fails to inline into the pass loop.
+        let v4 = P.AvxRadix.V4f(ntuple(_ -> 1.0, 4))
+            @assert_inlined P.AvxRadix.avx_colbf_prime(ntuple(_ -> v4, 13), ntuple(_ -> v4, 6))  # radix-13 prime butterfly
+            @assert_inlined P.AvxRadix.gen_transpose_packed(ntuple(_ -> v4, 13))                  # packed transpose, large N
+            @test true
+        end
     end
 end

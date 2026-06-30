@@ -21,7 +21,7 @@
 # trim-safe (no Vector{Any} at runtime). Needs avx_unpacklo_complex / avx_unpackhi_complex /
 # _blend03 from avxport.jl in scope.
 
-@generated function gen_transpose_packed(rs::NTuple{N, V4f}) where {N}
+@inline @generated function gen_transpose_packed(rs::NTuple{N, V4f}) where {N}   # @inline: large-N (e.g. 13) else stays a non-inlined call in the _trans pass loop
     isodd(N) || error("gen_transpose_packed: N must be odd, got $N")
     H = (N - 1) ÷ 2
     outs = Any[]
