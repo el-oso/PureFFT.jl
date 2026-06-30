@@ -127,6 +127,41 @@ StrictMode). The resolution mirrors genfft: the generator runs **entirely at gen
 `@generated` bodies or a precompile build step) and emits **only concrete, straight-line code**. The
 runtime is the emitted kernel — trim-safe by construction.
 
+## Implementation lessons (hard-won, measured)
+
+These cost real debugging on the avxradix systematization (2026-06-30) — heed them when wiring any generated
+kernel into the hot path.
+
+### A `@generated` kernel used in a runtime loop MUST be `@inline`
+A `@generated` function is **not** inlined by default. When such a kernel is called inside a *runtime* loop
+(e.g. a mixed-radix column-pass `for c in 0:M÷2-1`), the non-inlined form pays, **every iteration**, a call
+plus tuple-argument passing (packing `(r1,…,rP)` / the twiddle tuple on the stack). Measured: replacing hand
+`@inline avx_column_butterfly{5,7,13}` with the `@generated avx_colbf_prime` (not marked `@inline`) regressed
+the radix-5/7/13 passes to **0.64–0.89× vs hand** — even though the generated body has **identical** op-counts
+(cb5=25, cb7=43, cb13=121 vector ops). The same generator is fast inside `gen_pp_codelet!` *only because* gen_pp
+forces `@inline avx_colbf_prime(...)` at its (fully-unrolled, straight-line) call site. Fix: `@inline @generated
+function avx_colbf_prime(...)`. After it, several sizes were *faster* than the hand kernels. **Mark every
+generated hot-path kernel `@inline`** (or force `@inline` at the call site).
+
+### Diagnose generated-vs-hand regressions by op-count first
+`@code_native` the kernel **directly** (not through a `@noinline` wrapper — the wrapper hides the un-inlined
+call as zero vector ops) and count `vfmadd*/vmulpd/vaddpd/vshuf*…`. **Identical op-count ⇒ not algorithmic**
+(no missing CSE) ⇒ the gap is inlining or scheduling; try `@inline` before anything else. More ops ⇒ the
+generator is missing a hand simplification.
+
+### Gate a generated replacement against the CURRENT hand-tuned kernel, not FFTW/RustFFT
+PureFFT's hand-tuned path now beats FFTW/RustFFT by up to ~6×, so a 0.96×-vs-FFTW gate is far too loose — it
+would pass a kernel that is a catastrophic regression vs the kernel it replaces. The **binding** gate is
+par-or-faster (≥0.96×) vs the current hand kernel, pinned (`bench/cpufreq_lock.sh pin 4500`, `taskset -c 2`,
+BenchmarkTools `setup=copy` median). "Numerically correct vs a reference DFT" and "byte-identical by
+construction" are **not** substitutes for measuring it — `avx_colbf_prime` is numerically equivalent (≤2 ULP)
+but *not* byte-identical to hand `cb5`, and was slower until inlined.
+
+### Beware the overflow-to-NaN benchmarking artifact
+Timing repeated *in-place* `pfft!` reps without re-seeding lets the FFT magnitude overflow to Inf/NaN within a
+few iterations → you measure Inf/NaN-arithmetic throughput on garbage, which differs across code structures
+and produces implausible ratios (e.g. 1.3× "faster"). Use BenchmarkTools `setup=copy` (fresh data per sample).
+
 ## Sources
 
 - W. Burrus et al., *Fast Fourier Transforms*, §10.6 "Generating Small FFT Kernels"
