@@ -41,10 +41,16 @@ const COLD_HELPERS = (
 # longer false-positives on pointer/`vload`/`vstore` over preallocated scratch (StrictMode F8/F9, both fixed
 # upstream); :trimsafe (TypeContracts, no backend) gives a cheap juliac --trim=safe-style scan across ALL
 # kernels, complementing the authoritative TrimCheck @validate on the hot path in test/purefft_tests.jl.
+# inline_suggest=true (StrictMode ≥0.3.3): also surface non-inlined @generated/in-loop hot-path callees as
+# informational ":info" @inline suggestions (never failures — they are CANDIDATES; a par-vs-hand benchmark
+# is the verdict, per the avx_colbf_prime lesson: missing @inline there cost 0.7×, but a 1-site combine was
+# neutral). Catches the missing-@inline regression class before anyone benchmarks.
 fs = audit(PureFFT; sweep = true, guarantees = (:typestable, :noalloc, :trimsafe),
-           exempt = COLD_HELPERS, format = :text)
+           exempt = COLD_HELPERS, format = :text, inline_suggest = true)
 nf = nfailures(fs)
-println("\nStrictMode whole-package sweep: $(length(fs)) (method, guarantee) checks, $nf failure(s) ",
+nsug = count(f -> f.status === :info, fs)
+println("\nStrictMode whole-package sweep: $(length(fs) - nsug) (method, guarantee) checks, $nf failure(s); ",
+        "$nsug @inline suggestion(s) (informational — candidates, benchmark decides). ",
         "(exempt: $(length(COLD_HELPERS)) plan-time helpers).")
 nf == 0 || error("StrictMode found $nf failure(s) on PureFFT's compiled hot-path surface.")
 println("Every compiled hot-path method is type-stable, allocation-free, and trim-safe. ✓")
