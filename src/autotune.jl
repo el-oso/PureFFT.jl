@@ -42,6 +42,20 @@ end
 const CODELET_MAX_PRIME = 5
 const CODELET_MAX_N = 128
 
+# Generated column-packed prime-square (P²) codelet (GenPPCodeletPlan): one in-register @generated DFT
+# that beats Bluestein/AvxMixedRadix on uncovered prime-squares. Gated to P prime in [GENPP_MIN_P,
+# GENPP_MAX_P]: smaller prime-squares are already fast (4=pow2, 9=AvxMixedRadix, 25/49=hand B25/B49).
+# Upper cap = 31: the fully-unrolled codelet emits O(P²) straight-line SIMD, so LLVM compile is
+# superlinear — P=37/41/43 cost 12–23 s first-use for ≤1.7× FFTW (43 is a non-win), not worth it;
+# 11..31 all land ≥1.99× FFTW at ≤6.4 s (amortized to ~0 by the PrecompileTools workload in PureFFT.jl).
+# Returns the prime P if n=P² qualifies, else nothing.
+const GENPP_MIN_P = 11
+const GENPP_MAX_P = 31
+function _gen_pp_prime(n::Int)
+    p = isqrt(n)
+    (p * p == n && GENPP_MIN_P <= p <= GENPP_MAX_P && _max_prime_factor(p) == p) ? p : nothing
+end
+
 # Rader's algorithm wins for primes with a VERY smooth p-1 (p-1 = 2^a·3^b): its length-(p-1)
 # convolution then runs on a fast four-step/radix4avx inner FFT and beats Bluestein's larger
 # power-of-two M. Measured: a 5 or 7 factor in p-1 makes Rader LOSE (e.g. n=181, p-1=180=2²·3²·5:
@@ -147,14 +161,25 @@ function autoplan(::Type{Complex{T}}, n::Integer; inverse::Bool = false) where {
         # W=8 wins only where it beats W=4. Construction is outside `_besttime`'s timed region.
         codelet = (ni <= CODELET_MAX_N && _max_prime_factor(ni) <= CODELET_MAX_PRIME) ?
             CodeletPlan(Complex{T}, n; inverse) : nothing
+        # Additive candidate: the generated column-packed P² codelet (Float64-only). Timed with the rest and
+        # kept by `argmin` only where it wins — so it CANNOT regress any other size (the additive invariant).
+        genpp = (T === Float64 && !isnothing(_gen_pp_prime(ni))) ?
+            GenPPCodeletPlan(Complex{T}, ni; inverse) : nothing
+        # Invariant guard: a prime-square otherwise falls to the UNTIMED Bluestein fallback (the smooth/Avx
+        # candidates are all `nothing` for n=P²). Without timing it, GenPP could win the tuple yet be slower
+        # than Bluestein → a regression. So when (and ONLY when) GenPP competes, time Bluestein too and let
+        # `argmin` pick the genuine fastest. No Bluestein-timing cost on the general non-pow2 path.
+        bluestein = isnothing(genpp) ? nothing : BluesteinPlan(Complex{T}, ni; inverse)
         plans = (
             codelet,
+            genpp,
+            bluestein,
             _best_smooth_plan(Complex{T}, ni; inverse),
             AvxMixedRadixPlan(Complex{T}, ni; inverse),
             AvxMixedRadixPlanW8(Complex{T}, ni; inverse),
         )
         y = randn(Complex{T}, ni)
-        scores = map(p -> _score(p, y), plans)            # NTuple{4,Float64} — concrete, unrolled, no dispatch
+        scores = map(p -> _score(p, y), plans)            # NTuple{6,Float64} — concrete, unrolled, no dispatch
         all(isinf, scores) && return BluesteinPlan(Complex{T}, n; inverse)   # large prime factor → chirp-Z
         return something(plans[argmin(scores)])
     end

@@ -212,6 +212,40 @@ function apply_unnormalized!(p::CodeletPlan{T, N}, x::AbstractVector) where {T, 
     return x
 end
 
+# --- generated column-packed prime-square (P²) codelet plan -----------------------------------
+# Wraps `AvxRadix.gen_pp_codelet!` (src/gen/colgen.jl) — the size-parameterized column-packed P² DFT
+# that generalizes the hand-written B25/B49 to ANY odd prime P. The whole transform is ONE in-register
+# @generated codelet (loads → column butterflies → twiddle → dual-width transpose → column butterflies
+# → store), so it beats Bluestein/AvxMixedRadix on uncovered prime-squares (121/289/361 …). `autoplan`
+# adds it as an additive timed candidate for supported P². Float64-only (the AVX2 primitives are
+# Vec{4,Float64}). The broadcast/chunk twiddles are the same bundles the B25/B49 structs hold; precomputed
+# once at plan time and held as concrete `isbits` tuple fields → dispatch-free, zero-alloc hot path.
+struct GenPPCodeletPlan{T, P, TCH, TC, TCL} <: AbstractFFTPlan{T}
+    twchunk::TCH    # NTuple{H, NTuple{P-1, V4f}} — per-group mixed-radix twiddle chunks
+    twcol::TC       # NTuple{H, V4f}              — column-butterfly broadcast twiddles W_P^1..W_P^H
+    twcol_lo::TCL   # NTuple{H, V2f}              — half-width (col-0) variant of twcol
+    inverse::Bool
+end
+
+function GenPPCodeletPlan(::Type{Complex{T}}, n::Integer; inverse::Bool = false) where {T}
+    p = Int(isqrt(Int(n)))
+    p * p == Int(n) || throw(ArgumentError("GenPPCodeletPlan: n=$n is not a perfect square"))
+    fwd = !inverse
+    H = (p - 1) ÷ 2
+    twcol = ntuple(a -> AvxRadix.avx_broadcast_twiddle(a, p, fwd), H)
+    twcol_lo = map(AvxRadix.avx_lo, twcol)
+    twchunk = ntuple(g -> ntuple(r -> AvxRadix.avx_mixedradix_twiddle_chunk(2g - 1, r, p * p, fwd), p - 1), H)
+    return GenPPCodeletPlan{T, Int(n), typeof(twchunk), typeof(twcol), typeof(twcol_lo)}(
+        twchunk, twcol, twcol_lo, inverse)
+end
+
+plan_length(::GenPPCodeletPlan{T, P}) where {T, P} = P::Int
+plan_inverse(p::GenPPCodeletPlan)::Bool = p.inverse
+function apply_unnormalized!(p::GenPPCodeletPlan{T, P}, x::AbstractVector) where {T, P}
+    AvxRadix.gen_pp_codelet!(x, x, 0, p.twchunk, p.twcol, p.twcol_lo)   # in-place (all loads precede all stores)
+    return x
+end
+
 # --- batched SoA mixed-radix codelet (the vectorized engine for the four-step executor) ------
 # Mixed-radix straight-line builder in SPLIT (re/im) form: each value is a (re,im) symbol pair and
 # every op is real arithmetic with scalar twiddle literals → pure FMA, ZERO shuffles. When the

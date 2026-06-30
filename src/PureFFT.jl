@@ -44,4 +44,17 @@ include("ndim_batched.jl")
 include("ndim.jl")
 include("ndim_real.jl")
 
+# Amortize the fully-unrolled P² codelets' superlinear LLVM compile (P=11..31 cost 0.3–6.4 s each at
+# first use) into the precompile cache. PrecompileTools (not bare `precompile()`) because it caches the
+# generated NATIVE code, which is exactly what these @generated kernels need → interactive first-use ≈ 0.
+using PrecompileTools: @compile_workload
+@compile_workload begin
+    for P in (11, 13, 17, 19, 23, 29, 31)
+        n = P * P
+        # gen_pp_codelet!{H,M} is keyed on tuple TYPES (H=(P-1)/2, M=P-1), identical fwd/inv — so the
+        # forward specialization is the same native code the inverse plan reuses. One direction suffices.
+        apply_unnormalized!(GenPPCodeletPlan(ComplexF64, n), zeros(ComplexF64, n))
+    end
+end
+
 end # module

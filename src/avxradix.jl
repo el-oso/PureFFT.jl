@@ -5,4 +5,6 @@
 module AvxRadix
 include(joinpath(@__DIR__, "avxradix", "planner.jl"))   # chains recursive.jl → kernels.jl → avxport.jl
 include(joinpath(@__DIR__, "avxradix", "width8.jl"))    # AVX-512 (Vec{8}) kernels + plan_tree_w8
+include(joinpath(@__DIR__, "gen", "transpose.jl"))      # @generated packed transpose (gen_transpose_packed)
+include(joinpath(@__DIR__, "gen", "colgen.jl"))         # @generated column-packed P² codelet (gen_pp_codelet!)
 end

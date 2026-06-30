@@ -207,6 +207,45 @@ end
     end
 end
 
+@testitem "Generated column-packed P² codelet (GenPPCodeletPlan)" setup = [FFTUtil] begin
+    using FFTW, JET
+    # The column-packed prime-square codelet generalizes hand B25/B49 to any odd prime P (src/gen/colgen.jl).
+    # autoplan adds it as an additive timed candidate for P² with P prime in [11,31]; it wins these uncovered
+    # prime-squares over Bluestein/AvxMixedRadix. Correctness (fwd vs FFTW + round-trip) and routing.
+    primes = (11, 13, 17, 19, 23, 29, 31)   # the routed family (P>31 capped out — too-slow compile, see autotune.jl)
+    @testset "vs FFTW (F64, n=$(P)²)" for P in primes
+        n = P * P
+        x = randn(ComplexF64, n)
+        @test relerr(pfft(x; variant = :fast), fft(x)) < tol(Float64)              # bit-exact forward
+        p = PureFFT.GenPPCodeletPlan(ComplexF64, n)                                # the plan directly
+        y = copy(x); PureFFT.apply_unnormalized!(p, y)
+        @test relerr(y, fft(x)) < tol(Float64)
+        pii = plan_pfft(ComplexF64, n; variant = :fast, inverse = true)
+        z = copy(y); pfft!(z, pii)                                                 # normalized inverse
+        @test relerr(z, x) < tol(Float64)                                          # round-trip
+        # routing: autoplan keeps the generated kernel for these P² (it wins the timing)
+        ap = PureFFT.autoplan(ComplexF64, n)
+        @test ap isa PureFFT.GenPPCodeletPlan
+    end
+    @testset "gate: only prime-squares in [11,31] route here; larger ones fall back" begin
+        @test isnothing(PureFFT._gen_pp_prime(120))      # not a square
+        @test isnothing(PureFFT._gen_pp_prime(49))       # P=7 below GENPP_MIN_P (hand B49)
+        @test isnothing(PureFFT._gen_pp_prime(1369))     # P=37 above GENPP_MAX_P (capped: compile too slow)
+        @test isnothing(PureFFT._gen_pp_prime(1521))     # 39² but 39 not prime
+        @test PureFFT._gen_pp_prime(289) == 17
+        @test PureFFT._gen_pp_prime(961) == 31
+        # P=37/41/43 (capped) fall back to their prior route — never routed to a slower GenPP plan
+        @test PureFFT.autoplan(ComplexF64, 1849) isa PureFFT.BluesteinPlan
+    end
+    @testset "hot path is dispatch-free + alloc-free" begin
+        x = randn(ComplexF64, 289)
+        p = PureFFT.GenPPCodeletPlan(ComplexF64, 289)
+        @test_opt target_modules = (PureFFT,) PureFFT.apply_unnormalized!(p, x)
+        PureFFT.apply_unnormalized!(p, x)
+        @test (@allocated PureFFT.apply_unnormalized!(p, x)) == 0
+    end
+end
+
 @testitem "Stage 10: four-step batched-codelet executor" setup = [FFTUtil] begin
     using FFTW, JET
     # Smooth composite non-pow2 sizes (>128) route here; batched SoA codelets for both passes.
@@ -438,6 +477,8 @@ end
         PureFFT.apply_unnormalized!(PureFFT.Radix4AvxPlan{Float64}, Vector{ComplexF64}),
         PureFFT.apply_unnormalized!(PureFFT.Radix4Plan{Float64}, Vector{ComplexF64}),
         PureFFT.apply_unnormalized!(PureFFT.CodeletPlan{Float64, 12}, Vector{ComplexF64}),
+        # generated column-packed P² codelet — concrete type is twiddle-tuple-parameterized, so derive via typeof.
+        PureFFT.apply_unnormalized!(typeof(PureFFT.GenPPCodeletPlan(ComplexF64, 289)), Vector{ComplexF64}),
         PureFFT.apply_unnormalized!(PureFFT.FourStepCodeletPlan{Float64, 12, 12}, Vector{ComplexF64}),
         PureFFT.apply_unnormalized!(PureFFT.RecursiveMixedRadixPlan{Float64, (12, 12, 12)}, Vector{ComplexF64}),
         # N-D c2c apply (Task 5): the @generated-over-D apply + per-dim transpose are trim-safe too. The
@@ -512,6 +553,15 @@ end
     using Aqua
     # piracies = false: PureFFT intentionally extends `AbstractFFTs.plan_fft`/`plan_bfft` etc. on plain
     # `Vector`s to plug into the Julia FFT ecosystem (the same deliberate extension FFTW.jl makes). Every
-    # other Aqua check (ambiguities, unbound args, undefined exports, stale deps, compat, extras) is on.
-    Aqua.test_all(PureFFT; piracies = false)
+    # other Aqua check (ambiguities, undefined exports, stale deps, compat, extras) is on.
+    Aqua.test_all(PureFFT; piracies = false, unbound_args = false)
+    # unbound_args checked manually to exempt the generated P² codelet: its inner tuple-length param `M`
+    # (twchunk::NTuple{H, NTuple{M, V4f}}) is only "unbound" in the degenerate H=0 (empty outer tuple)
+    # case — never reachable, since it's only ever called with H=(P-1)/2 ≥ 5 (P prime ≥ 11). Real calls
+    # bind M from the concrete argument; the static check can't see the H≥5 invariant. (Aqua 0.8's
+    # test_unbound_args has no `exclude`, so filter the stdlib detector and assert on the remainder.)
+    let unbounds = Test.detect_unbound_args(PureFFT; recursive = true)
+        filter!(m -> m.name !== :gen_pp_codelet!, unbounds)
+        @test isempty(unbounds)
+    end
 end
