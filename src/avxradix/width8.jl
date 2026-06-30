@@ -86,63 +86,82 @@ end
         t = avx_transpose9_packed(_LP(buf,ib), _LP(buf,ib+M), _LP(buf,ib+2M), _LP(buf,ib+3M), _LP(buf,ib+4M), _LP(buf,ib+5M), _LP(buf,ib+6M), _LP(buf,ib+7M), _LP(buf,ib+8M))
         _S8(out, ob, t[1]); _S8(out, ob+4, t[2]); _S8(out, ob+8, t[3]); _S8(out, ob+12, t[4]); _SP(out, ob+16, t[5]); end; end
 end
-@inline function _colbf5_w8!(buf, o, ::Val{M}, tw, t0, t1) where {M}
-    @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c
-        r = avx_column_butterfly5(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), _L8(buf,ib+3M), _L8(buf,ib+4M), t0, t1)
-        _S8(buf, ib, r[1]); Base.Cartesian.@nexprs 4 j -> _S8(buf, ib + j*M, avx_mul_complex(tw[c*4+j], r[j+1])); end
-    if M % 4 == 2; @inbounds begin; ib = o + (M-2); tc = (M ÷ 4) * 4   # rem=2 tail: 2 leftover columns (v2=1)
-        r = avx_column_butterfly5(_LP(buf,ib), _LP(buf,ib+M), _LP(buf,ib+2M), _LP(buf,ib+3M), _LP(buf,ib+4M), t0, t1)
-        _SP(buf, ib, r[1]); Base.Cartesian.@nexprs 4 j -> _SP(buf, ib + j*M, avx_mul_complex(tw[tc+j], r[j+1])); end; end
-    if M % 4 == 1; @inbounds begin; ib = o + (M-1); tc = (M ÷ 4) * 4   # rem=1 tail (v2=0 odd-M)
-        r = avx_column_butterfly5(_LP1(buf,ib), _LP1(buf,ib+M), _LP1(buf,ib+2M), _LP1(buf,ib+3M), _LP1(buf,ib+4M), t0, t1)
-        _SP1(buf, ib, r[1]); Base.Cartesian.@nexprs 4 j -> _SP1(buf, ib + j*M, avx_mul_complex(tw[tc+j], r[j+1])); end; end
-    if M % 4 == 3; @inbounds begin; ib = o + (M-3); tc = (M ÷ 4) * 4   # rem=3 tail (v2=0 odd-M)
-        r = avx_column_butterfly5(_LP3(buf,ib), _LP3(buf,ib+M), _LP3(buf,ib+2M), _LP3(buf,ib+3M), _LP3(buf,ib+4M), t0, t1)
-        _SP3(buf, ib, r[1]); Base.Cartesian.@nexprs 4 j -> _SP3(buf, ib + j*M, avx_mul_complex(tw[tc+j], r[j+1])); end; end
+# ---- generic odd-prime passes at W=8 (P0.6): _colbf_prime_w8! / _trans_prime_w8! ----
+# Replaces _colbf5_w8!, _trans5_w8!, _colbf7_w8!, _trans7_w8!. @generated emits literal-indexed
+# stores for the given (M,P) specialization (CLAUDE rule 1: no runtime tuple indexing). The 4-way
+# partial-column tail (rem=M%4 ∈ {1,2,3}) is computed at generation time (M is a type param) so only
+# the relevant tail case is emitted — no dead `if M%4==k` branches in the IR. Transpose dispatches
+# on P via Symbol("avx_transpose",P,"_packed") (avx_transpose5/7_packed(::Vec{8,T}) in avxport.jl).
+# ponytail: hand avx_transpose5/7_packed(::Vec{8}) stay per-N (B2 Blocker); add P=11 by adding
+# avx_transpose11_packed(::Vec{8}) — the wrapper collapses for free.
+@inline @generated function _colbf_prime_w8!(buf, o, ::Val{M}, ::Val{P}, tw, ts::NTuple{H}) where {M, P, H}
+    actual_rem = M % 4
+    main_loads  = [:(avx_load_complex8(buf, ib + $(k)*M)) for k in 0:(P-1)]
+    main_stores = Expr[:(avx_store_complex8!(buf, ib, r[1]))]
+    for j in 1:(P-1)
+        push!(main_stores, :(avx_store_complex8!(buf, ib + $(j)*M, avx_mul_complex(tw[c*$(P-1)+$(j)], r[$(j+1)]))))
+    end
+    main_body = quote
+        @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c
+            r = avx_colbf_prime(($(main_loads...),), ts)
+            $(main_stores...)
+        end
+    end
+    actual_rem == 0 && return main_body
+    ib_off  = M - actual_rem
+    tc_base = (M ÷ 4) * (P - 1)
+    lf, sf  = actual_rem == 1 ? (:avx_load_partial1, :avx_store_partial1!) :
+               actual_rem == 2 ? (:avx_load_partial2, :avx_store_partial2!) :
+                                 (:avx_load_partial3, :avx_store_partial3!)
+    tail_loads  = [:($(lf)(buf, ib + $(k)*M)) for k in 0:(P-1)]
+    tail_stores = Expr[:($(sf)(buf, ib, r[1]))]
+    for j in 1:(P-1)
+        push!(tail_stores, :($(sf)(buf, ib + $(j)*M, avx_mul_complex(tw[$(tc_base + j)], r[$(j+1)]))))
+    end
+    return quote
+        $(main_body)
+        @inbounds begin
+            ib = o + $(ib_off)
+            r = avx_colbf_prime(($(tail_loads...),), ts)
+            $(tail_stores...)
+        end
+    end
 end
-@inline function _trans5_w8!(out, oo, buf, o, ::Val{M}) where {M}
-    @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c; ob = oo + 20c
-        t = avx_transpose5_packed(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), _L8(buf,ib+3M), _L8(buf,ib+4M))
-        Base.Cartesian.@nexprs 5 k -> _S8(out, ob + 4(k-1), t[k]); end
-    if M % 4 == 2; @inbounds begin; ib = o + (M-2); ob = oo + (M-2)*5   # 2R=10 valid complex: 2 full Vec8 + 1 Vec4
-        t = avx_transpose5_packed(_LP(buf,ib), _LP(buf,ib+M), _LP(buf,ib+2M), _LP(buf,ib+3M), _LP(buf,ib+4M))
-        _S8(out, ob, t[1]); _S8(out, ob+4, t[2]); _SP(out, ob+8, t[3]); end; end
-    if M % 4 == 1; @inbounds begin; ib = o + (M-1); ob = oo + (M-1)*5   # R=5 valid: 1 full Vec8 + 1 Vec1
-        t = avx_transpose5_packed(_LP1(buf,ib), _LP1(buf,ib+M), _LP1(buf,ib+2M), _LP1(buf,ib+3M), _LP1(buf,ib+4M))
-        _S8(out, ob, t[1]); _SP1(out, ob+4, t[2]); end; end
-    if M % 4 == 3; @inbounds begin; ib = o + (M-3); ob = oo + (M-3)*5   # 3R=15 valid: 3 full Vec8 + 1 Vec3
-        t = avx_transpose5_packed(_LP3(buf,ib), _LP3(buf,ib+M), _LP3(buf,ib+2M), _LP3(buf,ib+3M), _LP3(buf,ib+4M))
-        _S8(out, ob, t[1]); _S8(out, ob+4, t[2]); _S8(out, ob+8, t[3]); _SP3(out, ob+12, t[4]); end; end
-end
-# radix-7 (the lone factor of 7: 2^k·7 sizes 112/224/448, base ÷4 so M stays ÷4 — no partial column),
-# PLUS the v2=1 rem=2 tail so 2·7^k sizes (98=2·7², …) route here (DST-I n=48 wraps inner 98).
-@inline function _colbf7_w8!(buf, o, ::Val{M}, tw, t0, t1, t2) where {M}
-    @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c
-        r = avx_column_butterfly7(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), _L8(buf,ib+3M), _L8(buf,ib+4M), _L8(buf,ib+5M), _L8(buf,ib+6M), t0, t1, t2)
-        _S8(buf, ib, r[1]); Base.Cartesian.@nexprs 6 j -> _S8(buf, ib + j*M, avx_mul_complex(tw[c*6+j], r[j+1])); end
-    if M % 4 == 2; @inbounds begin; ib = o + (M-2); tc = (M ÷ 4) * 6   # rem=2 tail: 2 leftover columns (v2=1)
-        r = avx_column_butterfly7(_LP(buf,ib), _LP(buf,ib+M), _LP(buf,ib+2M), _LP(buf,ib+3M), _LP(buf,ib+4M), _LP(buf,ib+5M), _LP(buf,ib+6M), t0, t1, t2)
-        _SP(buf, ib, r[1]); Base.Cartesian.@nexprs 6 j -> _SP(buf, ib + j*M, avx_mul_complex(tw[tc+j], r[j+1])); end; end
-    if M % 4 == 1; @inbounds begin; ib = o + (M-1); tc = (M ÷ 4) * 6   # rem=1 tail: 1 leftover column (v2=0 odd-M)
-        r = avx_column_butterfly7(_LP1(buf,ib), _LP1(buf,ib+M), _LP1(buf,ib+2M), _LP1(buf,ib+3M), _LP1(buf,ib+4M), _LP1(buf,ib+5M), _LP1(buf,ib+6M), t0, t1, t2)
-        _SP1(buf, ib, r[1]); Base.Cartesian.@nexprs 6 j -> _SP1(buf, ib + j*M, avx_mul_complex(tw[tc+j], r[j+1])); end; end
-    if M % 4 == 3; @inbounds begin; ib = o + (M-3); tc = (M ÷ 4) * 6   # rem=3 tail: 3 leftover columns (v2=0 odd-M)
-        r = avx_column_butterfly7(_LP3(buf,ib), _LP3(buf,ib+M), _LP3(buf,ib+2M), _LP3(buf,ib+3M), _LP3(buf,ib+4M), _LP3(buf,ib+5M), _LP3(buf,ib+6M), t0, t1, t2)
-        _SP3(buf, ib, r[1]); Base.Cartesian.@nexprs 6 j -> _SP3(buf, ib + j*M, avx_mul_complex(tw[tc+j], r[j+1])); end; end
-end
-@inline function _trans7_w8!(out, oo, buf, o, ::Val{M}) where {M}
-    @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c; ob = oo + 28c
-        t = avx_transpose7_packed(_L8(buf,ib), _L8(buf,ib+M), _L8(buf,ib+2M), _L8(buf,ib+3M), _L8(buf,ib+4M), _L8(buf,ib+5M), _L8(buf,ib+6M))
-        Base.Cartesian.@nexprs 7 k -> _S8(out, ob + 4(k-1), t[k]); end
-    if M % 4 == 2; @inbounds begin; ib = o + (M-2); ob = oo + (M-2)*7   # 2R=14 valid complex: 3 full Vec8 + 1 Vec4
-        t = avx_transpose7_packed(_LP(buf,ib), _LP(buf,ib+M), _LP(buf,ib+2M), _LP(buf,ib+3M), _LP(buf,ib+4M), _LP(buf,ib+5M), _LP(buf,ib+6M))
-        _S8(out, ob, t[1]); _S8(out, ob+4, t[2]); _S8(out, ob+8, t[3]); _SP(out, ob+12, t[4]); end; end
-    if M % 4 == 1; @inbounds begin; ib = o + (M-1); ob = oo + (M-1)*7   # R=7 valid complex: 1 full Vec8 + 1 Vec(3)
-        t = avx_transpose7_packed(_LP1(buf,ib), _LP1(buf,ib+M), _LP1(buf,ib+2M), _LP1(buf,ib+3M), _LP1(buf,ib+4M), _LP1(buf,ib+5M), _LP1(buf,ib+6M))
-        _S8(out, ob, t[1]); _SP3(out, ob+4, t[2]); end; end
-    if M % 4 == 3; @inbounds begin; ib = o + (M-3); ob = oo + (M-3)*7   # 3R=21 valid complex: 5 full Vec8 + 1 Vec(1)
-        t = avx_transpose7_packed(_LP3(buf,ib), _LP3(buf,ib+M), _LP3(buf,ib+2M), _LP3(buf,ib+3M), _LP3(buf,ib+4M), _LP3(buf,ib+5M), _LP3(buf,ib+6M))
-        _S8(out, ob, t[1]); _S8(out, ob+4, t[2]); _S8(out, ob+8, t[3]); _S8(out, ob+12, t[4]); _S8(out, ob+16, t[5]); _SP1(out, ob+20, t[6]); end; end
+@inline @generated function _trans_prime_w8!(out, oo, buf, o, ::Val{M}, ::Val{P}) where {M, P}
+    trans_fn   = Symbol("avx_transpose", P, "_packed")
+    actual_rem = M % 4
+    main_loads  = [:(avx_load_complex8(buf, ib + $(k)*M)) for k in 0:(P-1)]
+    main_stores = [:(avx_store_complex8!(out, ob + $(4k), t[$(k+1)])) for k in 0:(P-1)]
+    main_body = quote
+        @inbounds for c in 0:(M ÷ 4 - 1); ib = o + 4c; ob = oo + $(4P) * c
+            t = $(trans_fn)($(main_loads...))
+            $(main_stores...)
+        end
+    end
+    actual_rem == 0 && return main_body
+    ib_off       = M - actual_rem
+    total_valid  = actual_rem * P
+    n_full       = total_valid ÷ 4
+    partial      = total_valid % 4
+    lf = actual_rem == 1 ? :avx_load_partial1 :
+         actual_rem == 2 ? :avx_load_partial2 : :avx_load_partial3
+    tail_loads  = [:($(lf)(buf, ib + $(k)*M)) for k in 0:(P-1)]
+    tail_stores = [:(avx_store_complex8!(out, ob + $(4k), t[$(k+1)])) for k in 0:(n_full-1)]
+    if partial == 1
+        push!(tail_stores, :(avx_store_partial1!(out, ob + $(4n_full), t[$(n_full+1)])))
+    elseif partial == 2
+        push!(tail_stores, :(avx_store_partial2!(out, ob + $(4n_full), t[$(n_full+1)])))
+    elseif partial == 3
+        push!(tail_stores, :(avx_store_partial3!(out, ob + $(4n_full), t[$(n_full+1)])))
+    end
+    return quote
+        $(main_body)
+        @inbounds begin
+            ib = o + $(ib_off); ob = oo + $(ib_off * P)
+            t = $(trans_fn)($(tail_loads...))
+            $(tail_stores...)
+        end
+    end
 end
 # radix-4 (covers the leftover 2s that radix-8/12 can't, so the W=8 tree spans ALL pow2 — needed for the
 # F32 pow2 path, where the W4 monolith is unavailable). 3 twiddles/column; transpose4 = one 4×4 reg block.
@@ -533,42 +552,27 @@ end
     @inbounds for f in 0:(cnt-1); _trans9_w8!(out, f*n, inp, f*n, Val(M)); end
 end
 
-struct MR5W8{M, I <: Kernel, T} <: Kernel
-    inner::I; tw::Vector{Vec{8, T}}; t0::Vec{8, T}; t1::Vec{8, T}
+struct MRPrimeW8{P, M, I <: Kernel, TS <: Tuple, T} <: Kernel
+    inner::I; tw::Vector{Vec{8, T}}; ts::TS
 end
-klen(::MR5W8{M}) where {M} = 5M
-keltype(::MR5W8{M, I, T}) where {M, I, T} = T
-MR5W8(inner::Kernel, fwd::Bool) = (T = keltype(inner); M = klen(inner); MR5W8{M, typeof(inner), T}(inner, mr_twiddles_w8(T, 5, M, 5M, fwd), avx_broadcast_twiddle8(T, 1, 5, fwd), avx_broadcast_twiddle8(T, 2, 5, fwd)))
-@inline function proc_ip!(k::MR5W8{M}, buf, scr) where {M}
-    n = 5M; cnt = length(buf) ÷ n
-    @inbounds for f in 0:(cnt-1); _colbf5_w8!(buf, f*n, Val(M), k.tw, k.t0, k.t1); end
+klen(::MRPrimeW8{P,M}) where {P,M} = P*M
+keltype(::MRPrimeW8{P,M,I,TS,T}) where {P,M,I,TS,T} = T
+function MRPrimeW8(P::Int, inner::Kernel, fwd::Bool)
+    T = keltype(inner); M = klen(inner); H = (P-1) ÷ 2
+    ts = ntuple(a -> avx_broadcast_twiddle8(T, a, P, fwd), H)
+    MRPrimeW8{P, M, typeof(inner), typeof(ts), T}(inner, mr_twiddles_w8(T, P, M, P*M, fwd), ts)
+end
+@inline function proc_ip!(k::MRPrimeW8{P,M}, buf, scr) where {P,M}
+    n = P*M; cnt = length(buf) ÷ n
+    @inbounds for f in 0:(cnt-1); _colbf_prime_w8!(buf, f*n, Val(M), Val(P), k.tw, k.ts); end
     proc_oop!(k.inner, scr, buf, scr)
-    @inbounds for f in 0:(cnt-1); _trans5_w8!(buf, f*n, scr, f*n, Val(M)); end
+    @inbounds for f in 0:(cnt-1); _trans_prime_w8!(buf, f*n, scr, f*n, Val(M), Val(P)); end
 end
-@inline function proc_oop!(k::MR5W8{M}, out, inp, scr) where {M}
-    n = 5M; cnt = length(inp) ÷ n
-    @inbounds for f in 0:(cnt-1); _colbf5_w8!(inp, f*n, Val(M), k.tw, k.t0, k.t1); end
+@inline function proc_oop!(k::MRPrimeW8{P,M}, out, inp, scr) where {P,M}
+    n = P*M; cnt = length(inp) ÷ n
+    @inbounds for f in 0:(cnt-1); _colbf_prime_w8!(inp, f*n, Val(M), Val(P), k.tw, k.ts); end
     proc_ip!(k.inner, inp, scr)
-    @inbounds for f in 0:(cnt-1); _trans5_w8!(out, f*n, inp, f*n, Val(M)); end
-end
-
-struct MR7W8{M, I <: Kernel, T} <: Kernel
-    inner::I; tw::Vector{Vec{8, T}}; t0::Vec{8, T}; t1::Vec{8, T}; t2::Vec{8, T}
-end
-klen(::MR7W8{M}) where {M} = 7M
-keltype(::MR7W8{M, I, T}) where {M, I, T} = T
-MR7W8(inner::Kernel, fwd::Bool) = (T = keltype(inner); M = klen(inner); MR7W8{M, typeof(inner), T}(inner, mr_twiddles_w8(T, 7, M, 7M, fwd), avx_broadcast_twiddle8(T, 1, 7, fwd), avx_broadcast_twiddle8(T, 2, 7, fwd), avx_broadcast_twiddle8(T, 3, 7, fwd)))
-@inline function proc_ip!(k::MR7W8{M}, buf, scr) where {M}
-    n = 7M; cnt = length(buf) ÷ n
-    @inbounds for f in 0:(cnt-1); _colbf7_w8!(buf, f*n, Val(M), k.tw, k.t0, k.t1, k.t2); end
-    proc_oop!(k.inner, scr, buf, scr)
-    @inbounds for f in 0:(cnt-1); _trans7_w8!(buf, f*n, scr, f*n, Val(M)); end
-end
-@inline function proc_oop!(k::MR7W8{M}, out, inp, scr) where {M}
-    n = 7M; cnt = length(inp) ÷ n
-    @inbounds for f in 0:(cnt-1); _colbf7_w8!(inp, f*n, Val(M), k.tw, k.t0, k.t1, k.t2); end
-    proc_ip!(k.inner, inp, scr)
-    @inbounds for f in 0:(cnt-1); _trans7_w8!(out, f*n, inp, f*n, Val(M)); end
+    @inbounds for f in 0:(cnt-1); _trans_prime_w8!(out, f*n, inp, f*n, Val(M), Val(P)); end
 end
 
 # W=8-clean tree for n = 2^(6+3a+2b)·3^b·5^v5 = Butterfly64 · radix-8^a · radix-12^b · radix-9^b9 · radix-5^v5
@@ -621,7 +625,7 @@ function _plan_tree_w8_main(::Type{T}, n::Int, fwd::Bool = true) where {T}
     for _ in 1:b12; k = MR12W8(k, fwd); end
     for _ in 1:a;   k = MR8W8(k, fwd);  end
     for _ in 1:c4;  k = MR4W8(k, fwd);  end
-    for _ in 1:v5;  k = MR5W8(k, fwd);  end
+    for _ in 1:v5;  k = MRPrimeW8(5, k, fwd);  end
     RPlan(k)
 end
 
@@ -664,8 +668,8 @@ function _plan_tree_w8_small(::Type{T}, n::Int, fwd::Bool) where {T}
         kp::Kernel = BPW8(T, t, fwd)
         for _ in 1:(v3 ÷ 2); kp = MR9W8(kp, fwd); end
         isodd(v3) && (kp = MR3W8(kp, fwd))
-        for _ in 1:v5; kp = MR5W8(kp, fwd); end
-        for _ in 1:v7; kp = MR7W8(kp, fwd); end
+        for _ in 1:v5; kp = MRPrimeW8(5, kp, fwd); end
+        for _ in 1:v7; kp = MRPrimeW8(7, kp, fwd); end
         v2 == 1 && (kp = MR2W8(kp, fwd))
         return RPlan(kp)
     end
@@ -677,16 +681,16 @@ function _plan_tree_w8_small(::Type{T}, n::Int, fwd::Bool) where {T}
         k0::Kernel = B1W8(T, fwd)
         for _ in 1:(v3 ÷ 2); k0 = MR9W8(k0, fwd); end       # radix-9 (pairs of 3), then lone 3, then 5/7 —
         isodd(v3) && (k0 = MR3W8(k0, fwd))                  # same innermost→outermost order as the v2=1 path
-        for _ in 1:v5; k0 = MR5W8(k0, fwd); end             # (measured faster than pushing the lone 3 outermost)
-        for _ in 1:v7; k0 = MR7W8(k0, fwd); end
+        for _ in 1:v5; k0 = MRPrimeW8(5, k0, fwd); end        # (measured faster than pushing the lone 3 outermost)
+        for _ in 1:v7; k0 = MRPrimeW8(7, k0, fwd); end
         return RPlan(k0)
     end
     if v2 == 1                                              # 2·odd: rem = M mod 4 = 2 uniformly (partial cols)
         k1::Kernel = B2W8(T, fwd)                           # B2 base (the lone factor of 2)
         for _ in 1:(v3 ÷ 2); k1 = MR9W8(k1, fwd); end       # radix-9 per pair of 3s (preferred; fewer passes)
         isodd(v3) && (k1 = MR3W8(k1, fwd))                  # lone factor of 3 (M ≡ 2 mod 4 ⇒ rem-2 tail)
-        for _ in 1:v5; k1 = MR5W8(k1, fwd); end             # then radix-5
-        for _ in 1:v7; k1 = MR7W8(k1, fwd); end             # radix-7 per factor of 7 (98=2·7² → DST-I n=48)
+        for _ in 1:v5; k1 = MRPrimeW8(5, k1, fwd); end        # then radix-5
+        for _ in 1:v7; k1 = MRPrimeW8(7, k1, fwd); end        # radix-7 per factor of 7 (98=2·7² → DST-I n=48)
         return RPlan(k1)
     end
     v7 <= 1 || return nothing                               # v2≥2 path: radix-7 only as the lone factor
@@ -696,8 +700,8 @@ function _plan_tree_w8_small(::Type{T}, n::Int, fwd::Bool) where {T}
     k::Kernel = base
     for _ in 1:(v3 ÷ 2); k = MR9W8(k, fwd); end
     isodd(v3) && (k = MR3W8(k, fwd))
-    for _ in 1:v5; k = MR5W8(k, fwd); end
-    v7 == 1 && (k = MR7W8(k, fwd))
+    for _ in 1:v5; k = MRPrimeW8(5, k, fwd); end
+    v7 == 1 && (k = MRPrimeW8(7, k, fwd))
     return RPlan(k)
 end
 
