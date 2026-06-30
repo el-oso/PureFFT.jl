@@ -134,6 +134,26 @@ end
     @inbounds for f in 0:(length(inp) ÷ 8 - 1); butterfly8!(out, inp, 8f, k.tw, k.rot); end
 end
 
+# ---- leaf: Butterfly2 (length-2 DFT [a+b, a-b]; register-only, no scratch). The smallest pow2 leaf;
+# the inner of MR13(B2) so a lone factor of 2 carries the 13 through the FAST avx_column_butterfly13
+# instead of the generic BP13 prime leaf (26=MR13(B2), 52=MR2(MR13(B2)), 78=MR3(MR13(B2))). ----
+struct B2 <: Kernel
+    n::Int
+end
+B2(fwd::Bool) = B2(2)
+@inline function proc_ip!(k::B2, buf, scr)
+    @inbounds for f in 0:(length(buf) ÷ 2 - 1)
+        s, d = avx_butterfly2(avx_load_partial1(buf, 2f), avx_load_partial1(buf, 2f + 1))
+        avx_store_partial1!(buf, 2f, s); avx_store_partial1!(buf, 2f + 1, d)
+    end
+end
+@inline function proc_oop!(k::B2, out, inp, scr)
+    @inbounds for f in 0:(length(inp) ÷ 2 - 1)
+        s, d = avx_butterfly2(avx_load_partial1(inp, 2f), avx_load_partial1(inp, 2f + 1))
+        avx_store_partial1!(out, 2f, s); avx_store_partial1!(out, 2f + 1, d)
+    end
+end
+
 # ---- leaf: Butterfly16 (4x4, two-phase; needs scratch ≥ its length) ----
 struct B16 <: Kernel
     n::Int; tw::Vector{V4f}; rot::V4f
@@ -694,6 +714,23 @@ end
         avx_store_complex!(buf, ib + 9M, avx_mul_complex(tw[c * 12 + 9], r[10])); avx_store_complex!(buf, ib + 10M, avx_mul_complex(tw[c * 12 + 10], r[11]))
         avx_store_complex!(buf, ib + 11M, avx_mul_complex(tw[c * 12 + 11], r[12])); avx_store_complex!(buf, ib + 12M, avx_mul_complex(tw[c * 12 + 12], r[13]))
     end
+    isodd(M) && _colbf13_oddtail!(buf, o, Val(M), tw, t0, t1, t2, t3, t4, t5)
+end
+@noinline function _colbf13_oddtail!(buf, o, ::Val{M}, tw, t0, t1, t2, t3, t4, t5) where {M}   # leftover column M-1, partial V2f
+    @inbounds begin
+        ib = o + (M - 1); tc = (M ÷ 2) * 12
+        r = avx_column_butterfly13(avx_load_partial1(buf, ib), avx_load_partial1(buf, ib + M), avx_load_partial1(buf, ib + 2M), avx_load_partial1(buf, ib + 3M),
+                                   avx_load_partial1(buf, ib + 4M), avx_load_partial1(buf, ib + 5M), avx_load_partial1(buf, ib + 6M), avx_load_partial1(buf, ib + 7M),
+                                   avx_load_partial1(buf, ib + 8M), avx_load_partial1(buf, ib + 9M), avx_load_partial1(buf, ib + 10M), avx_load_partial1(buf, ib + 11M),
+                                   avx_load_partial1(buf, ib + 12M), avx_lo(t0), avx_lo(t1), avx_lo(t2), avx_lo(t3), avx_lo(t4), avx_lo(t5))
+        avx_store_partial1!(buf, ib, r[1])
+        avx_store_partial1!(buf, ib + M, avx_mul_complex(avx_lo(tw[tc + 1]), r[2])); avx_store_partial1!(buf, ib + 2M, avx_mul_complex(avx_lo(tw[tc + 2]), r[3]))
+        avx_store_partial1!(buf, ib + 3M, avx_mul_complex(avx_lo(tw[tc + 3]), r[4])); avx_store_partial1!(buf, ib + 4M, avx_mul_complex(avx_lo(tw[tc + 4]), r[5]))
+        avx_store_partial1!(buf, ib + 5M, avx_mul_complex(avx_lo(tw[tc + 5]), r[6])); avx_store_partial1!(buf, ib + 6M, avx_mul_complex(avx_lo(tw[tc + 6]), r[7]))
+        avx_store_partial1!(buf, ib + 7M, avx_mul_complex(avx_lo(tw[tc + 7]), r[8])); avx_store_partial1!(buf, ib + 8M, avx_mul_complex(avx_lo(tw[tc + 8]), r[9]))
+        avx_store_partial1!(buf, ib + 9M, avx_mul_complex(avx_lo(tw[tc + 9]), r[10])); avx_store_partial1!(buf, ib + 10M, avx_mul_complex(avx_lo(tw[tc + 10]), r[11]))
+        avx_store_partial1!(buf, ib + 11M, avx_mul_complex(avx_lo(tw[tc + 11]), r[12])); avx_store_partial1!(buf, ib + 12M, avx_mul_complex(avx_lo(tw[tc + 12]), r[13]))
+    end
 end
 @inline function _trans13!(out, oo, buf, o, ::Val{M}) where {M}
     @inbounds for c in 0:(M ÷ 2 - 1)
@@ -705,6 +742,13 @@ end
         avx_store_complex!(out, ob, t[1]); avx_store_complex!(out, ob + 2, t[2]); avx_store_complex!(out, ob + 4, t[3]); avx_store_complex!(out, ob + 6, t[4])
         avx_store_complex!(out, ob + 8, t[5]); avx_store_complex!(out, ob + 10, t[6]); avx_store_complex!(out, ob + 12, t[7]); avx_store_complex!(out, ob + 14, t[8])
         avx_store_complex!(out, ob + 16, t[9]); avx_store_complex!(out, ob + 18, t[10]); avx_store_complex!(out, ob + 20, t[11]); avx_store_complex!(out, ob + 22, t[12]); avx_store_complex!(out, ob + 24, t[13])
+    end
+    isodd(M) && _trans13_oddtail!(out, oo, buf, o, Val(M))
+end
+@noinline function _trans13_oddtail!(out, oo, buf, o, ::Val{M}) where {M}   # transpose of a 13x1 column → 13 contiguous complex
+    @inbounds begin
+        ib = o + (M - 1); ob = oo + 13 * (M - 1)
+        for r in 0:12; avx_store_partial1!(out, ob + r, avx_load_partial1(buf, ib + r * M)); end
     end
 end
 

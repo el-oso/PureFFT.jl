@@ -171,9 +171,11 @@ function _odd_tree(n::Int, fwd::Bool)
     while m % 3 == 0; m ÷= 3; a += 1; end
     while m % 5 == 0; m ÷= 5; b += 1; end
     while m % 7 == 0; m ÷= 7; c += 1; end
-    if m != 1                                            # residual non-{3,5,7} prime ≤43 as the leaf
+    if m == 169                                          # 13² residual: BP13 leaf + one radix-13 pass (odd M=13)
+        k::Kernel = MR13(BP(13, fwd), fwd)
+    elseif m != 1                                        # residual non-{3,5,7} prime ≤43 as the leaf
         (m <= _BP_MAX && _isprime_odd(m)) || return nothing
-        k::Kernel = BP(m, fwd)
+        k = BP(m, fwd)
     elseif a >= 2                                        # B9 (3²) base when ≥2 threes (radix-9 preferred)
         k = B9(fwd); a -= 2
     elseif b >= 2                                        # B25 (5²) base: 25, 125=MR5(B25), 625=MR5²(B25)
@@ -196,6 +198,20 @@ function _odd_tree(n::Int, fwd::Bool)
     return k
 end
 
+# Carry leftover smooth 2^p2·3^p3·5^p5 factors over an EVEN-M kernel using the fast radixes. M stays even
+# throughout (the caller guarantees an even base), so no odd tail is needed and any radix is safe. Combine
+# 2·3→MR6 and 2³→MR8 where possible (a long MR2 chain is the slow signature); leftovers as MR5/MR3/MR4/MR2.
+function _carry_even(k0::Kernel, p2::Int, p3::Int, p5::Int, fwd::Bool)
+    k::Kernel = k0
+    for _ in 1:p5; k = MR5(k, fwd); end
+    while p2 >= 1 && p3 >= 1; k = MR6(k, fwd); p2 -= 1; p3 -= 1; end
+    for _ in 1:p3; k = MR3(k, fwd); end
+    while p2 >= 3; k = MR8(k, fwd); p2 -= 3; end
+    p2 == 2 && (k = MR4(k, fwd))
+    p2 == 1 && (k = MR2(k, fwd))
+    k
+end
+
 # build a kernel tree for n (or nothing if unsupported). fwd = forward.
 function plan_tree(n::Int, fwd::Bool=true)
     if isodd(n)                                          # all odd sizes route through the odd-prime tree
@@ -206,21 +222,41 @@ function plan_tree(n::Int, fwd::Bool=true)
     p7 = 0;  while rest % 7  == 0; rest ÷= 7;  p7  += 1; end
     p13 = 0; while rest % 13 == 0; rest ÷= 13; p13 += 1; end
     rest == 1 || return nothing                         # any other prime (11, ≥17) → fall back
-    (p7 <= 1 && p13 <= 1) || return nothing             # 7²+/13²+ unsupported → fall back
-    # ---- single 7 and/or single 13 carried as ONE radix-7/13 pass each (MR7/MR13, reusing the verified
-    # avx_column_butterfly7/13) over the smooth 2·3·5 core. Needs ≥1 factor of 2 so every level's M is even
-    # (the column butterflies stride 2 complex/iter). 112=MR7(B16), 65520=MR13(MR7(720)), 5040=MR7(720).
-    if p7 == 1 || p13 == 1
-        p2 >= 1 || return nothing                       # odd smooth core ⇒ no even-M SIMD path
-        inner = _smooth235_kernel(p2, p3, p5, fwd)
-        isnothing(inner) && return nothing
-        k::Kernel = inner
-        p7  == 1 && (k = MR7(k, fwd))
-        p13 == 1 && (k = MR13(k, fwd))
-        return RPlan(k)
-    end
+    (p7 <= 2 && p13 <= 2) || return nothing             # 7³+/13³+ unsupported → fall back
+
     # ---- pure smooth 2·3·5: keep the dedicated pow2 routing for small pure powers of two (p2<8 → fall back).
-    p3 == 0 && p5 == 0 && p2 < 8 && return nothing
-    ks = _smooth235_kernel(p2, p3, p5, fwd)
-    return isnothing(ks) ? nothing : RPlan(ks)
+    if p7 == 0 && p13 == 0
+        p3 == 0 && p5 == 0 && p2 < 8 && return nothing
+        ks = _smooth235_kernel(p2, p3, p5, fwd)
+        return isnothing(ks) ? nothing : RPlan(ks)
+    end
+    # a square (7²/13²) coexisting with the other prime (e.g. 7²·13, 7·13²) is unsupported → fall back
+    ((p7 < 2 || p13 == 0) && (p13 < 2 || p7 == 0)) || return nothing
+
+    # ---- single 7 and/or single 13: ONE radix-7/13 column pass each (MR7/MR13, the verified
+    # avx_column_butterfly7/13) over a fast smooth 2·3·5 base when one exists (M even ⇒ no tail).
+    # 112=MR7(B16), 65520=MR13(MR7(720)), 5040=MR7(720), 208=MR13(B16). p2≥1 always (n even).
+    if p7 <= 1 && p13 <= 1
+        inner = _smooth235_kernel(p2, p3, p5, fwd)
+        if !isnothing(inner)
+            k::Kernel = inner
+            p7  == 1 && (k = MR7(k, fwd))
+            p13 == 1 && (k = MR13(k, fwd))
+            return RPlan(k)
+        end
+        # No fast smooth base (small 2^a·3^b·prime: 14/26/52/78/182). Root on the B2 leaf so each prime rides
+        # the FAST column butterfly (MR7/MR13 over even M=2) instead of the generic O(p²) BP leaf, then carry
+        # the rest. 26=MR13(B2), 52=MR2(MR13(B2)), 78=MR3(MR13(B2)), 14=MR7(B2), 182=MR13(MR7(B2)).
+        kk::Kernel = B2(fwd)
+        p7  == 1 && (kk = MR7(kk, fwd))
+        p13 == 1 && (kk = MR13(kk, fwd))
+        return RPlan(_carry_even(kk, p2 - 1, p3, p5, fwd))      # B2 consumed one factor of 2; M now even
+    end
+
+    # ---- 7² / 13² squares: a dedicated ODD base (B49 = the 7² codelet; MR13(BP13) = 13² with the new odd-M
+    # tail) + a mandatory first MR2 to even-ize the odd M (the only odd-safe even-izer — MR4/6/8/12 drop the
+    # odd last column), then the fast even carry. 98=MR2(B49), 196=MR2(MR2(B49)), 294=MR3(MR2(B49)),
+    # 588=MR6(MR2(B49)), 169=MR13(BP13) [odd, via _odd_tree], 338=MR2(MR13(BP13)).
+    core::Kernel = p7 == 2 ? B49(fwd) : MR13(BP(13, fwd), fwd)
+    return RPlan(_carry_even(MR2(core, fwd), p2 - 1, p3, p5, fwd))
 end
