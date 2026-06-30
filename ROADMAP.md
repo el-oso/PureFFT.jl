@@ -43,31 +43,33 @@ roadmap decision below — *does this serve general-purpose use, the Julia showc
 
 ## Open / planned
 
-### ⭐ MUST DO — flagship research: a Julia-native codelet generator (the "genfft analogue")
+### ⭐ Codelet generator — FIRST DELIVERY SHIPPED (2026-06-30); genfft-*optimiser* dead vs LLVM
 
-**The single highest-leverage direction for PureFFT, and one only Julia can take.** FFTW's `genfft` is an
-OCaml program that generates C codelets **at FFTW build time**; RustFFT generates **at compile time**.
-Neither can synthesise a new specialised kernel for a size it didn't anticipate — they fall back to general
-routines. **Julia can, via `@generated` (and runtime codegen): specialise per size *on first use*.** PureFFT
-already exploits a limited form (the `@generated` codelets); this item is to build the full analogue:
+The flagship "Julia-native genfft analogue" was investigated and partly delivered. Two clear results:
 
-> symbolic DFT → operation **DAG** → algebraic simplify + **CSE** (incl. genfft's DAG-transposition trick) →
-> **register-pressure-minimising schedule** → emit a Julia `Expr` — generating an optimally-scheduled
-> straight-line codelet for **any** size on first use, ideally **batch-vectorised** (`vrank`-style, SIMD
-> across the sub-transform batch — see the batch-vectorisation item under "Non-pow2" below).
+**1. The genfft *optimising-compiler* framing is DEAD vs modern LLVM (measured, decisive).** A make-or-break
+gate built a minimal DFT IR + CSE pass and compared *compiled* `@code_native`: naive 1008 insns vs IR+CSE
+**1024** (worse) — LLVM already does genfft's CSE. A scheduler gate (register-pressure list scheduling)
+likewise didn't beat LLVM's allocator (the DFT DAG's antichain makes peak liveness irreducible). So
+CSE / sign-prop / network-transposition / scheduling are **redundant against LLVM 18+** (consistent with
+`julia-sched-mwe`). *Do not rebuild them.* (Evidence in git history: the CSE gate commit + the scheduler
+gate commit on the merged `feat/codelet-generator` arc; the experiment files were pruned after the verdict.)
 
-**Why it's valuable:** (1) arbitrary-size codelet coverage — primes / prime-powers / awkward sizes get a real
-codelet instead of a Bluestein/recursive fallback (the strongest, clearest Julia-only win); (2) symbolic
-CSE/simplification can cut flops below a naive radix tree; (3) FFT-specific scheduling that a general compiler
-may not match. **Combined with batch-vectorisation, this is the path to beating FFTW broadly on small
-non-pow2.**
+**2. Generating the proven-fast COLUMN-PACKED structure WON — and ships.** The pivot (after wrongly
+benchmarking the slow SoA four-step — the reinterpretation plateau) was to generate PureFFT's *column-packed*
+`avxradix` structure, not a generic one. Validated at parity: `src/gen/transpose.jl` reproduces hand
+`avx_transpose{5,7,9}_packed` at **Δ=0** instructions; `src/gen/colgen.jl` (`gen_pp_codelet!`) reproduces hand
+B25/B49 at **identical** arith+shuffle counts. **In production now** (additive `autoplan` candidates,
+invariant-hole fixed — Bluestein is timed when a generated candidate competes, so "cannot-regress" truly
+holds): **7 prime-squares P²** (121…961, 1.76–5.49× FFTW) + **10 composites M·P²** (M∈{2,4}, P∈{17..31},
+1.43–3.27×), all beating Bluestein. Honestly dropped as measured non-wins: all P³ cubes, 2^a·11²/13².
+PrecompileTools `@compile_workload` (`genpp_precompile_max_p` Preference, default 31, ≤~60 s first-use → 0).
 
-**Honest caveats (go in eyes-open — these are measured, not guessed):** it is **breadth** more than a fix for
-the parity floors we've already hit — the 2^a·5³ floor is *shuffle/vectorisation-axis-bound*, not
-codelet-scheduling-bound, so a scalar-DAG generator alone won't close it (you need the batch axis too); and
-the `julia-sched-mwe/` reproducer found **LLVM already schedules our radix-9/12 DAGs as well as Rust** — so
-genfft's classic "schedules better than the 1990s C compiler" edge is *narrower* against modern LLVM than
-against FFTW's original target. **Scope it deliberately** (its own brainstorm/spec) before building.
+**Open continuation (the real remaining value — *not* the optimiser):**
+- **Systematise the ~50 hand-written `avxradix` SIMD functions** into the generator (equal speed — parity
+  proven — far less code). The maintainability win; the biggest remaining prize.
+- **More winning size classes** (measure-then-wire, like the composites): other prime-power composites.
+- *Not* a fix for the 2^a·5³ architectural floor (that's the column-packed structure's own ceiling).
 
 
 ### AVX-512 (W=8) — extend the win beyond small compute-bound sizes
