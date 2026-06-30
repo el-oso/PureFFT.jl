@@ -189,6 +189,24 @@ end
     end
 end
 
+@testitem "F64 non-pow2 coverage gaps: 2^a·7², 2^a·13, 13² (correctness + wiring)" setup = [FFTUtil] begin
+    using FFTW
+    # Closed the slow-backend audit gaps: plan_tree had no kernel for these, so autoplan fell to the slow
+    # generic path (0.2–0.6× FFTW). Now wired: 2^a·7² roots on the B49 (7²) codelet + MR2-first even carry;
+    # small 2^a·3^b·13 roots on the B2 leaf so the 13 rides the FAST avx_column_butterfly13 (MR13(B2)); 13²
+    # uses the new radix-13 odd-M tail (169=MR13(BP13)). Correctness vs FFTW (fwd) + round-trip (inv).
+    sizes = (14, 26, 52, 78, 98, 169, 182, 196, 294, 338, 588)
+    @testset "vs FFTW (F64, n=$n)" for n in sizes
+        x = randn(ComplexF64, n)
+        @test relerr(pfft(x; variant = :fast), fft(x)) < tol(Float64)
+        pf = plan_pfft(x; variant = :fast); y = copy(x); pfft!(y, pf)
+        pii = plan_pfft(ComplexF64, n; variant = :fast, inverse = true); pfft!(y, pii)   # normalized
+        @test relerr(y, x) < tol(Float64)
+        @test !isnothing(PureFFT.AvxRadix.plan_tree(n, true))       # an AVX kernel now EXISTS (no slow fallback)
+        @test !isnothing(PureFFT.AvxRadix.plan_tree(n, false))
+    end
+end
+
 @testitem "Stage 10: four-step batched-codelet executor" setup = [FFTUtil] begin
     using FFTW, JET
     # Smooth composite non-pow2 sizes (>128) route here; batched SoA codelets for both passes.

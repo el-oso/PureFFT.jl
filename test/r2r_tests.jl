@@ -289,6 +289,26 @@ end
     end
 end
 
+@testitem "F64 non-pow2 coverage-gap parity vs FFTW ≥ 0.96×" tags=[:perf] begin
+    using PureFFT, FFTW, BenchmarkTools, Statistics
+    # Slow-backend-audit gaps now wired in plan_tree (were 0.21–0.57× on the slow generic path):
+    #  - 2^a·7² (98/196/294): B49 (7²) codelet + MR2-first even carry (588=MR6(MR2(B49)) combines the 2·3).
+    #  - small 2^a·3^b·13 (26/52/78): B2 leaf so the 13 rides the FAST avx_column_butterfly13 — MR13(B2),
+    #    MR2(MR13(B2)), MR3(MR13(B2)) — instead of the generic O(p²) BP13 leaf (0.74–0.93× → 1.1–1.5×).
+    #  - 13² (169=MR13(BP13), via the NEW radix-13 odd-M partial-V2f tail); 2·13²=338=MR2(MR13(BP13)).
+    # Pinned 4500 MHz, 3000-sample median; same check_bounds guard as the other non-pow2 perf items.
+    med(b) = median(b.times)
+    ratio(n) = (x = randn(ComplexF64, n);
+        pp = plan_pfft(ComplexF64, n); pf = FFTW.plan_fft!(copy(x); flags = FFTW.MEASURE);
+        med(@benchmark $pf * y setup = (y = copy($x))) / med(@benchmark PureFFT.apply_unnormalized!($pp, z) setup = (z = copy($x))))
+    pass = (98, 196, 294, 26, 52, 78, 169, 338, 588)
+    if Base.JLOptions().check_bounds == 0
+        for n in pass; @test ratio(n) ≥ 0.96; end
+    else
+        for n in pass; @test_skip ratio(n) ≥ 0.96; end
+    end
+end
+
 @testitem "F32 non-pow2 complex parity vs FFTW ≥ 0.96×" tags=[:perf] begin
     using PureFFT, FFTW, BenchmarkTools, Statistics
     # Float32 non-pow2 sizes routed through the Vec{8,Float32} W=8 tree: small pow2 bases B4/B8/B16/B32/
