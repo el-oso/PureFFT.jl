@@ -345,27 +345,17 @@ end
 
 # transpose5_packed (__m256d): note _mm256_blend_pd(a,b,0x03) = lanes 0,1 from b, 2,3 from a
 @inline _blend03(a::V4f, b::V4f) = shufflevector(a, b, Val((4, 5, 2, 3)))
-# transpose3_packed (__m256d): unpacklo(r0,r1), blend_pd(r0,r2,0x03), unpackhi(r1,r2)
-@inline avx_transpose3_packed(r0::V4f, r1::V4f, r2::V4f) =
-    (avx_unpacklo_complex(r0, r1), _blend03(r0, r2), avx_unpackhi_complex(r1, r2))
-@inline function avx_transpose5_packed(r1::V4f, r2::V4f, r3::V4f, r4::V4f, r5::V4f)
-    (avx_unpacklo_complex(r1, r2), avx_unpacklo_complex(r3, r4), _blend03(r1, r5),
-     avx_unpackhi_complex(r2, r3), avx_unpackhi_complex(r4, r5))
-end
-# transpose7_packed (__m256d): 2×7 packed transpose, same odd-radix pattern as transpose5 — pack the
-# 7 low-complex lanes then the 7 high-complex lanes into 7 V4f (blend03 bridges lane 7-lo / 0-hi).
-@inline function avx_transpose7_packed(r1::V4f, r2::V4f, r3::V4f, r4::V4f, r5::V4f, r6::V4f, r7::V4f)
-    (avx_unpacklo_complex(r1, r2), avx_unpacklo_complex(r3, r4), avx_unpacklo_complex(r5, r6), _blend03(r1, r7),
-     avx_unpackhi_complex(r2, r3), avx_unpackhi_complex(r4, r5), avx_unpackhi_complex(r6, r7))
-end
-# transpose13_packed (__m256d): same odd-radix pattern as transpose5/7 with 6 unpacklo + blend03 + 6 unpackhi.
-@inline function avx_transpose13_packed(r1::V4f, r2::V4f, r3::V4f, r4::V4f, r5::V4f, r6::V4f, r7::V4f,
-                                        r8::V4f, r9::V4f, r10::V4f, r11::V4f, r12::V4f, r13::V4f)
-    (avx_unpacklo_complex(r1, r2), avx_unpacklo_complex(r3, r4), avx_unpacklo_complex(r5, r6),
-     avx_unpacklo_complex(r7, r8), avx_unpacklo_complex(r9, r10), avx_unpacklo_complex(r11, r12), _blend03(r1, r13),
-     avx_unpackhi_complex(r2, r3), avx_unpackhi_complex(r4, r5), avx_unpackhi_complex(r6, r7),
-     avx_unpackhi_complex(r8, r9), avx_unpackhi_complex(r10, r11), avx_unpackhi_complex(r12, r13))
-end
+# Systematized (P0.2): the odd-N V4f packed transposes forward to the @generated gen_transpose_packed
+# (src/gen/transpose.jl), whose unpacklo/blend03/unpackhi bridge network emits the BYTE-IDENTICAL shuffle
+# sequence for any odd N (pure shuffles, no arithmetic — verified equal expression-for-expression).
+@inline avx_transpose3_packed(r0::V4f, r1::V4f, r2::V4f) = gen_transpose_packed((r0, r1, r2))
+@inline avx_transpose5_packed(r1::V4f, r2::V4f, r3::V4f, r4::V4f, r5::V4f) =
+    gen_transpose_packed((r1, r2, r3, r4, r5))
+@inline avx_transpose7_packed(r1::V4f, r2::V4f, r3::V4f, r4::V4f, r5::V4f, r6::V4f, r7::V4f) =
+    gen_transpose_packed((r1, r2, r3, r4, r5, r6, r7))
+@inline avx_transpose13_packed(r1::V4f, r2::V4f, r3::V4f, r4::V4f, r5::V4f, r6::V4f, r7::V4f,
+                               r8::V4f, r9::V4f, r10::V4f, r11::V4f, r12::V4f, r13::V4f) =
+    gen_transpose_packed((r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13))
 
 # ---- broadcast / twiddles (broadcast_complex_elements, twiddles::compute_twiddle) ----
 @inline avx_broadcast_complex(re::Float64, im::Float64) = V4f((re, im, re, im))

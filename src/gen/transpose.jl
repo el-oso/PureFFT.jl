@@ -1,6 +1,6 @@
-# Generated packed in-register transpose (probe — NOT wired into kernels).
+# Generated packed in-register transpose (WIRED — P0.2: avx_transpose{3,5,7,13}_packed forward to this).
 #
-# Generalizes the hand-written avx_transpose{5,7,9,13}_packed (avxradix/avxport.jl) to ANY odd N.
+# Generalizes the hand-written avx_transpose{3,5,7,9,13}_packed (avxradix/avxport.jl) to ANY odd N.
 # These do a 2×N → N×2 packed transpose: N input V4f registers, each holding 2 complex
 # [lo_i, hi_i] (lanes [0,1]=lo complex, [2,3]=hi complex). The 2N complex are re-packed in
 # column-major order — first all N lo-complex (a_1..a_N), then all N hi-complex (b_1..b_N) —
