@@ -193,7 +193,7 @@ end
 # sin uses the SAME index with a + sign when a≤half, − when a>half (sin(2πa/P) = −sin(2π(P-a)/P)). The
 # straight-line body is emitted at COMPILE time (no runtime tuple indexing — CLAUDE.md rule 1) and
 # reproduces the hand kernels for P∈{5,7,13} bit-exactly; verified vs a reference DFT for P∈{11,19,23,43}.
-@generated function avx_colbf_prime(rs::NTuple{P}, tws::NTuple{H}) where {P, H}
+@inline @generated function avx_colbf_prime(rs::NTuple{P}, tws::NTuple{H}) where {P, H}
     @assert 2H + 1 == P "avx_colbf_prime: P must be an odd prime, got P=$P H=$H"
     s = Any[]
     for m in 1:H
