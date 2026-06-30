@@ -67,6 +67,13 @@ const _GENPP_PRECOMPILE_MAX_P = @load_preference("genpp_precompile_max_p", 31)::
         # forward specialization is the same native code the inverse plan reuses. One direction suffices.
         apply_unnormalized!(GenPPCodeletPlan(ComplexF64, n), zeros(ComplexF64, n))
     end
+    # Composite radix-M DIT plans M·P² (autotune-routed family). Cheap vs the P² codelets — they REUSE the
+    # gen_pp(P²) native code precompiled above; only the per-(P,M) gather/twiddle/combine is new. Gated by
+    # the same cutoff (composite P also ≤ 31). One direction suffices (combine is type-keyed on M).
+    for P in (17, 19, 23, 29, 31), M in (2, 4)
+        P <= _GENPP_PRECOMPILE_MAX_P || continue
+        apply_unnormalized!(GenPPCompositePlan(ComplexF64, M * P * P, P, M), zeros(ComplexF64, M * P * P))
+    end
 end
 
 end # module

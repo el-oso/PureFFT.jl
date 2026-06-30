@@ -246,6 +246,81 @@ function apply_unnormalized!(p::GenPPCodeletPlan{T, P}, x::AbstractVector) where
     return x
 end
 
+# --- generated radix-M DIT over the gen_pp P² codelet (large-prime-square composites) ---------------
+# n = M·P². A register four-step (DIT) that reuses the in-register `gen_pp_codelet!` as the size-P² inner
+# DFT — NO SoA split/merge buffer passes (the SoA `FourStepCodeletPlan` measured only ~0.30× FFTW on these,
+# the buffer overhead dominates a small n). Gathered, transformed, twiddled, then a size-M DFT across:
+#   X[b·P² + r] = Σ_a W_M^{ab} · (W_n^{ar} · A_a[r]),   A_a = DFT_{P²}(x[a::M]),   a,b = 0..M-1.
+# Wins where FFTW/AvxMixedRadix have NO good codelet so the prior route is Bluestein: P ∈ {17,19,23,29,31},
+# M ∈ {2,4} — measured 1.1–1.65× FFTW AND RustFFT (autotune.jl gates exactly this set). P ∈ {11,13} are
+# EXCLUDED (FFTW / the radix-13 AvxMixedRadix tree already win there), and P³ (M=P) is NOT wired (the
+# O(P⁴) size-P combine loses / only ties — see the measure report). Float64-only (gen_pp is Vec{4,Float64}).
+struct GenPPCompositePlan{T, P, M, TCH, TC, TCL, MM} <: AbstractFFTPlan{T}
+    twchunk::TCH; twcol::TC; twcol_lo::TCL      # gen_pp(P²) twiddle bundles (as GenPPCodeletPlan)
+    twn::Vector{Complex{T}}                     # inter-stage W_n^{a r}, flat [a·P² + r + 1] (a=0 row = 1)
+    wm::NTuple{MM, Complex{T}}                   # size-M DFT matrix W_M^{a b}, row-major [b·M + a + 1]; MM=M²
+    scr::Vector{Complex{T}}                     # length M·P² gather/inner-DFT scratch
+    inverse::Bool
+end
+
+function GenPPCompositePlan(::Type{Complex{T}}, n::Integer, P::Integer, M::Integer; inverse::Bool = false) where {T}
+    P = Int(P); M = Int(M); n = Int(n)
+    P * P * M == n || throw(ArgumentError("GenPPCompositePlan: n=$n ≠ M·P² (M=$M, P=$P)"))
+    fwd = !inverse; s = inverse ? 1 : -1; P2 = P * P; H = (P - 1) ÷ 2
+    twcol = ntuple(a -> AvxRadix.avx_broadcast_twiddle(a, P, fwd), H)
+    twcol_lo = map(AvxRadix.avx_lo, twcol)
+    twchunk = ntuple(g -> ntuple(r -> AvxRadix.avx_mixedradix_twiddle_chunk(2g - 1, r, P2, fwd), P - 1), H)
+    twn = Vector{Complex{T}}(undef, M * P2)
+    @inbounds for a in 0:(M - 1), r in 0:(P2 - 1)
+        twn[a * P2 + r + 1] = Complex{T}(cispi(T(s) * T(2 * mod(a * r, n)) / T(n)))
+    end
+    wm = ntuple(i -> (b = (i - 1) ÷ M; a = (i - 1) % M; Complex{T}(cispi(T(s) * T(2 * mod(a * b, M)) / T(M)))), M * M)
+    return GenPPCompositePlan{T, P, M, typeof(twchunk), typeof(twcol), typeof(twcol_lo), M * M}(
+        twchunk, twcol, twcol_lo, twn, wm, Vector{Complex{T}}(undef, M * P2), inverse)
+end
+
+plan_length(::GenPPCompositePlan{T, P, M}) where {T, P, M} = (M * P * P)::Int
+plan_inverse(p::GenPPCompositePlan)::Bool = p.inverse
+
+# size-M DFT across the M inner-DFT blocks, scatter with stride P². M is a TYPE param so the per-r M-point
+# DFT unrolls to straight-line code with LITERAL `wm`/`scr` indices (CLAUDE rule 1 — never a runtime tuple
+# index); the outer `r` is an ordinary contiguous buffer loop. Reads `scr`, writes `out` (separate buffers).
+@generated function _genpp_combine!(out, scr, wm::NTuple{MM, Complex{Tc}}, ::Val{P}, ::Val{M}) where {MM, Tc, P, M}
+    P2 = P * P
+    loads = [:($(Symbol(:s, a)) = scr[$(a * P2) + r + 1]) for a in 0:(M - 1)]
+    stores = Expr[]
+    for b in 0:(M - 1)
+        acc = :(wm[$(b * M + 1)] * $(Symbol(:s, 0)))
+        for a in 1:(M - 1)
+            acc = :($acc + wm[$(b * M + a + 1)] * $(Symbol(:s, a)))
+        end
+        push!(stores, :(out[$(b * P2) + r + 1] = $acc))
+    end
+    quote
+        @inbounds for r in 0:$(P2 - 1)
+            $(loads...)
+            $(stores...)
+        end
+        return nothing
+    end
+end
+
+function apply_unnormalized!(p::GenPPCompositePlan{T, P, M}, x::AbstractVector) where {T, P, M}
+    P2 = P * P; scr = p.scr
+    @inbounds for a in 0:(M - 1)                       # gather stride-M subsequence a into block a
+        @simd for j in 0:(P2 - 1)
+            scr[a * P2 + j + 1] = x[M * j + a + 1]
+        end
+        AvxRadix.gen_pp_codelet!(scr, scr, a * P2, p.twchunk, p.twcol, p.twcol_lo)   # inner size-P² DFT
+    end
+    twn = p.twn
+    @inbounds @simd ivdep for i in (P2 + 1):(M * P2)   # inter-stage twiddle (a≥1 blocks; a=0 twn=1)
+        scr[i] *= twn[i]
+    end
+    _genpp_combine!(x, scr, p.wm, Val(P), Val(M))      # size-M DFT across, scatter stride P²
+    return x
+end
+
 # --- batched SoA mixed-radix codelet (the vectorized engine for the four-step executor) ------
 # Mixed-radix straight-line builder in SPLIT (re/im) form: each value is a (re,im) symbol pair and
 # every op is real arithmetic with scalar twiddle literals → pure FMA, ZERO shuffles. When the

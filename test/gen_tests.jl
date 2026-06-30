@@ -46,3 +46,27 @@ end
         @test maximum(abs.(go .- ndft(x))) / maximum(abs.(ndft(x))) ≤ 1e-12   # ≡ reference DFT
     end
 end
+
+@testitem "Generated radix-M DIT composite codelet (GenPPCompositePlan) ≡ reference DFT + round-trip" begin
+    # The composite codelet (src/codelets.jl) runs a register radix-M DIT over the gen_pp P² codelet for
+    # n = M·P². autoplan routes the measured-winning family — P ∈ {17,19,23,29,31}, M ∈ {2,4} (≈2–3× FFTW,
+    # prior route Bluestein); P ∈ {11,13} and P³ are EXCLUDED. Correctness (fwd vs reference DFT + inverse
+    # round-trip) and routing (wins for the family, never routes excluded sizes here).
+    P = PureFFT
+    ndft(x) = [sum(x[j + 1] * cispi(-2 * j * k / length(x)) for j in 0:(length(x) - 1)) for k in 0:(length(x) - 1)]
+    fam = ((17, 2), (19, 2), (23, 2), (29, 2), (31, 2), (17, 4), (19, 4), (23, 4), (29, 4), (31, 4))
+    @testset "n=$(M * p * p) (P=$p, M=$M)" for (p, M) in fam
+        n = M * p * p
+        x = [ComplexF64(randn(), randn()) for _ in 1:n]
+        pl = P.GenPPCompositePlan(ComplexF64, n, p, M)
+        y = copy(x); P.apply_unnormalized!(pl, y)
+        @test maximum(abs.(y .- ndft(x))) / maximum(abs.(ndft(x))) ≤ 1e-12      # ≡ reference DFT
+        pli = P.GenPPCompositePlan(ComplexF64, n, p, M; inverse = true)
+        P.apply_unnormalized!(pli, y); y ./= n
+        @test maximum(abs.(y .- x)) / maximum(abs.(x)) ≤ 1e-12                  # inverse round-trip
+        @test P.autoplan(ComplexF64, n) isa P.GenPPCompositePlan                # routing: composite wins
+    end
+    @testset "excluded n=$n never routes to composite" for n in (242, 484, 338, 676, 121, 1331, 4913)
+        @test !(P.autoplan(ComplexF64, n) isa P.GenPPCompositePlan)
+    end
+end

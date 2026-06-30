@@ -21,6 +21,7 @@
             (P.Radix4AvxPlan(ComplexF64, 1024), 1024),   # power-of-two AVX-512 radix-4
             (P.CodeletPlan(ComplexF64, 12), 12),         # small non-pow2 generated codelet
             (P.GenPPCodeletPlan(ComplexF64, 289), 289),  # generated column-packed P² codelet (17²)
+            (P.GenPPCompositePlan(ComplexF64, 578, 17, 2), 578),  # radix-M DIT over gen_pp (2·17²)
             (P.autoplan(ComplexF64, 768), 768),          # non-pow2, AVX-512 (W=8) radix-12 tree
             (P.autoplan(ComplexF64, 576), 576),          # non-pow2, AVX-512 (W=8) radix-9 tree
             (P.autoplan(ComplexF64, 2880), 2880),        # non-pow2, AVX-512 (W=8) radix-5 tree (5-smooth)

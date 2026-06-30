@@ -481,6 +481,8 @@ end
         PureFFT.apply_unnormalized!(PureFFT.CodeletPlan{Float64, 12}, Vector{ComplexF64}),
         # generated column-packed P² codelet — concrete type is twiddle-tuple-parameterized, so derive via typeof.
         PureFFT.apply_unnormalized!(typeof(PureFFT.GenPPCodeletPlan(ComplexF64, 289)), Vector{ComplexF64}),
+        # generated radix-M DIT composite (M·P²) — same twiddle-tuple parameterization, derive via typeof.
+        PureFFT.apply_unnormalized!(typeof(PureFFT.GenPPCompositePlan(ComplexF64, 578, 17, 2)), Vector{ComplexF64}),
         PureFFT.apply_unnormalized!(PureFFT.FourStepCodeletPlan{Float64, 12, 12}, Vector{ComplexF64}),
         PureFFT.apply_unnormalized!(PureFFT.RecursiveMixedRadixPlan{Float64, (12, 12, 12)}, Vector{ComplexF64}),
         # N-D c2c apply (Task 5): the @generated-over-D apply + per-dim transpose are trim-safe too. The
@@ -557,13 +559,17 @@ end
     # `Vector`s to plug into the Julia FFT ecosystem (the same deliberate extension FFTW.jl makes). Every
     # other Aqua check (ambiguities, undefined exports, stale deps, compat, extras) is on.
     Aqua.test_all(PureFFT; piracies = false, unbound_args = false)
-    # unbound_args checked manually to exempt the generated P² codelet: its inner tuple-length param `M`
-    # (twchunk::NTuple{H, NTuple{M, V4f}}) is only "unbound" in the degenerate H=0 (empty outer tuple)
-    # case — never reachable, since it's only ever called with H=(P-1)/2 ≥ 5 (P prime ≥ 11). Real calls
-    # bind M from the concrete argument; the static check can't see the H≥5 invariant. (Aqua 0.8's
-    # test_unbound_args has no `exclude`, so filter the stdlib detector and assert on the remainder.)
+    # unbound_args checked manually to exempt two generated codelets whose tuple-length params are only
+    # "unbound" in a never-reachable degenerate case; real calls bind them from concrete arguments and the
+    # static check can't see the invariant:
+    #  - `gen_pp_codelet!` — inner `M` (twchunk::NTuple{H, NTuple{M, V4f}}) unbound only at H=0, but it is
+    #    only ever called with H=(P-1)/2 ≥ 5 (P prime ≥ 11).
+    #  - `_genpp_combine!` — `wm::NTuple{MM, Complex{Tc}}`'s length `MM` is logically M² (the body indexes
+    #    `wm[b*M+a+1]`), but only ever called internally from `GenPPCompositePlan` with the concrete M²
+    #    twiddle tuple — MM is bound at every real call site.
+    # (Aqua 0.8's test_unbound_args has no `exclude`, so filter the stdlib detector and assert the rest.)
     let unbounds = Test.detect_unbound_args(PureFFT; recursive = true)
-        filter!(m -> m.name !== :gen_pp_codelet!, unbounds)
+        filter!(m -> m.name !== :gen_pp_codelet! && m.name !== :_genpp_combine!, unbounds)
         @test isempty(unbounds)
     end
 end

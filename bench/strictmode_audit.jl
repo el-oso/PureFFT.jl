@@ -19,7 +19,7 @@ StrictMode.backend_available() || error("StrictMode analysis backend not loaded 
 
 # Warm a representative spread so the usage-driven sweep sees the real hot kernels (autoplan routes each
 # to its winning path: pow2 radix-4 AVX, codelet, four-step, the W=4/W=8 faithful trees, Rader, Bluestein).
-for n in (64, 256, 1024, 4096, 16384, 12, 27, 576, 768, 1080, 2520, 2880, 6144, 97, 769, 289)
+for n in (64, 256, 1024, 4096, 16384, 12, 27, 576, 768, 1080, 2520, 2880, 6144, 97, 769, 289, 578)
     p = PureFFT.autoplan(ComplexF64, n)
     PureFFT.apply_unnormalized!(p, randn(ComplexF64, n))
 end
@@ -32,7 +32,8 @@ const COLD_HELPERS = (
     # plan-time routing/candidate-list builders (same category as the above): _gen_pp_prime returns a
     # Union{Int,Nothing} routing gate (autoplan); _bluestein_Ms returns an Int[] of candidate M sizes,
     # called only in the BluesteinPlan constructor. Both construction-only — never on a hot transform path.
-    :_gen_pp_prime, :_bluestein_Ms,
+    # _gen_pp_composite returns a Union{Tuple{Int,Int},Nothing} routing gate (autoplan), construction-only.
+    :_gen_pp_prime, :_bluestein_Ms, :_gen_pp_composite,
 )
 
 # Whole-package sweep: type-stability + allocation-freedom + trim-safety over every compiled method. Cheap
