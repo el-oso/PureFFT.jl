@@ -136,6 +136,21 @@ against FFTW's original target. **Scope it deliberately** (its own brainstorm/sp
   transform. Large effort and RISKY: column-packing wins on the *many* sizes where it's used, so this is a
   deliberate separate project (brainstorm/scope first), not a grind for three sizes. Would also help other
   shuffle-bound non-pow2 (radix-9/12 vs rust).
+- **Non-pow2 fast-path coverage gaps (FIXABLE — from the slow-backend audit).** `plan_tree` rejects some
+  smooth sizes, so `autoplan` falls to the best slow option (Recursive/four-step/Bluestein) and lands at the
+  "fell to slow generic" 0.2–0.6× signature (NOT an architectural floor). Found gaps (pinned PF/FFTW):
+  **2^a·7²** (98=0.33, 196=0.39, 294=0.57 — `plan_tree` requires `p7≤1`; fix = B49 in the even path, e.g.
+  98=MR2(B49)); **small 2^a·13** (26=0.28, 52=0.40, 78=0.21 — radix-2-base gap, same class as pre-Phase-E
+  250/500); **13²** (169=0.30). Phase-E-style kernel additions; each is "add a kernel," not a router change.
+- **Slow-backend audit verdict — `RecursiveMixedRadixPlan` STAYS; no guard test.** `autoplan` is a *timed
+  competition* (it times `codelet` / four-step-or-recursive / Avx / W8 and keeps the `argmin`), so Recursive
+  is selected only when it genuinely times fastest — never silently misrouted. Dropping it would force a
+  slower fallback; the timing already *is* the slow-path guard (the perf gate surfaces any slow winner). The
+  only real issue is coverage gaps (above), fixed by adding kernels.
+- **Non-pow2 plan construction is slow (~1.4 s/size) — fast/cached-plan path wanted.** `autoplan` times
+  every candidate at build time. Fine as a one-time cost amortized over many transforms, but a UX wart for a
+  general-purpose library (FFTW's ESTIMATE is instant). Want: a fast structural-pick path (skip timing) and/or
+  a process-wide plan cache, selectable like FFTW's ESTIMATE vs MEASURE.
 
 ### Breadth / type coverage (gaps for a *general* library vs the 1-D complex-`Float64` investigation)
 - **DCT/DST (real-to-real) — all 8 r2r kinds DONE.** DCT-I/II/III/IV (`REDFT00/10/01/11`) and
