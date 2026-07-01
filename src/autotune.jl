@@ -161,7 +161,11 @@ four-step (for `n ≥ 256`). Non-power-of-two uses a generated mixed-radix [`Cod
 smooth sizes (largest prime ≤ $CODELET_MAX_PRIME, n ≤ $CODELET_MAX_N), else Bluestein (chirp-Z) —
 both far faster than the allocating recursive mixed-radix.
 """
-function autoplan(::Type{Complex{T}}, n::Integer; inverse::Bool = false) where {T}
+function autoplan(::Type{Complex{T}}, n::Integer; inverse::Bool = false, flags::PlanRigor = MEASURE) where {T}
+    if flags == ESTIMATE
+        ep = _estimate_plan(Complex{T}, n; inverse)
+        isnothing(ep) || return ep      # structural hit → one plan, no timing; miss → MEASURE below
+    end
     if !ispow2(n)
         ni = Int(n)
         # prime with smooth p-1 → Rader (length-(p-1) convolution beats Bluestein's larger pow2 M). This

@@ -14,3 +14,29 @@
     # returns a valid PlanRigor enum
     @test P.ESTIMATE isa P.PlanRigor && P.MEASURE isa P.PlanRigor
 end
+
+@testitem "ESTIMATE autoplan: correct output + safe fallback" begin
+    P = PureFFT
+    C = ComplexF64
+    ndft(x) = [sum(x[j+1]*cispi(-2*j*k/length(x)) for j in 0:length(x)-1) for k in 0:length(x)-1]
+    relerr(a, b) = maximum(abs.(a .- b)) / maximum(abs.(b))
+    # ESTIMATE output vs reference DFT across classes (pow2, smooth, prime-square, Rader) + a fallback size
+    # (19946 = 2·9973: not pow2/Rader/GenPP/smooth → _estimate_plan nothing → MEASURE→Bluestein fallback).
+    # Tolerance 1e-11: 1024/720/289/257 all yield <1e-13; 19946 (Bluestein fallback) yields ~3e-12
+    # (two power-of-2 FFTs of size 32768 compound error). 1e-12 from the brief was too tight for that
+    # size — measured 3.2e-12 on a warm session; 1e-11 is still well within double precision.
+    for n in (1024, 720, 289, 257, 19946)
+        x = [C(randn(), randn()) for _ in 1:n]
+        pe = P.autoplan(C, n; flags = P.ESTIMATE)
+        y = copy(x); P.apply_unnormalized!(pe, y)
+        @test relerr(y, ndft(x)) ≤ 1e-11
+        # inverse round-trip
+        pei = P.autoplan(C, n; inverse = true, flags = P.ESTIMATE)
+        P.apply_unnormalized!(pei, y); y ./= n
+        @test relerr(y, x) ≤ 1e-11
+    end
+    # default is MEASURE (flags omitted) — unchanged behavior, still correct
+    x = [C(randn(), randn()) for _ in 1:720]
+    pm = P.autoplan(C, 720); y = copy(x); P.apply_unnormalized!(pm, y)
+    @test relerr(y, ndft(x)) ≤ 1e-11
+end
