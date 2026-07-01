@@ -42,6 +42,19 @@ end
     end
 end
 
+@testitem "Generated composite column butterfly (avx_colbf_composite) ≡ hand cb4 (bit-exact)" begin
+    # Phase 1 radix-4 PoC: avx_colbf_composite with Val((2,2)) + empty twiddles must reproduce the hand
+    # avx_column_butterfly4 EXACTLY (proves the 2-factor leaf-call + interleave + trivial id/rot90 classify).
+    A = PureFFT.AvxRadix
+    randv() = A.V4f((randn(), randn(), randn(), randn()))
+    lanes(t) = [ntuple(i -> v[i], 4) for v in t]
+    rot = A._ROT90_FWD
+    rs = ntuple(_ -> randv(), 4)
+    hand = A.avx_column_butterfly4(rs..., rot)
+    gen = A.avx_colbf_composite(rs, Val((2, 2)), (), rot, nothing)
+    @test lanes(gen) == lanes(hand)     # exact lane equality (bit-for-bit)
+end
+
 @testitem "Generated radix-M DIT composite codelet (GenPPCompositePlan) ≡ reference DFT + round-trip" begin
     # The composite codelet (src/codelets.jl) runs a register radix-M DIT over the gen_pp P² codelet for
     # n = M·P². autoplan routes the measured-winning family — P ∈ {17,19,23,29,31}, M ∈ {2,4} (≈2–3× FFTW,
