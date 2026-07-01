@@ -15,11 +15,12 @@ const SECONDS = 3
 
 # MR9-heavy: 81=9², 729=9³, 6561=9⁴, 576=2⁶·9 (W8), 2916=2²·3⁶.  MR12-heavy: 144=12², 1728=12³, 5184=12³·3,
 # 20736=12⁴.  Controls: 512 (radix-8, expect ≥parity), 4096 (pow2 radix-4).
-# hunt the ROADMAP-flagged still-under-rust candidates: W8 5-smooth + high-5-power (radix-5/9 shuffle floor)
-# + 2^a·5³ (the documented architectural floor) + 9/12-at-W8. Looking for ANY PF/Rust < 0.96.
-const SIZES = [2880, 5760, 11520, 23040, 46080, 9216, 92160, 110592,
-               2000, 4000, 2025, 10125, 3375, 30375, 50000, 500, 250,
-               1296, 46656, 15552, 3888]
+# CONFIRMATORY re-run on a genuinely LOCKED clock (boost off, ~2 GHz stable — the pinned-4500 runs were on a
+# drifting clock, pin_check false-positive). radix-9/12 confirm + 5³ floor + W8 marginals + controls.
+const SIZES = [81, 729, 6561, 5184, 20736, 15552, 3888,     # radix-9/12 (expect ≥ rust, big margins)
+               2000, 4000, 50000,                            # 2^a·5³ architectural floor (expect < rust)
+               110592, 46080, 55296, 23040,                  # W8 marginals (expect ≈ parity)
+               512, 4096]                                    # controls
 
 route(n) = replace(string(typeof(PureFFT.autoplan(ComplexF64, n))), "PureFFT." => "", "AvxRadix." => "")
 

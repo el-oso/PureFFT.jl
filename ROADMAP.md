@@ -121,16 +121,20 @@ PrecompileTools `@compile_workload` (`genpp_precompile_max_p` Preference, defaul
   composite butterfly R≥16 spills, ~100× slower; sizes already fast via MR trees — see the codelet-generator
   section above). The remaining 3-heavy laggard sizes (~0.85–0.92× vs rust) are the radix-9/12 *algorithmic*
   gap below (diff rustfft's pass), not a missing base.
-- **radix-9/12 vs rust — CLOSED (measured 2026-07-01, pinned 4500).** A targeted probe
-  (`bench/measure_radix912.jl` → `bench/results/radix912.json`) found **every pure radix-9/12 size at or
-  above rust**: 81=1.97×, 144=1.24×, 576(W8)=1.07×, 729=1.51×, 1728=1.03×, 5184(**MR12**)=1.04×, 6561=1.34×,
-  20736=1.07×, 15552=1.08× (PF÷Rust). The old "~0.90× floor" was stale — closed by the intervening non-pow2
-  work (B18/B36/W8/coverage-gap fixes); no MR9/MR12 rust-diff needed. **The genuine remaining sub-rust sizes
-  are radix-5, not 9/12:** (a) the **2^a·5³+ architectural floor** (2000=0.90×, 50000=2⁴·5⁵=**0.78×**) —
-  the batch-vectorized-codelet item above, not a tweak; and (b) a **W8 radix-9 shuffle floor on large
-  3-smooth sizes** (110592=2¹²·3³=**0.85×**, 46080=0.92×) — the `vpermt2pd` redesign below. The historical
-  MWE (`julia-sched-mwe/`) still stands: Julia/LLVM is not the bottleneck; these two are architectural/shuffle
-  floors, both already tracked as hard items. (`julia-sched-mwe/` reproducer retained for the record.)
+- **radix-9/12 vs rust — CLOSED (measured 2026-07-01, LOCKED clock ~2 GHz, boost off — clean).** A targeted
+  probe (`bench/measure_radix912.jl` → `bench/results/radix912.json`) found **every pure radix-9/12 size at
+  or above rust**: 81=1.88×, 729=1.51×, 1728=1.03×, 5184(**MR12**)=1.03×, 6561=1.35×, 20736=1.07×, 15552=
+  1.13×, 3888=1.09× (PF÷Rust). The old "~0.90× floor" was stale — closed by the intervening non-pow2 work
+  (B18/B36/W8/coverage-gap fixes); no MR9/MR12 rust-diff needed. **The genuine remaining sub-rust sizes are
+  radix-5/9 at large sizes, not core radix-9/12:** (a) the **2^a·5³+ architectural floor** (2000=0.95×,
+  50000=2⁴·5⁵=**0.81×**) — the batch-vectorized-codelet item above, not a tweak; and (b) a **W8 radix-9
+  shuffle floor on large 3-smooth sizes** (110592=2¹²·3³=**0.83×**, 46080=**0.89×**, 55296=0.95×; but
+  23040=1.23×, 20736=1.07× fine) — the `vpermt2pd` redesign below. NOTE: the first runs this session used
+  `pin 4500`, which does NOT hold on amd-pstate-epp (boost overrides the clamp, clock drifts 1.4–4.5 GHz;
+  `pin_check`'s min==max test false-positives) — a drifting-clock ratio misled both ways (110592 read 0.85×
+  then 1.026× then the locked truth 0.83×). **Use `lock` (boost off) for parity ratios, not `pin`.** The
+  historical MWE (`julia-sched-mwe/`) still stands: Julia/LLVM is not the bottleneck; these two are
+  architectural/shuffle floors, both already tracked as hard items.
 - **MR16** — deferred (same additive-slot dead-code risk as the ports: 16-smooth sizes already route to
   radix-4/8 trees, so a radix-16 pass would ride the timed slot mostly unused). Register cb16 is proven
   generatable (ref-DFT) but unwired; only build MR16 if a specific 16-smooth size shows a measured gap.
