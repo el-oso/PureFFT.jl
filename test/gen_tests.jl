@@ -55,6 +55,27 @@ end
     @test lanes(gen) == lanes(hand)     # exact lane equality (bit-for-bit)
 end
 
+@testitem "Composite column butterflies (avx_column_butterfly{8}) ≡ reference DFT (per-lane)" begin
+    # Phase 1: the composite column butterflies now forward to avx_colbf_composite. A size-R column
+    # butterfly is an independent size-R DFT over the R registers, per complex-lane (V4f = 2 complex:
+    # lanes (0,1) and (2,3)), natural output order. Reference DFT is the hand-kernel-independent guard.
+    A = PureFFT.AvxRadix
+    rot = A._ROT90_FWD
+    randv() = A.V4f((randn(), randn(), randn(), randn()))
+    col(rs, o) = [Complex(rs[j][o + 1], rs[j][o + 2]) for j in 1:length(rs)]
+    dft(c) = [sum(c[j + 1] * cispi(-2 * j * k / length(c)) for j in 0:(length(c) - 1)) for k in 0:(length(c) - 1)]
+    function ref(rs)
+        R = length(rs); DA = dft(col(rs, 0)); DB = dft(col(rs, 2))
+        [A.V4f((real(DA[k]), imag(DA[k]), real(DB[k]), imag(DB[k]))) for k in 1:R]
+    end
+    maxrel(t, r) = maximum(maximum(abs.(ntuple(i -> t[k][i] - r[k][i], 4))) for k in 1:length(t)) /
+                   maximum(maximum(abs.(ntuple(i -> r[k][i], 4))) for k in 1:length(t))
+    @testset "R=8" begin
+        rs = ntuple(_ -> randv(), 8)
+        @test maxrel(collect(A.avx_column_butterfly8(rs..., rot)), ref(rs)) ≤ 1e-13
+    end
+end
+
 @testitem "Generated radix-M DIT composite codelet (GenPPCompositePlan) ≡ reference DFT + round-trip" begin
     # The composite codelet (src/codelets.jl) runs a register radix-M DIT over the gen_pp P² codelet for
     # n = M·P². autoplan routes the measured-winning family — P ∈ {17,19,23,29,31}, M ∈ {2,4} (≈2–3× FFTW,

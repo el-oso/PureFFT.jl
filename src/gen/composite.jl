@@ -44,9 +44,13 @@ function _twiddle_expr(x, e::Int, R::Int, rot::Symbol, slot::Ref{Int})
         x                                   # W^0 = 1
     elseif 4er == R                         # e = R/4 → W^(R/4) = -i = rotate90
         Expr(:call, :avx_rotate90, x, rot)
+    elseif 8er == R                         # e = R/8 → apply_butterfly8_twiddle1 (√½·(rot90(x)+x))
+        Expr(:call, :avx_bf8_tw1, x, rot)
+    elseif 8er == 3R                        # e = 3R/8 → apply_butterfly8_twiddle3 (√½·(rot90(x)−x))
+        Expr(:call, :avx_bf8_tw3, x, rot)
     else
-        error("avx_colbf_composite: twiddle e=$e (R=$R) not yet classified (PoC handles id, R/4; " *
-              "bf8/neg/mul_complex land with radix-8/9/16)")
+        error("avx_colbf_composite: twiddle e=$e (R=$R) not yet classified (have id, R/4, R/8, 3R/8; " *
+              "neg/mul_complex constants land with radix-9/16)")
     end
 end
 

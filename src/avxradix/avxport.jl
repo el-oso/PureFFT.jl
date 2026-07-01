@@ -244,18 +244,11 @@ const _HALF_ROOT2 = V4f((sqrt(0.5), sqrt(0.5), sqrt(0.5), sqrt(0.5)))
 @inline _half_root2(::V4f) = _HALF_ROOT2                                                # width-dispatched (V8f added below)
 @inline avx_bf8_tw1(x, rot) = avx_mul(_half_root2(x), avx_add(avx_rotate90(x, rot), x))   # apply_butterfly8_twiddle1
 @inline avx_bf8_tw3(x, rot) = avx_mul(_half_root2(x), avx_sub(avx_rotate90(x, rot), x))   # apply_butterfly8_twiddle3
-@inline function avx_column_butterfly8(r1, r2, r3, r4, r5, r6, r7, r8, rot)
-    m0 = avx_column_butterfly4(r1, r3, r5, r7, rot)
-    m1 = avx_column_butterfly4(r2, r4, r6, r8, rot)
-    m1_2 = avx_bf8_tw1(m1[2], rot)
-    m1_3 = avx_rotate90(m1[3], rot)
-    m1_4 = avx_bf8_tw3(m1[4], rot)
-    o0, o1 = avx_butterfly2(m0[1], m1[1])
-    o2, o3 = avx_butterfly2(m0[2], m1_2)
-    o4, o5 = avx_butterfly2(m0[3], m1_3)
-    o6, o7 = avx_butterfly2(m0[4], m1_4)
-    (o0, o2, o4, o6, o1, o3, o5, o7)
-end
+# Systematized (P1.8): forwards to the @generated avx_colbf_composite (2-factor DIT 4×2). The generator
+# emits the identical cb4→(bf8_tw1/rot90/bf8_tw3)→bf2 leaf DAG the hand body wrote (bit-exact vs the prior
+# hand body; par confirmed via the full-kernel gate). tws empty — all cb8 twiddles are trivial (√½/rot90).
+@inline avx_column_butterfly8(r1, r2, r3, r4, r5, r6, r7, r8, rot) =
+    avx_colbf_composite((r1, r2, r3, r4, r5, r6, r7, r8), Val((4, 2)), (), rot, nothing)
 # column_butterfly32 (radix 4×8, faithful port of rustfft column_butterfly32_loadfn!): 8 column_butterfly4
 # down the rows + twiddles, then 4 column_butterfly8 across. Loads from `li` at `lb + k·ls`, stores to `so`
 # at `sb + k·ss` (k 0-indexed) — explicit buffer/base/stride (NOT closures, which box) keeps the lazy
