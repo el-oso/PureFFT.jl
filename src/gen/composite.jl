@@ -35,22 +35,24 @@ function _leaf_call(r::Int, ins::Vector, rot::Symbol, bf3::Symbol)
 end
 
 # Classify the inter-stage twiddle W_R^e applied to input Expr `x`, at generate time. Emits the trivial
-# forms the hand kernels use (id / rot90) directly; a general W_R^e consumes the next `tws` slot. `slot` is
-# a Ref{Int} counting consumed non-trivial twiddles (so callers thread the literal index). PoC (radix-4)
-# only reaches id + rot90; radix-8/9/16 extend this (√½ bf8 forms, mul_complex constants).
-function _twiddle_expr(x, e::Int, R::Int, rot::Symbol, slot::Ref{Int})
+# forms the hand kernels use directly (id / neg / rot90 / √½ bf8); a general W_R^e consumes a `tws` slot,
+# REUSED per distinct reduced exponent so equal twiddles share one constant (matches the hand kernels'
+# minimal twiddle set). `slotmap` maps a canonical lower-half exponent → its 1-based `tws` slot. Half-plane
+# reduction: W^er = −W^(er−R/2) for er in (R/2, R), so the upper half reuses the lower-half constant via neg
+# (this is how hand cb16 expresses W16^9 as neg(tw1), keeping tws = (W16^1, W16^3)).
+function _twiddle_expr(x, e::Int, R::Int, rot::Symbol, slotmap::Dict{Int, Int})
     er = mod(e, R)
-    if er == 0
-        x                                   # W^0 = 1
-    elseif 4er == R                         # e = R/4 → W^(R/4) = -i = rotate90
-        Expr(:call, :avx_rotate90, x, rot)
-    elseif 8er == R                         # e = R/8 → apply_butterfly8_twiddle1 (√½·(rot90(x)+x))
-        Expr(:call, :avx_bf8_tw1, x, rot)
-    elseif 8er == 3R                        # e = 3R/8 → apply_butterfly8_twiddle3 (√½·(rot90(x)−x))
-        Expr(:call, :avx_bf8_tw3, x, rot)
-    else
-        error("avx_colbf_composite: twiddle e=$e (R=$R) not yet classified (have id, R/4, R/8, 3R/8; " *
-              "neg/mul_complex constants land with radix-9/16)")
+    er == 0   && return x                                     # W^0 = 1
+    2er == R  && return Expr(:call, :avx_neg, x)              # e = R/2   → −1
+    4er == R  && return Expr(:call, :avx_rotate90, x, rot)    # e = R/4   → −i (rotate90)
+    8er == R  && return Expr(:call, :avx_bf8_tw1, x, rot)     # e = R/8   → √½·(rot90(x)+x)
+    8er == 3R && return Expr(:call, :avx_bf8_tw3, x, rot)     # e = 3R/8  → √½·(rot90(x)−x)
+    if 2er > R                                                # upper half: W^er = −W^(er−R/2)
+        s = get!(slotmap, er - R ÷ 2, length(slotmap) + 1)
+        Expr(:call, :avx_mul_complex, x, Expr(:call, :avx_neg, :(tws[$s])))
+    else                                                      # general W_R^er (reuse slot per distinct er)
+        s = get!(slotmap, er, length(slotmap) + 1)
+        Expr(:call, :avx_mul_complex, x, :(tws[$s]))
     end
 end
 
@@ -61,7 +63,7 @@ end
     R1, R2 = F
     R1 * R2 == R || error("avx_colbf_composite: R1·R2 ($R1·$R2) ≠ R ($R)")
     stmts = Any[]
-    slot = Ref(0)
+    slotmap = Dict{Int, Int}()   # canonical lower-half exponent → tws slot (reused per distinct exponent)
 
     # stage 1: R2 leaves of size R1. group g (0-based) over rs[g + k·R2 + 1], k=0..R1-1 → mid[g+1][j].
     mid = Matrix{Symbol}(undef, R2, R1)
@@ -77,7 +79,7 @@ end
     # inter-stage twiddle: mid[g+1][j] *= W_R^(g·(j-1)).
     tw = Matrix{Any}(undef, R2, R1)
     for g in 0:R2 - 1, j in 1:R1
-        tw[g + 1, j] = _twiddle_expr(mid[g + 1, j], g * (j - 1), R, :rot, slot)
+        tw[g + 1, j] = _twiddle_expr(mid[g + 1, j], g * (j - 1), R, :rot, slotmap)
     end
 
     # stage 2: R1 leaves of size R2. group j over the g-column tw[*, j] → o[j][l].

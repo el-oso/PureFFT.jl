@@ -70,9 +70,15 @@ end
     end
     maxrel(t, r) = maximum(maximum(abs.(ntuple(i -> t[k][i] - r[k][i], 4))) for k in 1:length(t)) /
                    maximum(maximum(abs.(ntuple(i -> r[k][i], 4))) for k in 1:length(t))
+    bcast(idx, len) = A.avx_broadcast_twiddle(idx, len, true)
     @testset "R=8" begin
         rs = ntuple(_ -> randv(), 8)
         @test maxrel(collect(A.avx_column_butterfly8(rs..., rot)), ref(rs)) ≤ 1e-13
+    end
+    @testset "R=9" begin
+        rs = ntuple(_ -> randv(), 9)
+        tw1 = bcast(1, 9); tw2 = bcast(2, 9); tw3 = bcast(4, 9); bf3 = bcast(1, 3)
+        @test maxrel(collect(A.avx_column_butterfly9(rs..., tw1, tw2, tw3, bf3)), ref(rs)) ≤ 1e-13
     end
 end
 

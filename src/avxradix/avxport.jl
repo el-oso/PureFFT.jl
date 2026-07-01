@@ -323,18 +323,12 @@ end
     o3 = avx_column_butterfly3(mid0[4], mid1[4], mid2[4], bf3)
     (o0[1], o1[2], o2[3], o3[1], o0[2], o1[3], o2[1], o3[2], o0[3], o1[1], o2[2], o3[3])
 end
-# column_butterfly9 (3x3 mixed radix); tw1=W9^1, tw2=W9^2, tw3=W9^4 (broadcast complex); bf3=bf3 twiddle
-@inline function avx_column_butterfly9(r0, r1, r2, r3, r4, r5, r6, r7, r8, tw1, tw2, tw3, bf3)
-    mid0 = avx_column_butterfly3(r0, r3, r6, bf3)
-    mid1 = avx_column_butterfly3(r1, r4, r7, bf3)
-    mid2 = avx_column_butterfly3(r2, r5, r8, bf3)
-    m1_2 = avx_mul_complex(tw1, mid1[2]); m1_3 = avx_mul_complex(tw2, mid1[3])
-    m2_2 = avx_mul_complex(tw2, mid2[2]); m2_3 = avx_mul_complex(tw3, mid2[3])
-    o0 = avx_column_butterfly3(mid0[1], mid1[1], mid2[1], bf3)
-    o1 = avx_column_butterfly3(mid0[2], m1_2, m2_2, bf3)
-    o2 = avx_column_butterfly3(mid0[3], m1_3, m2_3, bf3)
-    (o0[1], o1[1], o2[1], o0[2], o1[2], o2[2], o0[3], o1[3], o2[3])
-end
+# column_butterfly9 (3x3 mixed radix); tw1=W9^1, tw2=W9^2, tw3=W9^4 (broadcast complex); bf3=bf3 twiddle.
+# Systematized (P1.9): forwards to avx_colbf_composite (2-factor DIT 3×3). Generator emits the identical
+# cb3 → mul_complex(W9^{1,2,4}) → cb3 leaf DAG; (tw1,tw2,tw3) is the exact distinct-twiddle order the
+# generator consumes (W9^1,W9^2,W9^4). rot unused (R=9 odd → no rot90/bf8 twiddle). Correctness: ref-DFT.
+@inline avx_column_butterfly9(r0, r1, r2, r3, r4, r5, r6, r7, r8, tw1, tw2, tw3, bf3) =
+    avx_colbf_composite((r0, r1, r2, r3, r4, r5, r6, r7, r8), Val((3, 3)), (tw1, tw2, tw3), nothing, bf3)
 
 # transpose5_packed (__m256d): note _mm256_blend_pd(a,b,0x03) = lanes 0,1 from b, 2,3 from a
 @inline _blend03(a::V4f, b::V4f) = shufflevector(a, b, Val((4, 5, 2, 3)))
