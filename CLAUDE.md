@@ -78,11 +78,15 @@ measurements are in `docs/src/performance.md`; this file is the must-follow summ
   → `port/plot_avx512.jl` (`avx512_nonpow2.png`). Each plot uses **median** centers + the robust
   central-68% `(q84−q16)/2` spread. Regenerate the plots from the saved data before every push
   (catches regressions). **Re-capture data** (re-run `run_compare.jl`) only for a
-  genuinely fresh measurement; the relative-to-FFTW plots are clock-independent, so a cpufreq pin is
-  optional, but for low-noise *absolute* numbers pin first: `sudo bench/cpufreq_lock.sh pin 4500` (the
-  governor is already `performance`; the real noise source is opportunistic boost drifting under load —
-  base clock is only 2 GHz, so `pin` clamps to a fixed high clock with boost on). `restore` after. Always
-  `taskset -c 2` and keep that core's SMT sibling idle.
+  genuinely fresh measurement; the relative-to-FFTW/Rust plots are clock-independent, so a stable clock is
+  optional for ratios but **required for any marginal (≈0.9–1.0×) ratio or absolute number**. **Use `lock`,
+  NOT `pin`:** `sudo bench/cpufreq_lock.sh lock` turns boost OFF → the core holds its base clock (~2 GHz,
+  deterministic). **`pin <MHz>` does NOT hold on this amd-pstate-epp box** — boost overrides the
+  scaling_max clamp and the clock drifts 1.4–4.5 GHz while `min==max` still reads "pinned" (a whole session's
+  marginal ratios were poisoned by this; a drifting-clock ratio misled BOTH ways — 110592 read 0.85→1.026→
+  locked-truth 0.83). `bench/pin_check.jl` now gates on the **boost state** (not min==max) and warns if boost
+  is on; verify it prints "✓ clock DETERMINISTIC" before trusting numbers. `restore` after (boost back on).
+  Always `taskset -c 2` and keep that core's SMT sibling idle.
 - Commit author email: `15278831+el-oso@users.noreply.github.com` (never a real address).
 - End commit messages with `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
 - No Python anywhere (per the global rule).
