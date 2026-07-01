@@ -476,6 +476,10 @@ end
         init = begin
             using PureFFT
         end,
+        # report EVERY trim error in each call's traversed graph, not just the first — so a future
+        # regression (e.g. from multi-threading) surfaces all problems in one run (`::Int`, so a large
+        # literal rather than `Inf`; 1_000_000 is effectively unlimited for any realistic call graph).
+        errors_limit = 1_000_000, warnings_limit = 1_000_000,
         PureFFT.apply_unnormalized!(PureFFT.Radix4AvxPlan{Float64}, Vector{ComplexF64}),
         PureFFT.apply_unnormalized!(PureFFT.Radix4Plan{Float64}, Vector{ComplexF64}),
         PureFFT.apply_unnormalized!(PureFFT.CodeletPlan{Float64, 12}, Vector{ComplexF64}),
