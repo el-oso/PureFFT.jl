@@ -4,14 +4,15 @@
 # hot path holds those guarantees through StrictMode's API, and audit the whole compiled surface.
 #
 # Checks are gated by a compile-time Preference (test/LocalPreferences.toml ships them enabled). When
-# disabled the macros are zero-cost no-ops, so we skip the assertions rather than pass them vacuously.
+# disabled the macros are zero-cost no-ops: locally we skip rather than pass vacuously, and under CI
+# assert_enabled() errors outright — a green CI run with checks off proves nothing.
 
 @testitem "StrictMode dogfood: PureFFT declares its perf guarantees" begin
     # StrictMode's analysis backend (AllocCheck + JET) is a weak dependency — both must be loaded for the
     # :full checks to run (else StrictMode errors with a clear message). They're test-env deps.
     using StrictMode, AllocCheck, JET
 
-    if !StrictMode.checks_enabled()
+    if !StrictMode.assert_enabled()   # errors under CI when checks are disabled
         @info "StrictMode checks disabled in this env — skipping dogfood (enable_checks! + restart to run)"
         @test_skip StrictMode.checks_enabled()
     else
@@ -53,5 +54,54 @@
             @assert_inlined P.AvxRadix.gen_transpose_packed(ntuple(_ -> v4, 13))                  # packed transpose, large N
             @test true
         end
+    end
+end
+
+# Coverage gate: every exported/public function must either register its guarantees below or be
+# exempted VISIBLY. A new public function makes this testitem fail until it declares itself —
+# that's the point. The registration list is the manifest; check_all() enforces what it promises.
+@testitem "StrictMode coverage: public surface declares its guarantees" begin
+    using StrictMode, AllocCheck, JET
+
+    if !StrictMode.assert_enabled()   # errors under CI when checks are disabled
+        @test_skip StrictMode.checks_enabled()
+    else
+        P = PureFFT
+        empty!(StrictMode.registered_strict())
+        empty!(StrictMode.exempt_strict())
+
+        p = P.autoplan(ComplexF64, 64)
+        prec = plan_pfft(ComplexF64, 64; variant = :recursive)
+
+        # Hot static path: the full kernel guarantees, enforced (probed 2026-07-02: these hold).
+        StrictMode.register_strict!(
+            P.pfft!, (Vector{ComplexF64}, typeof(p));
+            guarantees = (:typestable, :noalloc, :trimsafe)
+        )
+        StrictMode.register_strict!(P.alloc_scratch, (typeof(prec),); guarantees = (:typestable,))
+
+        # The one-shot / planning convenience API selects a plan at RUNTIME by design — JET-full
+        # rightly flags the internal dynamic dispatch (r2r/plan_r2r even infer abstract returns),
+        # and it is cold: called once, never in a loop. Exempted VISIBLY here; all hot work lands
+        # in pfft!/apply_unnormalized!, which carry the full guarantees (see the dogfood item).
+        # Removing a name from this tuple = promising StrictMode it holds (:typestable,) — the
+        # gate then enforces that promise.
+        COLD_API = (
+            :pfft, :ipfft, :ipfft!, :plan_pfft, :prfft, :pirfft, :plan_prfft, :plan_pirfft,
+            :r2r, :r2r!, :plan_r2r, :dct, :dct!, :idct, :idct!, :plan_dct, :plan_idct,
+            :tryr2r, :tryplan_r2r,
+        )
+
+        fs = check_all()                                   # the declared guarantees hold…
+        @test nfailures(fs) == 0
+        # …and nothing public is undeclared (new exports fail here until they register or exempt).
+        cov = audit(P; require = :public, exempt = COLD_API, io = devnull)
+        for f in cov
+            f.guarantee === :coverage && @info "uncovered public function" f.func f.suggestion
+        end
+        @test nfailures(cov) == 0
+
+        empty!(StrictMode.registered_strict())
+        empty!(StrictMode.exempt_strict())
     end
 end

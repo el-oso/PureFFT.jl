@@ -20,3 +20,4 @@ Cargo.lock
 
 # session scratch (subagent prototypes/logs — never commit)
 scratchpad/
+.claude/hooks/.src-hash

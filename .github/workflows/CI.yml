@@ -26,6 +26,11 @@ jobs:
       - uses: julia-actions/cache@v2
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
+      - name: StrictMode whole-surface audit (fast mode)
+        if: matrix.version == '1'
+        run: |
+          julia --project=bench -e 'import Pkg; Pkg.instantiate()'
+          julia --project=bench bench/strictmode_audit.jl
       - uses: julia-actions/julia-processcoverage@v1
       - name: Upload coverage to Coveralls
         uses: coverallsapp/github-action@v2
