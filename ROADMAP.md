@@ -121,13 +121,16 @@ PrecompileTools `@compile_workload` (`genpp_precompile_max_p` Preference, defaul
   composite butterfly R≥16 spills, ~100× slower; sizes already fast via MR trees — see the codelet-generator
   section above). The remaining 3-heavy laggard sizes (~0.85–0.92× vs rust) are the radix-9/12 *algorithmic*
   gap below (diff rustfft's pass), not a missing base.
-- **radix-9/12 floor ~0.90× of rust — it's ALGORITHMIC, not a Julia compiler issue.** An MWE comparing a
-  matched radix-9 butterfly *and* a full radix-9 step (butterfly+twiddle+transpose) in Julia (SIMD.jl) vs
-  Rust (`core::arch`) — see the standalone `julia-sched-mwe/` reproducer — found Julia compiles to identical
-  asm and runs **at least as fast** at both levels (and LLVM 18/19/21 lower the same IR identically). So the
-  gap is **rustfft's implementation** being more optimized, not Julia/LLVM scheduling. To close it: diff
-  PureFFT's MR9/MR12 pass against rustfft's `Butterfly9`/mixed-radix source (decomposition, in-place /
-  transpose / memory strategy) and adopt what's better — a PureFFT optimization, not a compiler chase.
+- **radix-9/12 vs rust — CLOSED (measured 2026-07-01, pinned 4500).** A targeted probe
+  (`bench/measure_radix912.jl` → `bench/results/radix912.json`) found **every pure radix-9/12 size at or
+  above rust**: 81=1.97×, 144=1.24×, 576(W8)=1.07×, 729=1.51×, 1728=1.03×, 5184(**MR12**)=1.04×, 6561=1.34×,
+  20736=1.07×, 15552=1.08× (PF÷Rust). The old "~0.90× floor" was stale — closed by the intervening non-pow2
+  work (B18/B36/W8/coverage-gap fixes); no MR9/MR12 rust-diff needed. **The genuine remaining sub-rust sizes
+  are radix-5, not 9/12:** (a) the **2^a·5³+ architectural floor** (2000=0.90×, 50000=2⁴·5⁵=**0.78×**) —
+  the batch-vectorized-codelet item above, not a tweak; and (b) a **W8 radix-9 shuffle floor on large
+  3-smooth sizes** (110592=2¹²·3³=**0.85×**, 46080=0.92×) — the `vpermt2pd` redesign below. The historical
+  MWE (`julia-sched-mwe/`) still stands: Julia/LLVM is not the bottleneck; these two are architectural/shuffle
+  floors, both already tracked as hard items. (`julia-sched-mwe/` reproducer retained for the record.)
 - **MR16** — deferred (same additive-slot dead-code risk as the ports: 16-smooth sizes already route to
   radix-4/8 trees, so a radix-16 pass would ride the timed slot mostly unused). Register cb16 is proven
   generatable (ref-DFT) but unwired; only build MR16 if a specific 16-smooth size shows a measured gap.
