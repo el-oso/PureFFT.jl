@@ -96,7 +96,9 @@ Both are exactly the ambiguous, timing-resolved calls; predicting them is Future
 
 1. **Classifier routing** — `_estimate_plan(n)` returns the expected plan *type* per class: 1024→Radix4Avx,
    a Rader prime→Rader, a prime-square→GenPP, 720→AvxMixedRadix W4, and an unclassified size → `nothing`.
-2. **Correctness** — across a spread of all classes, `flags = ESTIMATE` output == reference DFT (≤1e-14),
+2. **Correctness** — across a spread of all classes, `flags = ESTIMATE` output == reference DFT (exact-kernel
+   classes reach ≤1e-14; the Bluestein/Rader **fallback** sizes measure ~3e-12 against a naive O(n²) reference,
+   so the test gate is ≤1e-11 — still 5 orders below any real error, diagnostic of a correct transform),
    forward + inverse round-trip.
 3. **Fallback safety** — an unclassified size under ESTIMATE still yields a correct plan (via MEASURE).
 4. **No regression** — MEASURE default byte-unchanged; full suite green.
@@ -125,5 +127,6 @@ pick ⇒ one plan built), NOT via a flaky wall-clock test in CI; the first-call 
 
 - `plan_fft(x; flags = PureFFT.ESTIMATE)` / `plan_pfft(x; flags = ESTIMATE)` build in ≪ MEASURE first-call
   time (one plan, not seven) on the common classes (pow2, smooth, prime-square, large-prime).
-- ESTIMATE output bit-exact vs reference DFT (≤1e-14) on all covered classes + fallback sizes.
+- ESTIMATE output correct vs reference DFT on all covered classes + fallback sizes (≤1e-14 for exact-kernel
+  classes; ≤1e-11 for the Bluestein/Rader fallback, which accumulates ~3e-12 vs a naive reference).
 - MEASURE remains the default and byte-unchanged; full test suite green; no parity regression.

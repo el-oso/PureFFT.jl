@@ -154,12 +154,16 @@ end
 @inline _score(p::AbstractFFTPlan, y) = _besttime(p, y)
 
 """
-    autoplan(Complex{T}, n; inverse=false) -> AbstractFFTPlan
+    autoplan(Complex{T}, n; inverse=false, flags=MEASURE) -> AbstractFFTPlan
 
 Pick the fastest available kernel for length `n`. Power-of-two times `:recursive` against the
 four-step (for `n ≥ 256`). Non-power-of-two uses a generated mixed-radix [`CodeletPlan`] for small
 smooth sizes (largest prime ≤ $CODELET_MAX_PRIME, n ≤ $CODELET_MAX_N), else Bluestein (chirp-Z) —
 both far faster than the allocating recursive mixed-radix.
+
+`flags = MEASURE` (default) runs the timing competition above. `flags = ESTIMATE` instead picks ONE plan
+structurally via [`_estimate_plan`] (no timing → fast first-call planning at some runtime-optimality cost;
+mirrors FFTW ESTIMATE/MEASURE), falling back to the MEASURE competition on sizes it can't classify.
 """
 function autoplan(::Type{Complex{T}}, n::Integer; inverse::Bool = false, flags::PlanRigor = MEASURE) where {T}
     if flags == ESTIMATE
