@@ -71,14 +71,18 @@ end
         empty!(StrictMode.exempt_strict())
 
         p = P.autoplan(ComplexF64, 64)
-        prec = plan_pfft(ComplexF64, 64; variant = :recursive)
 
         # Hot static path: the full kernel guarantees, enforced (probed 2026-07-02: these hold).
         StrictMode.register_strict!(
             P.pfft!, (Vector{ComplexF64}, typeof(p));
             guarantees = (:typestable, :noalloc, :trimsafe)
         )
-        StrictMode.register_strict!(P.alloc_scratch, (typeof(prec),); guarantees = (:typestable,))
+        # alloc_scratch ships with the scratch-decouple branch; register it when present so this
+        # item is green on master and on that branch alike.
+        if isdefined(P, :alloc_scratch)
+            prec = plan_pfft(ComplexF64, 64; variant = :recursive)
+            StrictMode.register_strict!(P.alloc_scratch, (typeof(prec),); guarantees = (:typestable,))
+        end
 
         # The one-shot / planning convenience API selects a plan at RUNTIME by design — JET-full
         # rightly flags the internal dynamic dispatch (r2r/plan_r2r even infer abstract returns),
