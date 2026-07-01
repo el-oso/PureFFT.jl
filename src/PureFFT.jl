@@ -9,6 +9,7 @@ module PureFFT
 
 export plan_pfft, pfft, pfft!, ipfft, ipfft!
 export plan_prfft, plan_pirfft, prfft, pirfft
+export ESTIMATE, MEASURE
 export REDFT00, REDFT01, REDFT10, REDFT11, RODFT00, RODFT01, RODFT10, RODFT11
 export r2r, r2r!, plan_r2r, dct, dct!, idct, idct!, plan_dct, plan_idct
 export tryr2r, tryplan_r2r
@@ -36,6 +37,7 @@ include("fourstep_codelet.jl")
 include("mixedradix_recursive.jl")
 include("plan.jl")
 include("rader.jl")
+include("estimate.jl")
 include("autotune.jl")
 include("rfft.jl")
 include("r2r.jl")
