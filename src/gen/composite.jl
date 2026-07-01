@@ -29,30 +29,81 @@ function _leaf_call(r::Int, ins::Vector, rot::Symbol, bf3::Symbol)
         Expr(:call, :avx_column_butterfly3, ins..., bf3)
     elseif r == 4
         Expr(:call, :avx_column_butterfly4, ins..., rot)
+    elseif r == 8
+        Expr(:call, :avx_column_butterfly8, ins..., rot)   # composite leaf: the size-8 butterfly (itself a
+                                                           # generator forward, Val((4,2)), trivial inner tws)
     else
-        error("avx_colbf_composite: leaf size r=$r not supported (have 2,3,4; composite recursion is Phase-1 later)")
+        error("avx_colbf_composite: leaf size r=$r not supported (have 2,3,4,8; size-9 leaf for radix-27 " *
+              "needs inner W9 twiddles — added when 27 is ported)")
     end
 end
 
-# Classify the inter-stage twiddle W_R^e applied to input Expr `x`, at generate time. Emits the trivial
-# forms the hand kernels use directly (id / neg / rot90 / √½ bf8); a general W_R^e consumes a `tws` slot,
-# REUSED per distinct reduced exponent so equal twiddles share one constant (matches the hand kernels'
-# minimal twiddle set). `slotmap` maps a canonical lower-half exponent → its 1-based `tws` slot. Half-plane
-# reduction: W^er = −W^(er−R/2) for er in (R/2, R), so the upper half reuses the lower-half constant via neg
-# (this is how hand cb16 expresses W16^9 as neg(tw1), keeping tws = (W16^1, W16^3)).
+# Canonical `tws` slot key for the inter-stage twiddle W_R^e: `nothing` when the twiddle is constant-free
+# (id / rot90 / neg / bf8 — a decoration of x needing no stored constant), else the BASE exponent in
+# (0, R/4) whose W_R constant is needed. QUADRANT reduction (for 4|R): write er = q·(R/4) + r; every
+# quadrant reuses the base-region constant W_R^r via a rot90/neg decoration (W^(R/4)=−i, W^(R/2)=−1,
+# W^(3R/4)=+i). r=0 (multiple of R/4) and r=R/8 (bf8 form) are constant-free. This reproduces the hand
+# kernels' minimal sets exactly (cb32→{1,2,3,5,6,7}, cb16→{1,3}). Odd R (radix-9/27): no quadrant
+# structure → each distinct nonzero exponent is its own constant (R/2→neg when R even-but-not-4|R).
+# ONE source of truth, shared by _twiddle_expr (slot assignment) and composite_tws_exponents (runtime list).
+function _tws_key(e::Int, R::Int)
+    er = mod(e, R)
+    er == 0 && return nothing
+    if R % 4 == 0
+        r = er % (R ÷ 4)
+        (r == 0 || r == R ÷ 8) && return nothing     # multiple of R/4 (rot90/neg) or R/8 offset (bf8)
+        r                                             # base constant W_R^r, r in (0,R/4)\{R/8}
+    else
+        2er == R ? nothing : er                       # R/2 → neg; else a distinct constant (odd radix)
+    end
+end
+
+# The ordered distinct twiddle exponents the generator consumes as `tws` slots for a 2-factor split
+# R=R1·R2, in the (g outer, j inner) order the generator visits them. A forwarder builds its `tws` from
+# THIS list — `ntuple(i -> avx_broadcast_twiddle(exps[i], R1*R2, fwd), length(exps))` — so slot order
+# always matches. (Trivial twiddles produce no slot; upper-half exponents reuse a lower-half slot.)
+function composite_tws_exponents(R1::Int, R2::Int)
+    R = R1 * R2
+    seen = Set{Int}()
+    exps = Int[]
+    for g in 0:R2 - 1, j in 1:R1
+        k = _tws_key(g * (j - 1), R)
+        if !isnothing(k) && !(k in seen)
+            push!(seen, k); push!(exps, k)
+        end
+    end
+    exps
+end
+
+# Emit the inter-stage twiddle W_R^e applied to input Expr `x`, at generate time. Uses the quadrant
+# decomposition (see _tws_key): constant-free forms (id/rot90/neg/bf8) emit inline; a base constant is
+# decorated per quadrant (·1, ·rot90, ·neg, ·neg∘rot90). `mul` = avx_mul_complex(x, decorated-const).
 function _twiddle_expr(x, e::Int, R::Int, rot::Symbol, slotmap::Dict{Int, Int})
     er = mod(e, R)
-    er == 0   && return x                                     # W^0 = 1
-    2er == R  && return Expr(:call, :avx_neg, x)              # e = R/2   → −1
-    4er == R  && return Expr(:call, :avx_rotate90, x, rot)    # e = R/4   → −i (rotate90)
-    8er == R  && return Expr(:call, :avx_bf8_tw1, x, rot)     # e = R/8   → √½·(rot90(x)+x)
-    8er == 3R && return Expr(:call, :avx_bf8_tw3, x, rot)     # e = 3R/8  → √½·(rot90(x)−x)
-    if 2er > R                                                # upper half: W^er = −W^(er−R/2)
-        s = get!(slotmap, er - R ÷ 2, length(slotmap) + 1)
-        Expr(:call, :avx_mul_complex, x, Expr(:call, :avx_neg, :(tws[$s])))
-    else                                                      # general W_R^er (reuse slot per distinct er)
-        s = get!(slotmap, er, length(slotmap) + 1)
-        Expr(:call, :avx_mul_complex, x, :(tws[$s]))
+    er == 0 && return x                                       # W^0 = 1
+    mul(c) = Expr(:call, :avx_mul_complex, x, c)              # x · (decorated constant)
+    r90(v) = Expr(:call, :avx_rotate90, v, rot)              # · −i
+    neg(v) = Expr(:call, :avx_neg, v)                        # · −1
+    if R % 4 == 0
+        Q = R ÷ 4; q = er ÷ Q; r = er % Q
+        if r == 0                                             # pure quadrant rotation OF x (no constant)
+            q == 1 && return r90(x)                          # W^(R/4)  = −i
+            q == 2 && return neg(x)                          # W^(R/2)  = −1
+            q == 3 && return neg(r90(x))                     # W^(3R/4) = +i
+        elseif r == Q ÷ 2                                     # r = R/8 → bf8 form (no constant)
+            q == 0 && return Expr(:call, :avx_bf8_tw1, x, rot)   # W^(R/8)
+            q == 1 && return Expr(:call, :avx_bf8_tw3, x, rot)   # W^(3R/8)
+            error("avx_colbf_composite: W^(5R/8)/W^(7R/8) bf8 forms not needed by in-scope ports (e=$e R=$R)")
+        else                                                 # base constant W_R^r, decorated by quadrant
+            c = :(tws[$(get!(slotmap, r, length(slotmap) + 1))])
+            q == 0 && return mul(c)
+            q == 1 && return mul(r90(c))                     # W^(R/4+r)  = −i·W^r
+            q == 2 && return mul(neg(c))                     # W^(R/2+r)  = −W^r
+            q == 3 && return mul(neg(r90(c)))                # W^(3R/4+r) = +i·W^r
+        end
+    else                                                     # odd R (no quadrant): distinct constants; R/2→neg
+        2er == R && return neg(x)
+        return mul(:(tws[$(get!(slotmap, er, length(slotmap) + 1))]))
     end
 end
 

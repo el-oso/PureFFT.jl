@@ -87,6 +87,18 @@ end
         tws = (bcast(1, 16), bcast(3, 16))
         @test maxrel(collect(A.avx_colbf_composite(rs, Val((4, 4)), tws, rot, nothing)), ref(rs)) ≤ 1e-13
     end
+    # Ports (register form): composite leaves (size-8 recursion) + quadrant twiddle reduction. tws built
+    # from composite_tws_exponents (the shared slot-order source), so no manual ordering. bf3 for size-3 leaves.
+    tws_of(R1, R2) = ntuple(i -> bcast(A.composite_tws_exponents(R1, R2)[i], R1 * R2),
+                            length(A.composite_tws_exponents(R1, R2)))
+    @testset "R=24 (Val((8,3)) = 8×3, size-8 leaf recursion)" begin
+        rs = ntuple(_ -> randv(), 24)
+        @test maxrel(collect(A.avx_colbf_composite(rs, Val((8, 3)), tws_of(8, 3), rot, bcast(1, 3))), ref(rs)) ≤ 1e-13
+    end
+    @testset "R=32 (Val((4,8)) = 4×8, size-8 leaf recursion)" begin
+        rs = ntuple(_ -> randv(), 32)
+        @test maxrel(collect(A.avx_colbf_composite(rs, Val((4, 8)), tws_of(4, 8), rot, nothing)), ref(rs)) ≤ 1e-13
+    end
 end
 
 @testitem "Generated radix-M DIT composite codelet (GenPPCompositePlan) ≡ reference DFT + round-trip" begin
