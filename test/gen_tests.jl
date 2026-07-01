@@ -80,6 +80,13 @@ end
         tw1 = bcast(1, 9); tw2 = bcast(2, 9); tw3 = bcast(4, 9); bf3 = bcast(1, 3)
         @test maxrel(collect(A.avx_column_butterfly9(rs..., tw1, tw2, tw3, bf3)), ref(rs)) ≤ 1e-13
     end
+    @testset "R=16 (register form, Val((4,4)))" begin
+        # 4×4 DIT: tws = (W16^1, W16^3) — the minimal set the classifier consumes (half-plane reduction
+        # expresses W16^9 as neg(W16^1)). Validates the full classifier: id/neg/rot90/bf8/mul_complex.
+        rs = ntuple(_ -> randv(), 16)
+        tws = (bcast(1, 16), bcast(3, 16))
+        @test maxrel(collect(A.avx_colbf_composite(rs, Val((4, 4)), tws, rot, nothing)), ref(rs)) ≤ 1e-13
+    end
 end
 
 @testitem "Generated radix-M DIT composite codelet (GenPPCompositePlan) ≡ reference DFT + round-trip" begin
