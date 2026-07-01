@@ -66,8 +66,17 @@ holds): **7 prime-squares P²** (121…961, 1.76–5.49× FFTW) + **10 composite
 PrecompileTools `@compile_workload` (`genpp_precompile_max_p` Preference, default 31, ≤~60 s first-use → 0).
 
 **Open continuation (the real remaining value — *not* the optimiser):**
-- **Systematise the ~50 hand-written `avxradix` SIMD functions** into the generator (equal speed — parity
-  proven — far less code). The maintainability win; the biggest remaining prize.
+- **Systematise the hand-written `avxradix` SIMD functions** into the generator — **largely DONE.** Phase 0
+  (prime cluster: cb5/7/13, transposes, MR5/7/13→MRPrime, B25/B49→gen_pp, W=8 variants; master a23d275) +
+  Phase 1 (`src/gen/composite.jl` `avx_colbf_composite`, a strictly-2-factor `@generated` with a quadrant
+  twiddle classifier: **cb8/cb9 replaced by forwarders**, par ALL PAR vs hand; master 3638cf7). Generator
+  **proven for every composite shape** (cb16/24/32 register forms, ref-DFT). cb12 stays hand (Good-Thomas).
+- **The register composite ports B24/B27/B32 are DEAD CODE — do NOT wire (measured 2026-07-01).** A
+  monolithic R-point butterfly needs R live registers (24>16 ymm) → spill-bound (~100× slower than the
+  staged `MR` route: B24=5970ns vs `MR3{8,B8}`=60ns, 66 spill moves), AND every port size already has a
+  fast native route (24→MR3{8,B8}, 27→MR3{9,B9}, 32→Radix4Avx). They'd lose autoplan's timed competition.
+  This is *why* the design stages into small MR passes + memory transposes. (Supersedes the old
+  "port Butterfly{24,27,32}" / "add MR16" items in the Non-pow2 section below.)
 - **More winning size classes** (measure-then-wire, like the composites): other prime-power composites.
 - *Not* a fix for the 2^a·5³ architectural floor (that's the column-packed structure's own ceiling).
 
@@ -108,9 +117,10 @@ PrecompileTools `@compile_workload` (`genpp_precompile_max_p` Preference, defaul
   pow2 regression. Remaining sub-gate: the genuine **radix-5/9 shuffle floor vs *rustfft*** (still ~0.90 on a
   few high-5-power sizes) and **radix-11** sizes (no codelet — Bluestein, niche).
 - **More packed bases** — `Butterfly18` **DONE** (B18 = 2·3², closed 2^odd·3²·5); pow2 `Butterfly256/512`
-  **DONE** (closed the odd-power gap). Still to port: `Butterfly{24,27,32}` (dual-width packed path) + the
-  `avx_planner` base-selection (`base_fn`) so PureFFT's decompositions match RustFFT's per size. Lifts the
-  remaining 3-heavy laggard sizes (~0.85–0.92×).
+  **DONE** (closed the odd-power gap). `Butterfly{24,27,32}` **WON'T DO — measured dead code** (register
+  composite butterfly R≥16 spills, ~100× slower; sizes already fast via MR trees — see the codelet-generator
+  section above). The remaining 3-heavy laggard sizes (~0.85–0.92× vs rust) are the radix-9/12 *algorithmic*
+  gap below (diff rustfft's pass), not a missing base.
 - **radix-9/12 floor ~0.90× of rust — it's ALGORITHMIC, not a Julia compiler issue.** An MWE comparing a
   matched radix-9 butterfly *and* a full radix-9 step (butterfly+twiddle+transpose) in Julia (SIMD.jl) vs
   Rust (`core::arch`) — see the standalone `julia-sched-mwe/` reproducer — found Julia compiles to identical
@@ -118,7 +128,9 @@ PrecompileTools `@compile_workload` (`genpp_precompile_max_p` Preference, defaul
   gap is **rustfft's implementation** being more optimized, not Julia/LLVM scheduling. To close it: diff
   PureFFT's MR9/MR12 pass against rustfft's `Butterfly9`/mixed-radix source (decomposition, in-place /
   transpose / memory strategy) and adopt what's better — a PureFFT optimization, not a compiler chase.
-- **MR16** — sizes needing a radix-16 step still fall back; add for fuller smooth-size coverage.
+- **MR16** — deferred (same additive-slot dead-code risk as the ports: 16-smooth sizes already route to
+  radix-4/8 trees, so a radix-16 pass would ride the timed slot mostly unused). Register cb16 is proven
+  generatable (ref-DFT) but unwired; only build MR16 if a specific 16-smooth size shows a measured gap.
   (**MR2 DONE** — the F64 radix-2 pass was added with the radix-5 base work below.)
 - **radix-5/7 packed bases (B25/B49) — DONE.** `B25` (5²) + `B49` (7²) `@generated` register codelets now
   ROOT the radix-5/7 trees (25→B25, 49→B49, 125=MR5(B25), 625=MR5²(B25), 343=MR7(B49)), plus an F64 `MR2`
