@@ -493,6 +493,27 @@ end
         # strided prime dim → BatchedRaderDim (batched Rader, Task 7f): the gather/scatter + batched inner
         # FFT are trim-safe (RaderPlan/BatchPlan precompute is plan-time; the hot apply is concrete).
         PureFFT.apply_unnormalized!(typeof(PureFFT._pure_plan_fft_nd(Array{ComplexF64}(undef, 16, 127), (1, 2); inverse = false)), Array{ComplexF64, 2}),
+        # 1-D non-pow2 mixed-radix: W=4 (AvxMixedRadixPlan, e.g. n=720=2⁴·3²·5) and W=8 (n=576=2⁶·3²).
+        PureFFT.apply_unnormalized!(typeof(PureFFT.AvxMixedRadixPlan(ComplexF64, 720)), Vector{ComplexF64}),
+        PureFFT.apply_unnormalized!(typeof(PureFFT.AvxMixedRadixPlanW8(ComplexF64, 576)), Vector{ComplexF64}),
+        # Large-prime: Rader (p=257, p-1=2⁸ all-smooth) and Bluestein (arbitrary n=19946).
+        PureFFT.apply_unnormalized!(typeof(PureFFT.RaderPlan(ComplexF64, 257)), Vector{ComplexF64}),
+        PureFFT.apply_unnormalized!(typeof(PureFFT.BluesteinPlan(ComplexF64, 19946)), Vector{ComplexF64}),
+        # pow2 AutoPlan wrapper (n=1024): apply_unnormalized! delegates to .inner (concrete, no dyn dispatch).
+        PureFFT.apply_unnormalized!(typeof(PureFFT.autoplan(ComplexF64, 1024)), Vector{ComplexF64}),
+        # r2r (DCT/DST): R2RPlan wrap path (large even N, REDFT10 + RODFT10) and R2RCodeletPlan (small N).
+        # R2RPlan{REDFT10_T} routes through apply_rfft! (even N, P<:RealFFTPlan method).
+        PureFFT._apply!(typeof(PureFFT.plan_r2r(zeros(Float64, 128), PureFFT.REDFT10)), Vector{Float64}, Vector{Float64}),
+        PureFFT._apply!(typeof(PureFFT.plan_r2r(zeros(Float64, 128), PureFFT.RODFT10)), Vector{Float64}, Vector{Float64}),
+        # R2RCodeletPlan{K,T,N}: a @generated straight-line codelet (no loop, no dispatch, no scratch).
+        PureFFT._apply!(typeof(PureFFT.plan_r2r(zeros(Float64, 8), PureFFT.REDFT10)), Vector{Float64}, Vector{Float64}),
+        PureFFT._apply!(typeof(PureFFT.plan_r2r(zeros(Float64, 8), PureFFT.RODFT10)), Vector{Float64}, Vector{Float64}),
+        # 1-D rfft / irfft: apply_rfft! and apply_irfft! are the public hot-path entries (plan prebuilt).
+        PureFFT.apply_rfft!(typeof(PureFFT.plan_prfft(Float64, 128)), Vector{Float64}, Vector{ComplexF64}),
+        PureFFT.apply_irfft!(typeof(PureFFT.plan_pirfft(Float64, 128)), Vector{ComplexF64}, Vector{Float64}),
+        # N-D real: _rfft_core! (forward r2c + c2c rest) and _brfft_core! (c2c⁻¹ rest + c2r).
+        PureFFT._rfft_core!(typeof(PureFFT._pure_plan_rfft_nd(Array{Float64}(undef, 8, 8), (1, 2))), Array{ComplexF64, 2}, Array{Float64, 2}),
+        PureFFT._brfft_core!(typeof(PureFFT._pure_plan_brfft_nd(Array{ComplexF64}(undef, 5, 8), 8, (1, 2))), Array{Float64, 2}, Array{ComplexF64, 2}),
     )
 end
 
