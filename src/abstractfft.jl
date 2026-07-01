@@ -39,18 +39,18 @@ _checkdim1(region) = all(==(1), region) ||
     throw(ArgumentError("PureFFT's AbstractFFTs interface supports 1-D transforms (region over dim 1) only; got $region"))
 
 # Internal builders (force the PureFFT path even when FFTW.jl is loaded).
-function _pure_plan_fft(x::AbstractVector{Complex{F}}, region = 1:1; inplace::Bool = false, inverse::Bool = false) where {F}
+function _pure_plan_fft(x::AbstractVector{Complex{F}}, region = 1:1; inplace::Bool = false, inverse::Bool = false, flags::PlanRigor = MEASURE) where {F}
     reg = _region(region)
     _checkdim1(reg)
-    inner = plan_pfft(Complex{F}, length(x); inverse, variant = :fast)
+    inner = plan_pfft(Complex{F}, length(x); inverse, variant = :fast, flags)
     return PureFFTPlanWrapper{Complex{F}, typeof(inner)}(inner, length(x), reg, inplace)
 end
 
 # AbstractFFTs entry points (forward + unnormalized backward; in-place and out-of-place).
-AbstractFFTs.plan_fft(x::AbstractVector{<:Complex}, region; kws...) = _pure_plan_fft(x, region; inplace = false, inverse = false)
-AbstractFFTs.plan_fft!(x::AbstractVector{<:Complex}, region; kws...) = _pure_plan_fft(x, region; inplace = true, inverse = false)
-AbstractFFTs.plan_bfft(x::AbstractVector{<:Complex}, region; kws...) = _pure_plan_fft(x, region; inplace = false, inverse = true)
-AbstractFFTs.plan_bfft!(x::AbstractVector{<:Complex}, region; kws...) = _pure_plan_fft(x, region; inplace = true, inverse = true)
+AbstractFFTs.plan_fft(x::AbstractVector{<:Complex}, region; kws...) = _pure_plan_fft(x, region; inplace = false, inverse = false, kws...)
+AbstractFFTs.plan_fft!(x::AbstractVector{<:Complex}, region; kws...) = _pure_plan_fft(x, region; inplace = true, inverse = false, kws...)
+AbstractFFTs.plan_bfft(x::AbstractVector{<:Complex}, region; kws...) = _pure_plan_fft(x, region; inplace = false, inverse = true, kws...)
+AbstractFFTs.plan_bfft!(x::AbstractVector{<:Complex}, region; kws...) = _pure_plan_fft(x, region; inplace = true, inverse = true, kws...)
 
 Base.size(p::PureFFTPlanWrapper) = (p.n,)
 AbstractFFTs.fftdims(p::PureFFTPlanWrapper) = p.region

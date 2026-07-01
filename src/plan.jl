@@ -48,7 +48,7 @@ power-of-two-only):
   * `:fast`       — autotuned: builds candidate plans, times them, keeps the fastest.
 """
 function plan_pfft(
-        ::Type{Complex{T}}, n::Integer; inverse::Bool = false, variant::Symbol = :fast
+        ::Type{Complex{T}}, n::Integer; inverse::Bool = false, variant::Symbol = :fast, flags::PlanRigor = MEASURE
     ) where {T}
     nostage = Vector{Complex{T}}[]
     noscratch = Complex{T}[]
@@ -61,7 +61,7 @@ function plan_pfft(
         :bluestein => BluesteinPlan(Complex{T}, n; inverse)
         :codelet => CodeletPlan(Complex{T}, n; inverse)
         :rader => RaderPlan(Complex{T}, n; inverse)
-        :fast => autoplan(Complex{T}, n; inverse)
+        :fast => autoplan(Complex{T}, n; inverse, flags)
         :scalar => begin
             ispow2(n) || throw(ArgumentError(":scalar supports power-of-two sizes only; got n=$n"))
             tw = twiddle_table(Complex{T}, n; inverse)

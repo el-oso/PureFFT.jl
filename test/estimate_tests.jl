@@ -40,3 +40,22 @@ end
     pm = P.autoplan(C, 720); y = copy(x); P.apply_unnormalized!(pm, y)
     @test relerr(y, ndft(x)) ≤ 1e-11
 end
+
+@testitem "ESTIMATE public API: plan_pfft + plan_fft flags kwarg" begin
+    P = PureFFT
+    C = ComplexF64
+    ndft(x) = [sum(x[j+1]*cispi(-2*j*k/length(x)) for j in 0:length(x)-1) for k in 0:length(x)-1]
+    relerr(a, b) = maximum(abs.(a .- b)) / maximum(abs.(b))
+    using AbstractFFTs
+    x = [C(randn(), randn()) for _ in 1:720]
+    # native entry: plan_pfft with flags=ESTIMATE
+    pe = P.plan_pfft(x; flags = P.ESTIMATE)
+    y = copy(x); P.pfft!(y, pe)
+    @test relerr(y, ndft(x)) ≤ 1e-12
+    # AbstractFFTs/FFTW-facing entry: plan_fft with flags=ESTIMATE (the transition-compat surface)
+    pf = plan_fft(x; flags = P.ESTIMATE)
+    @test relerr(pf * x, ndft(x)) ≤ 1e-12
+    # default (no flags) still produces a correct transform
+    pm = P.plan_pfft(x); ym = copy(x); P.pfft!(ym, pm)
+    @test relerr(ym, ndft(x)) ≤ 1e-12
+end
