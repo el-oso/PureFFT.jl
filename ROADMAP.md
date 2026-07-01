@@ -172,10 +172,17 @@ PrecompileTools `@compile_workload` (`genpp_precompile_max_p` Preference, defaul
   is selected only when it genuinely times fastest — never silently misrouted. Dropping it would force a
   slower fallback; the timing already *is* the slow-path guard (the perf gate surfaces any slow winner). The
   only real issue is coverage gaps (above), fixed by adding kernels.
-- **Non-pow2 plan construction is slow (~1.4 s/size) — fast/cached-plan path wanted.** `autoplan` times
-  every candidate at build time. Fine as a one-time cost amortized over many transforms, but a UX wart for a
-  general-purpose library (FFTW's ESTIMATE is instant). Want: a fast structural-pick path (skip timing) and/or
-  a process-wide plan cache, selectable like FFTW's ESTIMATE vs MEASURE.
+- **Slow first-call planning — ESTIMATE fast-plan path SHIPPED (2026-07-01, opt-in).** The ~2–4 s cost is
+  *first-call JIT compilation* (measured: autoplan(4620) 2449 ms first / 9 ms warm), because `autoplan` is
+  always-MEASURE — it constructs + times ALL ~7 candidate plan types per size, compiling each. `ESTIMATE`
+  (`src/estimate.jl` `_estimate_plan`, mirrors FFTW ESTIMATE/MEASURE) picks ONE plan structurally by size-class
+  (pow2→Radix4Avx, large-prime→Rader, prime-square→GenPP, smooth→AvxMixedRadix, else→fall back to MEASURE),
+  compiling ~1 tree → fast planning. Opt-in via `plan_pfft(x; flags=ESTIMATE)` / `plan_fft(x; flags=PureFFT.
+  ESTIMATE)`; **MEASURE stays the default** (parity-safe). Spec/plan in `docs/superpowers/`. FOLLOWUPS (task):
+  thread `flags` through `plan_inv` (inverse of an ESTIMATE plan currently re-times MEASURE); and the bigger
+  future step — a **flop-cost model** to pick optimally without timing → then flip the default to ESTIMATE to
+  fully match FFTW (deferred; the W8 measurements this session show how easily such predictions miss). A
+  process-wide plan cache is NOT the lever (the 2nd call to a size is already ~10 ms — the wart is first compile).
 
 ### Breadth / type coverage (gaps for a *general* library vs the 1-D complex-`Float64` investigation)
 - **DCT/DST (real-to-real) — all 8 r2r kinds DONE.** DCT-I/II/III/IV (`REDFT00/10/01/11`) and
